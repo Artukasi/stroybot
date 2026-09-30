@@ -837,12 +837,14 @@ final class RenoEditor: NSObject, ObservableObject {
 
     private func buildFloor() {
         floorHolder.childNodes.forEach { $0.removeFromParentNode() }
+        guard room.polygon.count > 2 else { return }
         let m = Mat.floor(shown.floor.finish, shown.floor.color)
         floorHolder.addChildNode(SCNNode(geometry: Mesh.polygon(expanded(room.polygon, by: 0.06), y: 0, up: true, m)))
     }
 
     private func buildCeiling() {
         ceilingHolder.childNodes.forEach { $0.removeFromParentNode() }
+        guard room.polygon.count > 2 else { return }
         let m = Mat.wall("paint", shown.ceiling.color, "plain")
         ceilingHolder.addChildNode(SCNNode(geometry: Mesh.polygon(expanded(room.polygon, by: 0.06), y: room.height, up: false, m)))
     }

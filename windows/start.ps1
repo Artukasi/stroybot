@@ -7,7 +7,8 @@ param(
     [string]$Python = "",
     [string]$Cloudflared = "",
     [switch]$NoTunnel,
-    [switch]$SetupOnly
+    [switch]$SetupOnly,
+    [switch]$Background      # запуск из автозапуска Windows: без вопросов, в фоне
 )
 
 $ErrorActionPreference = "Stop"
@@ -200,6 +201,72 @@ function Start-Tunnel([int]$port) {
     return @{ Process = $p; Url = "" }
 }
 
+# ---------- сторож: следит за ботом и адресом Cloudflare ----------
+
+function Stop-Strays {
+    # Остатки прошлых запусков из этой папки: второй бот мешает первому (Telegram отдаёт сообщения только одному)
+    if (-not $IsWin) { return }
+    $me = $PID
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessId -ne $me -and $_.CommandLine -and (
+            ($_.Name -like "python*" -and $_.CommandLine -like "*-m bot*" -and $_.ExecutablePath -like "$Root*") -or
+            ($_.Name -like "cloudflared*"))
+    } | ForEach-Object {
+        Say "Закрываю старый процесс $($_.Name) ($($_.ProcessId))"
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-Bot([string]$py) {
+    $logs = Join-Path $PSScriptRoot "logs"
+    New-Item -ItemType Directory -Force -Path $logs | Out-Null
+    foreach ($n in @("bot.log", "bot.out.log")) {
+        $f = Join-Path $logs $n
+        if (Test-Path $f) { Move-Item $f "$f.prev" -Force -ErrorAction SilentlyContinue }
+    }
+    return Start-Process -FilePath $py -ArgumentList @("-m", "bot") -WorkingDirectory $Root -NoNewWindow -PassThru `
+        -RedirectStandardError (Join-Path $logs "bot.log") -RedirectStandardOutput (Join-Path $logs "bot.out.log")
+}
+
+function Test-Url([string]$url) {
+    try { $r = Invoke-WebRequest -Uri "$url/app/" -UseBasicParsing -TimeoutSec 20 -Method Head; return $r.StatusCode -lt 500 }
+    catch { return $false }
+}
+
+function Watch-Bot([string]$py, $tunnel, [int]$port) {
+    $bot = Start-Bot $py
+    $badChecks = 0
+    $lastCheck = Get-Date
+    while ($true) {
+        Start-Sleep -Seconds 15
+        $restartBot = $false
+        if ($bot.HasExited) {
+            Say "$(Get-Date -Format 'dd.MM HH:mm:ss') Бот остановился (код $($bot.ExitCode)), перезапускаю. Причина в windows\logs\bot.log" "Red"
+            Start-Sleep -Seconds 5
+            $restartBot = $true
+        }
+        if ($tunnel -and ((Get-Date) - $lastCheck).TotalMinutes -ge 5) {
+            $lastCheck = Get-Date
+            if ($tunnel.Process.HasExited -or -not (Test-Url $tunnel.Url)) { $badChecks++ } else { $badChecks = 0 }
+        }
+        if ($tunnel -and ($tunnel.Process.HasExited -or $badChecks -ge 2)) {
+            Say "$(Get-Date -Format 'dd.MM HH:mm:ss') Адрес Cloudflare перестал отвечать, беру новый" "Red"
+            if (-not $tunnel.Process.HasExited) { Stop-Process -Id $tunnel.Process.Id -Force -ErrorAction SilentlyContinue }
+            $new = $null
+            try { $new = Start-Tunnel $port } catch { }
+            if ($new -and $new.Url) {
+                $tunnel = $new; $env:WEBAPP_URL = $new.Url; $badChecks = 0
+                Say "Новый адрес: $($new.Url)" "Green"
+                $restartBot = $true   # бот сам поставит новую кнопку «Приложение»
+            }
+        }
+        if ($restartBot) {
+            if (-not $bot.HasExited) { Stop-Process -Id $bot.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }
+            $bot = Start-Bot $py
+        }
+    }
+}
+
 # ---------- запуск ----------
 # При подключении через точку (. .\start.ps1) только объявляем функции — так их проверяют тесты.
 if ($MyInvocation.InvocationName -eq ".") { return }
@@ -213,17 +280,26 @@ trap {
     try { Stop-Transcript | Out-Null } catch { }
     exit 1
 }
-Say "СтройБот: запуск" "Yellow"
+Say "СтройБот: запуск $(Get-Date -Format 'dd.MM.yyyy HH:mm')" "Yellow"
+# Только одна копия: второй запуск (двойной щелчок + автозапуск) тихо выходит
+$mutex = New-Object System.Threading.Mutex($false, "StroyBotLauncher")
+if (-not $mutex.WaitOne(0)) { Say "Бот уже запущен в другом окне или в фоне." "Green"; if (-not $Background) { Start-Sleep 5 }; exit 0 }
 if (-not (Test-Path (Join-Path $Root "bot\__main__.py")) -and -not (Test-Path (Join-Path $Root "bot/__main__.py"))) {
     Say "Не вижу папку bot. Положите папку windows рядом с папкой bot (в корне проекта)." "Red"; exit 1
 }
-Setup-Env
+if ($Background) {
+    $cfg0 = Read-Env (Join-Path $Root ".env")
+    if (-not $cfg0["BOT_TOKEN"] -or -not $cfg0["KIE_API_KEY"]) { Say "Нет .env с ключами: один раз запустите start-bot.bat вручную." "Red"; exit 1 }
+    # после включения компьютера интернет появляется не сразу
+    for ($i = 0; $i -lt 30 -and -not (Get-BotInfo $cfg0["BOT_TOKEN"]); $i++) { Start-Sleep -Seconds 10 }
+} else { Setup-Env }
 $py = Setup-Python
+Stop-Strays
 
 $tunnel = $null
+$cfg = Read-Env (Join-Path $Root ".env")
+$port = if ($cfg["WEB_PORT"]) { [int]$cfg["WEB_PORT"] } else { 8080 }
 if (-not $NoTunnel) {
-    $cfg = Read-Env (Join-Path $Root ".env")
-    $port = if ($cfg["WEB_PORT"]) { [int]$cfg["WEB_PORT"] } else { 8080 }
     Step "Открываю https-адрес для приложения"
     try { $tunnel = Start-Tunnel $port } catch { Say "Cloudflare не запустился: $($_.Exception.Message)" "Red" }
     if ($tunnel -and $tunnel.Url) {
@@ -241,13 +317,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 if ($SetupOnly) { exit $LASTEXITCODE }
 
-Step "Бот работает. Не закрывайте это окно и не отправляйте компьютер в сон. Остановить: Ctrl+C"
+if ($Background) { Step "Бот работает в фоне. Журнал: windows\logs\bot.log" }
+else { Step "Бот работает. Не закрывайте это окно (или включите автозапуск: autostart-on.bat). Остановить: Ctrl+C" }
 try {
-    while ($true) {
-        & $py -m bot
-        Say "Бот остановился, перезапускаю через 10 секунд (Ctrl+C, чтобы выйти)..." "Red"
-        Start-Sleep -Seconds 10
-    }
+    Watch-Bot $py $tunnel $port
 } finally {
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Root*" -and $_.Name -like "python*" } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     if ($tunnel -and $tunnel.Process -and -not $tunnel.Process.HasExited) { Stop-Process -Id $tunnel.Process.Id -Force }
 }

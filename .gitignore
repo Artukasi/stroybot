@@ -6,3 +6,4 @@ __pycache__/
 windows/cloudflared.exe
 windows/cloudflared.log
 windows/start-bot.log
+windows/logs/

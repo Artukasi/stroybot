@@ -1,50 +1,58 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+- Version: template → 1.0.0 (first ratified constitution)
+- Added principles: I–VI; sections «Технические рамки», «Процесс разработки», «Governance»
+- Templates: plan/spec/tasks templates read this file at runtime; no changes required
+- Deferred TODOs: none
+-->
+
+# СтройБот Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Сценарий, а не модель
+Пользователь выбирает задачу из мира стройки (дизайн, смета, проверка, учёт объекта), а не нейросеть.
+Каждая новая функция описывается как готовый сценарий для одной из ролей: частник, прораб, компания.
+Названия моделей и технические детали пользователю не показываются.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Деньги пользователя неприкосновенны (NON-NEGOTIABLE)
+Любая платная операция идёт строго по схеме `db.charge()` → вызов ИИ → `db.finish_job(ok)`.
+При любой ошибке кредиты и бесплатные лимиты возвращаются автоматически. Платежи Telegram Stars
+учитываются идемпотентно (защита от дублей по `charge_id`), а возврат звёзд списывает начисленные кредиты.
+Бот обязан поддерживать `/paysupport` и `/terms` по правилам Telegram.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Русский язык и простота
+Все тексты для пользователей на русском: дружелюбно, коротко, с эмодзи в заголовках.
+Ответы моделей отправляются как Telegram HTML; если разметка сломана, текст уходит без неё.
+Владелец проекта не программист: документация и сообщения об изменениях пишутся простым языком.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Чистая логика покрыта тестами
+Расчёты (калькуляторы, суммы по объектам), работа с базой и разбор ответов внешних API — чистые функции
+или тонкие обёртки, покрытые `pytest`. После каждого изменения запускается `python -m pytest -q`,
+и ничего не сдаётся с красными тестами.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Внешние API — через один клиент и с запасом прочности
+Все обращения к ИИ идут через `bot/kie.py` (один ключ `KIE_API_KEY`). Разбор ответов терпим к разным
+форматам, таймауты заданы явно, ошибки логируются и не роняют бота. Ключи и токены хранятся только в `.env`.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### VI. Просто, пока не станет тесно
+SQLite и long polling, пока хватает. Новые зависимости добавляются только когда без них нельзя.
+Переход на PostgreSQL и webhook — отдельная фича, когда вырастет нагрузка.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+## Технические рамки
+- Python 3.11+, aiogram 3, aiosqlite, aiohttp; PDF — reportlab.
+- Схема базы меняется миграциями в `db.init_db()`, которые не ломают существующие данные.
+- Mini App обслуживается тем же процессом (aiohttp) и проверяет подпись Telegram `initData` на каждом запросе.
+- Состояния диалогов хранятся в базе, чтобы переживать перезапуск бота.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
-
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+## Процесс разработки
+- Новая функция: `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`.
+- Мелкие исправления можно делать напрямую, с тестом на исправленное поведение.
+- Цены и лимиты — только в `bot/config.py`, промпты — только в `bot/prompts.py`.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+Конституция важнее любых других договорённостей в репозитории. Изменения вносятся через
+`/speckit-constitution` с повышением версии: MAJOR — отмена или смена принципа, MINOR — новый принцип
+или раздел, PATCH — уточнения формулировок. Каждый план (`plan.md`) проходит проверку на соответствие принципам.
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
-
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-09-30 | **Last Amended**: 2026-09-30

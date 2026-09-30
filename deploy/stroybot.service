@@ -1,0 +1,18 @@
+# systemd: бот работает постоянно и перезапускается при сбоях.
+# Установка (на сервере, из папки проекта /opt/stroybot):
+#   sudo cp deploy/stroybot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now stroybot
+#   journalctl -u stroybot -f      # смотреть логи
+[Unit]
+Description=StroyBot Telegram bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/stroybot
+ExecStart=/opt/stroybot/.venv/bin/python -m bot
+Restart=always
+RestartSec=5
+User=stroybot
+
+[Install]
+WantedBy=multi-user.target

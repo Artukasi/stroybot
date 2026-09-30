@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from bot import calc, db
 from bot.config import config
 

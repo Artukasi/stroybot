@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>СтройБот</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f2f3f5);
+    --text: var(--tg-theme-text-color, #16181c);
+    --hint: var(--tg-theme-hint-color, #8a8f98);
+    --link: var(--tg-theme-link-color, #2b7de9);
+    --btn: var(--tg-theme-button-color, #2b7de9);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --danger: var(--tg-theme-destructive-text-color, #e5484d);
+    --ok: #2f9e44;
+    --warn: #e8590c;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg2); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 12px 12px calc(24px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 4px 4px 12px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--hint);
+    margin: 18px 6px 8px; font-weight: 600; }
+  .card { background: var(--bg); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .grow { flex: 1; min-width: 0; }
+  .muted { color: var(--hint); font-size: 13px; }
+  .big { font-size: 22px; font-weight: 700; }
+  .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .item { display: flex; align-items: center; gap: 10px; padding: 12px 2px;
+    border-bottom: 1px solid color-mix(in srgb, var(--hint) 20%, transparent); }
+  .list .item:last-child { border-bottom: 0; }
+  .tap { cursor: pointer; }
+  .bar { height: 6px; background: var(--bg2); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; background: var(--btn); }
+  .bar.over > i { background: var(--danger); }
+  button, .btn { font: inherit; border: 0; border-radius: 10px; padding: 11px 14px; cursor: pointer;
+    background: var(--btn); color: var(--btn-text); font-weight: 600; }
+  button.ghost { background: var(--bg2); color: var(--text); }
+  button.link { background: none; color: var(--link); padding: 6px; font-weight: 500; }
+  button.danger { background: none; color: var(--danger); padding: 6px; }
+  button.wide { width: 100%; }
+  input, select { font: inherit; width: 100%; padding: 11px 12px; border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--hint) 35%, transparent); background: var(--bg); color: var(--text); }
+  label { display: block; font-size: 13px; color: var(--hint); margin: 10px 2px 4px; }
+  .tabs { display: flex; gap: 6px; background: var(--bg); padding: 4px; border-radius: 12px; margin-bottom: 10px; }
+  .tabs button { flex: 1; background: none; color: var(--text); padding: 9px 4px; font-weight: 500; }
+  .tabs button.on { background: var(--btn); color: var(--btn-text); }
+  .chip { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 20px; background: var(--bg2); }
+  .check { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--hint); flex: none;
+    display: grid; place-items: center; font-size: 14px; }
+  .check.on { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .late { color: var(--danger); }
+  .done-name { text-decoration: line-through; color: var(--hint); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .empty { text-align: center; color: var(--hint); padding: 24px 8px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222; color: #fff;
+    padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: .92; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app"><div class="empty">Загрузка…</div></div>
+<div id="toast" class="toast"></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready(); tg?.expand();
+const initData = tg?.initData || "";
+const state = { me: null, obj: null, tab: "sum" };
+const $app = document.getElementById("app");
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = n => (Math.round(n || 0)).toLocaleString("ru-RU").replace(/,/g, " ") + " ₽";
+const fdate = iso => iso ? iso.split("-").reverse().join(".") : "";
+const today = () => new Date().toISOString().slice(0, 10);
+
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch("../api" + path, {
+    method: opts.method || "GET",
+    headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": initData },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401) throw new Error("auth");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.status);
+  return data;
+}
+
+function haptic(type = "light") { tg?.HapticFeedback?.impactOccurred(type); }
+
+function setBack(fn) {
+  if (!tg?.BackButton) return;
+  tg.BackButton.offClick(setBack._fn || (() => {}));
+  if (fn) { setBack._fn = fn; tg.BackButton.onClick(fn); tg.BackButton.show(); }
+  else tg.BackButton.hide();
+}
+
+// ---------- маршруты ----------
+async function route() {
+  const h = location.hash.slice(1);
+  try {
+    if (h.startsWith("obj/")) return await showObject(+h.split("/")[1]);
+    if (h === "new") return showNew();
+    if (h === "calc") return showCalc();
+    if (h === "archive") return await showArchive();
+    return await showHome();
+  } catch (e) {
+    if (e.message === "auth") {
+      $app.innerHTML = `<div class="card empty">Откройте приложение из Telegram-бота — так я узнаю, что это вы.</div>`;
+    } else {
+      $app.innerHTML = `<div class="card empty">Что-то пошло не так 😔<br><small>${esc(e.message)}</small><br><br>
+        <button onclick="route()">Повторить</button></div>`;
+    }
+  }
+}
+window.addEventListener("hashchange", route);
+const go = h => { location.hash = h; };
+
+// ---------- главная ----------
+async function showHome() {
+  setBack(null);
+  state.me = await api("/me");
+  const objs = state.me.objects;
+  $app.innerHTML = `
+    <h1>🏗 Мои объекты</h1>
+    ${objs.length ? objs.map(o => {
+      const pct = o.budget ? Math.min(100, Math.round(o.spent / o.budget * 100)) : 0;
+      return `<div class="card tap" onclick="go('obj/${o.id}')">
+        <div class="row"><div class="grow">
+          <div class="ellipsis" style="font-weight:600">${esc(o.name)}</div>
+          ${o.address ? `<div class="muted ellipsis">📍 ${esc(o.address)}</div>` : ""}
+        </div><div style="text-align:right"><div style="font-weight:600">${money(o.spent)}</div>
+          <div class="muted">${o.stages_total ? `этапы ${o.stages_done}/${o.stages_total}` : "без этапов"}</div></div></div>
+        ${o.budget ? `<div class="bar ${o.spent > o.budget ? "over" : ""}"><i style="width:${pct}%"></i></div>
+          <div class="muted" style="margin-top:4px">${pct}% из бюджета ${money(o.budget)}</div>` : ""}
+      </div>`;
+    }).join("") : `<div class="card empty">Пока нет объектов.<br>Создайте первый — буду считать расходы и напоминать о сроках.</div>`}
+    <button class="wide" onclick="go('new')">➕ Новый объект</button>
+    <div class="grid2" style="margin-top:10px">
+      <button class="ghost" onclick="go('calc')">🧮 Калькулятор</button>
+      <button class="ghost" onclick="go('archive')">🗄 Архив</button>
+    </div>
+    <p class="muted" style="text-align:center;margin-top:16px">Баланс: ${state.me.user.credits} кр. · дизайн, сметы и отчёты — в чате бота</p>`;
+}
+
+async function showArchive() {
+  setBack(() => go(""));
+  const { objects } = await api("/objects/archived");
+  $app.innerHTML = `<h1>🗄 Архив</h1>` + (objects.length
+    ? objects.map(o => `<div class="card tap" onclick="go('obj/${o.id}')"><b>${esc(o.name)}</b>
+        ${o.address ? `<div class="muted">📍 ${esc(o.address)}</div>` : ""}</div>`).join("")
+    : `<div class="card empty">В архиве пусто.</div>`);
+}
+
+// ---------- новый объект ----------
+function showNew() {
+  setBack(() => go(""));
+  $app.innerHTML = `
+    <h1>➕ Новый объект</h1>
+    <div class="card">
+      <label>Название</label><input id="n-name" placeholder="Квартира Ивановых" maxlength="100">
+      <label>Адрес (необязательно)</label><input id="n-addr" placeholder="ул. Ленина 5-12" maxlength="200">
+      <label>Бюджет, ₽ (необязательно)</label><input id="n-budget" inputmode="numeric" placeholder="850 000">
+      <button class="wide" style="margin-top:14px" id="n-save">Создать</button>
+    </div>`;
+  document.getElementById("n-name").focus();
+  document.getElementById("n-save").onclick = async () => {
+    const name = document.getElementById("n-name").value.trim();
+    if (!name) return toast("Введите название");
+    const budget = parseInt(document.getElementById("n-budget").value.replace(/\D/g, "")) || 0;
+    const { id } = await api("/objects", { method: "POST",
+      body: { name, address: document.getElementById("n-addr").value, budget } });
+    haptic("medium"); go("obj/" + id);
+  };
+}
+
+// ---------- объект ----------
+async function showObject(id) {
+  setBack(() => go(""));
+  state.obj = await api("/objects/" + id);
+  renderObject();
+}
+
+function renderObject() {
+  const { object: o, totals, expenses, stages } = state.obj;
+  const kinds = state.me?.expense_kinds || { material: "🧱 Материалы", payment: "💵 Выплаты", other: "📦 Прочее" };
+  const spent = Object.values(totals).reduce((a, b) => a + b, 0);
+  const pct = o.budget ? Math.min(100, Math.round(spent / o.budget * 100)) : 0;
+  const t = state.tab;
+  $app.innerHTML = `
+    <h1 class="ellipsis">${esc(o.name)}</h1>
+    <div class="tabs">
+      <button class="${t === "sum" ? "on" : ""}" onclick="tab('sum')">Сводка</button>
+      <button class="${t === "exp" ? "on" : ""}" onclick="tab('exp')">Расходы</button>
+      <button class="${t === "stg" ? "on" : ""}" onclick="tab('stg')">Этапы</button>
+    </div>
+    <div id="tab"></div>`;
+  const $t = document.getElementById("tab");
+
+  if (t === "sum") {
+    const done = stages.filter(s => s.done).length;
+    $t.innerHTML = `
+      <div class="card">
+        <div class="muted">Потрачено</div><div class="big">${money(spent)}</div>
+        ${o.budget ? `<div class="bar ${spent > o.budget ? "over" : ""}"><i style="width:${pct}%"></i></div>
+          <div class="muted" style="margin-top:6px">${spent > o.budget ? `⚠️ перерасход ${money(spent - o.budget)}`
+            : `осталось ${money(o.budget - spent)} из ${money(o.budget)}`}</div>` : `<div class="muted">бюджет не задан</div>`}
+      </div>
+      <div class="card list">
+        ${Object.entries(kinds).map(([k, title]) => `<div class="item"><div class="grow">${title}</div><b>${money(totals[k] || 0)}</b></div>`).join("")}
+      </div>
+      <div class="card">
+        <div class="row"><div class="grow">Этапы</div><b>${done} из ${stages.length}</b></div>
+        ${stages.length ? `<div class="bar"><i style="width:${Math.round(done / stages.length * 100)}%"></i></div>` : ""}
+      </div>
+      <div class="card">
+        <label style="margin-top:0">Название</label><input id="e-name" value="${esc(o.name)}" maxlength="100">
+        <label>Адрес</label><input id="e-addr" value="${esc(o.address || "")}" maxlength="200">
+        <label>Бюджет, ₽</label><input id="e-budget" inputmode="numeric" value="${o.budget || ""}">
+        <button class="wide" style="margin-top:12px" onclick="saveObject()">Сохранить</button>
+      </div>
+      <div class="grid2">
+        <button class="ghost" onclick="archiveObject(${o.archived ? 0 : 1})">${o.archived ? "📂 Из архива" : "🗄 В архив"}</button>
+        <button class="ghost" style="color:var(--danger)" onclick="deleteObject()">🗑 Удалить</button>
+      </div>`;
+  }
+
+  if (t === "exp") {
+    $t.innerHTML = `
+      <div class="card">
+        <div class="grid2">
+          <select id="x-kind">${Object.entries(kinds).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+          <input id="x-amount" inputmode="decimal" placeholder="Сумма, ₽">
+        </div>
+        <input id="x-note" placeholder="За что: плитка, аванс Сергею…" style="margin-top:8px" maxlength="200">
+        <button class="wide" style="margin-top:10px" onclick="addExpense()">➕ Добавить расход</button>
+      </div>
+      <div class="card list">
+        ${expenses.length ? expenses.map(e => `<div class="item">
+          <div class="grow"><div class="ellipsis">${esc(e.note) || (kinds[e.kind] || "")}</div>
+            <div class="muted">${(kinds[e.kind] || "").split(" ")[0]} ${fdate(e.created_at.slice(0, 10))}</div></div>
+          <b>${money(e.amount)}</b>
+          <button class="danger" onclick="delExpense(${e.id})" aria-label="Удалить">✕</button></div>`).join("")
+        : `<div class="empty">Расходов пока нет</div>`}
+      </div>`;
+  }
+
+  if (t === "stg") {
+    const now = today();
+    $t.innerHTML = `
+      <div class="card">
+        <input id="s-name" placeholder="Этап: электрика, плитка в ванной…" maxlength="100">
+        <div class="row" style="margin-top:8px"><input id="s-due" type="date" class="grow">
+          <button onclick="addStage()">➕</button></div>
+      </div>
+      <div class="card list">
+        ${stages.length ? stages.map(s => `<div class="item">
+          <div class="check tap ${s.done ? "on" : ""}" onclick="toggleStage(${s.id}, ${s.done ? 0 : 1})">${s.done ? "✓" : ""}</div>
+          <div class="grow"><div class="${s.done ? "done-name" : ""}">${esc(s.name)}</div>
+            ${s.due ? `<div class="muted ${!s.done && s.due < now ? "late" : ""}">до ${fdate(s.due)}</div>` : ""}</div>
+          <button class="danger" onclick="delStage(${s.id})" aria-label="Удалить">✕</button></div>`).join("")
+        : `<div class="empty">Добавьте этапы со сроками — в день срока бот напомнит</div>`}
+      </div>`;
+  }
+}
+
+window.tab = t => { state.tab = t; renderObject(); };
+const reload = async () => { state.obj = await api("/objects/" + state.obj.object.id); renderObject(); };
+
+window.saveObject = async () => {
+  const budget = parseInt(document.getElementById("e-budget").value.replace(/\D/g, "")) || 0;
+  await api("/objects/" + state.obj.object.id, { method: "PATCH", body: {
+    name: document.getElementById("e-name").value, address: document.getElementById("e-addr").value, budget } });
+  haptic(); toast("Сохранено"); reload();
+};
+window.archiveObject = async v => {
+  await api("/objects/" + state.obj.object.id, { method: "PATCH", body: { archived: v } });
+  toast(v ? "Убрано в архив" : "Возвращено из архива"); go("");
+};
+window.deleteObject = () => {
+  const run = async ok => { if (!ok) return; await api("/objects/" + state.obj.object.id, { method: "DELETE" }); go(""); };
+  tg?.showConfirm ? tg.showConfirm("Удалить объект со всеми расходами и этапами?", run)
+                  : run(confirm("Удалить объект со всеми расходами и этапами?"));
+};
+window.addExpense = async () => {
+  const amount = parseFloat(document.getElementById("x-amount").value.replace(/\s/g, "").replace(",", "."));
+  if (!(amount > 0)) return toast("Введите сумму");
+  await api(`/objects/${state.obj.object.id}/expenses`, { method: "POST", body: {
+    kind: document.getElementById("x-kind").value, amount, note: document.getElementById("x-note").value } });
+  haptic("medium"); toast("Добавлено"); reload();
+};
+window.delExpense = async id => { await api("/expenses/" + id, { method: "DELETE" }); reload(); };
+window.addStage = async () => {
+  const name = document.getElementById("s-name").value.trim();
+  if (!name) return toast("Введите название этапа");
+  await api(`/objects/${state.obj.object.id}/stages`, { method: "POST",
+    body: { name, due: document.getElementById("s-due").value || null } });
+  haptic("medium"); reload();
+};
+window.toggleStage = async (id, done) => { haptic(); await api("/stages/" + id, { method: "PATCH", body: { done } }); reload(); };
+window.delStage = async id => { await api("/stages/" + id, { method: "DELETE" }); reload(); };
+
+// ---------- калькулятор ----------
+async function showCalc() {
+  setBack(() => go(""));
+  if (!state.me) state.me = await api("/me");
+  const calcs = state.me.calcs;
+  $app.innerHTML = `
+    <h1>🧮 Калькулятор</h1>
+    <div class="card">
+      <select id="c-key">${Object.entries(calcs).map(([k, c]) => `<option value="${k}">${c.title}</option>`).join("")}</select>
+      <p class="muted" id="c-hint"></p>
+      <input id="c-nums" placeholder="Числа через пробел" inputmode="decimal">
+      <button class="wide" style="margin-top:10px" id="c-go">Посчитать</button>
+    </div>
+    <div class="card hidden" id="c-res"></div>`;
+  const $key = document.getElementById("c-key");
+  const hint = () => { document.getElementById("c-hint").innerHTML = calcs[$key.value].hint; };
+  $key.onchange = hint; hint();
+  document.getElementById("c-go").onclick = async () => {
+    const numbers = document.getElementById("c-nums").value.replace(/,/g, ".").split(/[\s x×х*;\/]+/i)
+      .map(parseFloat).filter(n => !isNaN(n));
+    try {
+      const r = await api("/calc", { method: "POST", body: { key: $key.value, numbers } });
+      const $r = document.getElementById("c-res");
+      $r.classList.remove("hidden");
+      $r.innerHTML = `<b>${esc(r.title)}</b><div class="list">${r.lines.map(l => `<div class="item">${esc(l)}</div>`).join("")}</div>
+        <p class="muted">Расчёт ориентировочный.</p>`;
+      haptic();
+    } catch { toast("Проверьте числа — подсказка выше"); }
+  };
+}
+
+route();
+</script>
+</body>
+</html>

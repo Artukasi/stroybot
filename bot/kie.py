@@ -24,8 +24,13 @@ def _headers() -> dict:
 
 async def upload_image(data: bytes, filename: str = "photo.jpg") -> str:
     """Загружает картинку во временное хранилище kie.ai (живёт ~3 дня), возвращает URL."""
+    return await upload_file(data, filename, "image/jpeg")
+
+
+async def upload_file(data: bytes, filename: str, mime: str) -> str:
+    """Загружает файл во временное хранилище kie.ai (живёт ~3 дня), возвращает URL."""
     payload = {
-        "base64Data": "data:image/jpeg;base64," + base64.b64encode(data).decode(),
+        "base64Data": f"data:{mime};base64," + base64.b64encode(data).decode(),
         "uploadPath": "stroybot",
         "fileName": filename,
     }
@@ -51,8 +56,8 @@ async def create_task(model: str, input_: dict) -> str:
     return task_id
 
 
-async def wait_task(task_id: str, timeout: int = 600) -> list[str]:
-    """Опрашивает задачу до готовности. Возвращает список URL результатов."""
+async def wait_task_result(task_id: str, timeout: int = 600) -> dict:
+    """Опрашивает задачу до готовности. Возвращает разобранный resultJson."""
     delay, waited = 3, 0
     async with aiohttp.ClientSession() as s:
         while waited < timeout:
@@ -65,15 +70,64 @@ async def wait_task(task_id: str, timeout: int = 600) -> list[str]:
             d = body.get("data") or {}
             state = d.get("state")
             if state == "success":
-                result = json.loads(d.get("resultJson") or "{}")
-                urls = result.get("resultUrls") or []
-                if not urls:
-                    raise KieError(f"no results: {d}")
-                return urls
+                raw = d.get("resultJson") or "{}"
+                return json.loads(raw) if isinstance(raw, str) else raw
             if state == "fail":
                 raise KieError(f"task failed: {d.get('failMsg') or d.get('failCode')}")
             delay = min(delay + 2, 10)
     raise KieError("timeout")
+
+
+async def wait_task(task_id: str, timeout: int = 600) -> list[str]:
+    """Опрашивает задачу до готовности. Возвращает список URL результатов."""
+    result = await wait_task_result(task_id, timeout)
+    urls = result.get("resultUrls") or []
+    if not urls:
+        raise KieError(f"no results: {result}")
+    return urls
+
+
+def find_text(obj) -> str:
+    """Ищет распознанный текст в ответе STT: поле text на любом уровне вложенности."""
+    if isinstance(obj, dict):
+        if isinstance(obj.get("text"), str) and obj["text"].strip():
+            return obj["text"]
+        for v in obj.values():
+            t = find_text(v)
+            if t:
+                return t
+    elif isinstance(obj, list):
+        for v in obj:
+            t = find_text(v)
+            if t:
+                return t
+    elif isinstance(obj, str) and obj.strip().startswith("{"):
+        try:
+            return find_text(json.loads(obj))
+        except ValueError:
+            return ""
+    return ""
+
+
+async def transcribe(audio: bytes, filename: str = "voice.ogg", mime: str = "audio/ogg") -> str:
+    """Голос → текст через ElevenLabs Speech-to-Text на kie.ai."""
+    url = await upload_file(audio, filename, mime)
+    task_id = await create_task(config.stt_model, {"audio_url": url})
+    result = await wait_task_result(task_id, timeout=180)
+    text = find_text(result)
+    if not text and result.get("resultUrls"):
+        # некоторые модели кладут результат файлом
+        async with aiohttp.ClientSession() as s:
+            async with s.get(result["resultUrls"][0]) as r:
+                body = await r.text()
+        try:
+            text = find_text(json.loads(body))
+        except ValueError:
+            text = body
+    text = (text or "").strip()
+    if not text:
+        raise KieError(f"empty transcription: {str(result)[:300]}")
+    return text
 
 
 async def edit_image(image_url: str, prompt: str, aspect_ratio: str = "auto") -> list[str]:

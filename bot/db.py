@@ -545,6 +545,13 @@ async def add_scan(user_id: int, room: str, data: dict) -> int:
         return cur.lastrowid
 
 
+async def get_scan(user_id: int, scan_id: int) -> dict | None:
+    async with _conn() as db:
+        r = await (await db.execute(
+            "SELECT id, room, data, created_at FROM scans WHERE id=? AND user_id=?", (scan_id, user_id))).fetchone()
+    return {"id": r[0], "room": r[1], "created_at": r[3], **json.loads(r[2])} if r else None
+
+
 async def list_scans(user_id: int, limit: int = 20) -> list[dict]:
     async with _conn() as db:
         rows = await (await db.execute(

@@ -402,6 +402,8 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 .plan-svg .wall { fill: color-mix(in srgb, var(--draft) 10%, transparent); stroke: var(--ink); stroke-width: 3; stroke-linejoin: round;
   stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: drawplan 1.4s var(--ease) forwards; }
 .plan-svg .dim { stroke: var(--draft); stroke-width: 1.2; opacity: 0; animation: fadein .5s 1.1s forwards; }
+.plan-svg .furn { fill: color-mix(in srgb, var(--signal) 45%, transparent); stroke: var(--ink); stroke-width: 1.2; opacity: 0; animation: fadein .5s 1.5s forwards; }
+.scan-img { width: 100%; border-radius: 14px; display: block; margin-top: 12px; }
 .plan-svg text { fill: var(--ink); font: 700 13px "Unbounded", sans-serif; opacity: 0; animation: fadein .5s 1.3s forwards; }
 @keyframes drawplan { to { stroke-dashoffset: 0; } }
 @keyframes fadein { to { opacity: 1; } }
@@ -1375,13 +1377,13 @@ function planSvg(s) {
     ${s.height ? `<text x="${x + w / 2}" y="${y + h / 2 + 5}" text-anchor="middle" style="fill:var(--draft)">h ${m(s.height)}</text>` : ""}</svg>`;
 }
 // размеры комнаты: план, площади и переходы в калькулятор и смету (для скриншота и для LiDAR-скана)
-function showSizes(out, s, plan) {
+function showSizes(out, s, plan, objects) {
   state.sizes = s;
   const n = v => v ? String(v).replace(".", ",") : "—";
   const calc = (key, nums, name) => nums.every(Boolean) ? `<button type="button" data-calc="${key}" data-nums="${nums.join(" ")}">${name}</button>` : "";
   out.innerHTML = `<section class="panel pad">
     <div class="row"><strong class="grow">${esc(s.room || "Помещение")}</strong><span class="muted">${esc(s.notes || "")}</span></div>
-    ${plan?.length > 2 ? polySvg(plan) : planSvg(s)}
+    ${plan?.length > 2 ? polySvg(plan, objects) : planSvg(s)}
     <div class="stats3"><div><b>${n(s.floor_area)}</b><span>пол, м²</span></div><div><b>${n(s.wall_area)}</b><span>стены, м²</span></div><div><b>${n(s.perimeter)}</b><span>периметр, м</span></div></div>
     <p class="muted" style="margin:0 0 8px">Посчитать материалы</p>
     <div class="chips wrap">${calc("tile", [s.floor_area, 30, 60], "Плитка на пол")}${calc("laminate", [s.floor_area], "Ламинат")}
@@ -1395,7 +1397,7 @@ function showSizes(out, s, plan) {
   };
 }
 // план по точкам из LiDAR-скана: стены с длинами
-function polySvg(pts) {
+function polySvg(pts, objects = []) {
   const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
   const minX = Math.min(...xs), minY = Math.min(...ys), w = Math.max(...xs) - minX || 1, h = Math.max(...ys) - minY || 1;
   const W = 320, H = 220, pad = 40, k = Math.min((W - pad * 2) / w, (H - pad * 2) / h);
@@ -1410,8 +1412,14 @@ function polySvg(pts) {
     mx += dx / d * 16; my += dy / d * 16 + 4;
     return `<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${len.toFixed(2).replace(".", ",")}</text>`;
   }).join("");
+  // мебель из скана: повёрнутые прямоугольники в тех же координатах, что и стены
+  const furn = objects.filter(o => o.width && o.depth).map(o => {
+    const x = ox + (o.x - minX) * k, y = oy + (o.y - minY) * k, fw = o.width * k, fd = o.depth * k;
+    return `<rect class="furn" x="${(-fw / 2).toFixed(1)}" y="${(-fd / 2).toFixed(1)}" width="${fw.toFixed(1)}" height="${fd.toFixed(1)}" rx="2"
+      transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${((o.angle || 0) * 180 / Math.PI).toFixed(1)})"/>`;
+  }).join("");
   return `<svg class="plan-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="План комнаты по скану">
-    <path class="wall" d="M${P.map(p => p.map(v => v.toFixed(1)).join(" ")).join("L")}Z"/>${labels}</svg>`;
+    <path class="wall" d="M${P.map(p => p.map(v => v.toFixed(1)).join(" ")).join("L")}Z"/>${furn}${labels}</svg>`;
 }
 async function showMeasure() {
   setBack(() => go("tools"));
@@ -1459,10 +1467,59 @@ async function loadScans(box, out) {
        <button class="btn quiet" style="margin-top:12px" data-pair>Подключить iPhone</button></section>`);
   box.querySelectorAll("[data-scan]").forEach(el => el.onclick = () => {
     const x = scans[+el.dataset.scan]; haptic();
-    showSizes(out, { ...x.sizes, room: x.room, notes: "скан лидаром" }, x.plan);
+    showScan(out, x);
     out.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
   });
   box.querySelector("[data-pair]")?.addEventListener("click", pairIphone);
+}
+// скан с iPhone: план с мебелью, точные материалы, ремонт на картинке и смета по размерам
+async function showScan(out, x) {
+  showSizes(out, { ...x.sizes, room: x.room, notes: "скан лидаром" }, x.plan, x.objects);
+  const p = await loadProfile(), keys = Object.keys(p.styles);
+  let style = keys[0];
+  const box = document.createElement("div");
+  box.innerHTML = `
+    ${x.furniture?.length ? `<section class="panel pad"><strong>Мебель в комнате</strong>
+      <p class="muted" style="margin:6px 0 0">${x.furniture.map(esc).join(", ")}</p></section>` : ""}
+    <section class="panel pad"><strong>Материалы по точным размерам</strong>
+      <ul style="margin:8px 0 0;padding-left:18px">${(x.materials || []).map(m => `<li>${esc(m)}</li>`).join("")}</ul></section>
+    <section class="panel pad"><strong>Ремонт на картинке</strong>
+      <p class="muted" style="margin:6px 0 10px">${x.has_photo ? "Перекрашу фото комнаты с iPhone" : "Нарисую комнату по размерам скана"}</p>
+      <div class="styles" role="group" aria-label="Стиль">${keys.map(k => `<button type="button" data-k="${k}" aria-pressed="${k === style}">${esc(p.styles[k])}</button>`).join("")}</div>
+      <button class="btn" data-sdesign>Показать ремонт${costWord("design")}</button>
+      <div data-sres></div></section>
+    <button class="btn quiet" data-sest>Смета по скану${costWord("estimate")}</button>
+    <div data-seout style="margin-top:12px"></div>`;
+  out.append(box);
+  const est = out.querySelector("[data-est]"); if (est) est.remove();   // смета по скану точнее, чем по тексту
+  box.querySelectorAll(".styles button").forEach(b => b.onclick = () => {
+    style = b.dataset.k; haptic();
+    box.querySelectorAll(".styles button").forEach(y => y.setAttribute("aria-pressed", y === b));
+  });
+  box.querySelector("[data-sdesign]").onclick = async e => {
+    const res = box.querySelector("[data-sres]"); e.target.disabled = true;
+    res.innerHTML = drafting(["Беру размеры из скана…", "Расставляю мебель…", `Подбираю «${p.styles[style]}»…`, "Ставлю свет…", "Почти готово…"]); rotateMsgs(res);
+    try {
+      const r = await api(`/scans/${x.id}/design`, { method: "POST", body: { style } });
+      clearScreen(); notify("success"); state.profile.credits = r.credits;
+      res.innerHTML = `<img class="scan-img" alt="${esc(x.room)} после ремонта, стиль ${esc(r.style)}" src="${esc(r.image)}">
+        <div class="actions"><button class="btn quiet" data-ssend>Отправить в чат</button></div>`;
+      res.querySelector("[data-ssend]").onclick = async () => {
+        try { await api("/send", { method: "POST", body: { photo: r.image, text: `${x.room}, стиль ${r.style}` } }); toast("Отправил в чат с ботом"); } catch (err) { aiError(err); }
+      };
+    } catch (err) { clearScreen(); res.innerHTML = ""; aiError(err); }
+    e.target.disabled = false;
+  };
+  box.querySelector("[data-sest]").onclick = async e => {
+    const res = box.querySelector("[data-seout]"); e.target.disabled = true;
+    res.innerHTML = drafting(["Считаю объёмы…", "Подбираю цены…", "Собираю смету…"]); rotateMsgs(res);
+    try {
+      const r = await api(`/scans/${x.id}/estimate`, { method: "POST" });
+      clearScreen(); notify("success"); state.profile.credits = r.credits;
+      res.innerHTML = answerBlock(r.html, r.raw); wireAnswer(res, r.raw);
+    } catch (err) { clearScreen(); res.innerHTML = ""; aiError(err); }
+    e.target.disabled = false;
+  };
 }
 window.pairIphone = async () => {
   try {

@@ -138,6 +138,13 @@ async def edit_image(image_url: str, prompt: str, aspect_ratio: str = "auto") ->
     return await wait_task(task_id)
 
 
+async def generate_image(prompt: str, aspect_ratio: str = "4:3") -> list[str]:
+    """Картинка по описанию, без исходного фото."""
+    task_id = await create_task(config.t2i_model, {"prompt": prompt, "output_format": "png",
+                                                   "image_size": aspect_ratio})
+    return await wait_task(task_id)
+
+
 def _extract_text(body: dict) -> str:
     """Поддерживает и OpenAI-формат (choices), и нативный формат Gemini (candidates)."""
     if body.get("choices"):

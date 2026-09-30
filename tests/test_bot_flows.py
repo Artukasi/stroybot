@@ -203,6 +203,8 @@ def test_every_button_has_a_handler(env):
     from aiogram.dispatcher.event.bases import UNHANDLED
 
     from bot import keyboards as kb
+    from bot.handlers.scans import scan_styles_kb
+    from bot.web_scan import scan_kb
     bot, dp, session = env
     run(env, msg("/start"), cb("role:foreman"), cb("obj:new"), msg("Дача"))
     (obj,) = asyncio.run(db.list_objects(100))
@@ -214,7 +216,7 @@ def test_every_button_has_a_handler(env):
               kb.packs_kb(), kb.home_kb(), kb.after_design_kb(), kb.use_text_kb(), kb.objects_kb([obj]),
               kb.object_kb(obj), kb.stages_kb(oid, [stage]), kb.expenses_kb(oid, [exp]),
               kb.back_to_list_kb(), kb.back_to_object_kb(oid), kb.report_kb(1), kb.report_objects_kb([obj]),
-              kb.confirm_delete_kb(oid)]
+              kb.confirm_delete_kb(oid), scan_kb(1), scan_styles_kb(1)]
     datas = []
     for board in boards:
         for row in board.inline_keyboard:

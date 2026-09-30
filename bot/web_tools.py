@@ -34,8 +34,9 @@ _ALLOWED = re.compile(r"&lt;(/?)(b|i|u|s|code|pre|strong|em)&gt;")
 
 
 class NotEnough(Exception):
-    def __init__(self, need: int):
+    def __init__(self, need: int, user_id: int | None = None):
         self.need = need
+        self.user_id = user_id
 
 
 def safe_html(text: str) -> str:
@@ -63,15 +64,16 @@ async def _reward(request: web.Request, user_id: int) -> None:
         log.exception("referral reward failed")
 
 
-async def paid(request: web.Request, kind: str, work, cost: int | None = None):
-    """Списывает кредиты, выполняет work(); при ошибке возвращает кредиты и отвечает 502."""
-    user_id = _uid(request)
+async def paid(request: web.Request, kind: str, work, cost: int | None = None, user_id: int | None = None):
+    """Списывает кредиты, выполняет work(); при ошибке возвращает кредиты и отвечает 502.
+    user_id задают запросы с iPhone (там вход по токену, а не по подписи Telegram)."""
+    user_id = _uid(request) if user_id is None else user_id
     cost = PRICES[kind] if cost is None else cost
     job_id = None
     if cost:
         job_id = await db.charge(user_id, cost, kind)
         if job_id is None:
-            raise NotEnough(cost)
+            raise NotEnough(cost, user_id)
     try:
         result = await work()
     except Exception:
@@ -99,8 +101,9 @@ async def credits_middleware(request: web.Request, handler):
     try:
         return await handler(request)
     except NotEnough as e:
+        user_id = e.user_id if e.user_id is not None else _uid(request)
         return web.json_response({"error": "credits", "need": e.need,
-                                  "credits": await credits_of(_uid(request))}, status=402)
+                                  "credits": await credits_of(user_id)}, status=402)
 
 
 async def _form(request: web.Request) -> dict:

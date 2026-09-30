@@ -82,6 +82,55 @@ def paint(area_m2: float, layers: int = 2, l_per_m2: float = 0.12, can_l: float 
     )
 
 
+WET_ROOMS = ("ванн", "санузел", "туалет", "душ")
+
+
+def scan_materials(scan: dict) -> CalcResult:
+    """Материалы по точному скану: площади стен уже без окон и дверей, обои — полосами по каждой стене,
+    плинтус — по периметру минус двери. Для ванной и санузла — плитка вместо обоев и ламината."""
+    s = scan.get("sizes") or {}
+    floor = s.get("floor_area") or 0
+    walls_net = s.get("wall_area") or 0
+    height = s.get("height") or 2.7
+    perimeter = s.get("perimeter") or 0
+    openings = scan.get("openings") or []
+    doors = [o for o in openings if o.get("kind") in ("door", "opening") and o.get("width")]
+    skirting = s.get("skirting") or max(0.0, perimeter - sum(o["width"] for o in doors))
+    slopes = s.get("slopes") or 0
+    corners = len(scan.get("plan") or []) or 4
+    room = (scan.get("room") or "Комната")
+    lines = [f"Пол {_fmt(floor)} м², стены без окон и дверей {_fmt(walls_net)} м², высота {_fmt(height)} м"]
+
+    if any(w in room.lower() for w in WET_ROOMS):
+        tile_m2 = (walls_net + floor) * 1.1
+        glue = (walls_net + floor) * 5
+        lines += [
+            f"Плитка на стены: {_fmt(walls_net * 1.1)} м² (с запасом 10%)",
+            f"Плитка на пол: {_fmt(floor * 1.1)} м²",
+            f"Клей для плитки: {math.ceil(glue / 25)} меш. по 25 кг",
+            f"Затирка: ~{_fmt(tile_m2 * 0.5)} кг",
+            f"Гидроизоляция пола и стен на 20 см: ~{_fmt((floor + perimeter * 0.2) * 1.5)} кг",
+        ]
+    else:
+        wall_list = [w for w in scan.get("walls") or [] if w.get("length")]
+        strips = sum(math.ceil(w["length"] / 1.06) for w in wall_list) if wall_list \
+            else math.ceil(perimeter / 1.06)
+        strips -= sum(math.floor(o["width"] / 1.06) for o in doors)
+        per_roll = max(1, math.floor(10.05 / (height + 0.1)))
+        lines += [
+            f"Штукатурка (слой 10 мм): {math.ceil(walls_net * 9 / 30)} меш. по 30 кг",
+            f"Шпаклёвка финишная: {math.ceil(walls_net * 1.2 / 20)} меш. по 20 кг",
+            f"Краска для стен в 2 слоя: ~{_fmt(walls_net * 0.24)} л ({math.ceil(walls_net * 0.24 / 9)} банк. по 9 л)",
+            f"или обои 1,06×10,05 м: {math.ceil(max(strips, 0) / per_roll)} рул. ({max(strips, 0)} полос по стенам)",
+            f"Ламинат: {math.ceil(floor * 1.07 / 2.13)} уп. по 2,13 м², подложка {math.ceil(floor * 1.05)} м²",
+            f"Плинтус: {_fmt(skirting)} м → {math.ceil(skirting * 1.05 / 2.5)} шт по 2,5 м, углов {corners}",
+        ]
+    lines.append(f"Потолок: покраска {_fmt(floor)} м², краски ~{_fmt(floor * 0.24)} л")
+    if slopes:
+        lines.append(f"Откосы окон: {_fmt(slopes)} пог. м")
+    return CalcResult(f"Материалы по скану: {room}", lines)
+
+
 def parse_numbers(text: str) -> list[float]:
     """Достаёт числа из строки вида '3,5 x 4' или '20 60 60'."""
     cleaned = text.lower().replace(",", ".")

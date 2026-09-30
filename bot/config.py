@@ -20,6 +20,8 @@ class Config:
     )
     text_model: str = os.getenv("TEXT_MODEL", "gemini-3-5-flash")
     image_model: str = os.getenv("IMAGE_MODEL", "google/nano-banana-edit")
+    # Картинка ремонта по скану без фото: генерация по описанию комнаты
+    t2i_model: str = os.getenv("T2I_MODEL", "google/nano-banana")
     db_path: str = os.getenv("DB_PATH", "stroybot.db")
     welcome_credits: int = int(os.getenv("WELCOME_CREDITS", "3"))
     stt_model: str = os.getenv("STT_MODEL", "elevenlabs/speech-to-text")

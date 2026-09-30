@@ -56,12 +56,17 @@ def ai(monkeypatch):
         calls.append(("edit", url, prompt))
         return ["https://files/result.png"]
 
+    async def generate(prompt, aspect_ratio="4:3"):
+        calls.append(("t2i", prompt))
+        return ["https://files/t2i.png"]
+
     async def transcribe(audio, filename="v", mime="audio/ogg"):
         return "плитка в ванной 4 метра"
     monkeypatch.setattr(kie, "chat", chat)
     monkeypatch.setattr(kie, "upload_image", upload)
     monkeypatch.setattr(kie, "edit_image", edit)
     monkeypatch.setattr(kie, "transcribe", transcribe)
+    monkeypatch.setattr(kie, "generate_image", generate)
     return calls
 
 
@@ -211,4 +216,66 @@ def test_lidar_scanner_pairing_and_rooms(fresh_db):
             assert scans[0]["room"] == "Кухня" and scans[0]["sizes"]["floor_area"] == 9.86 and len(scans[0]["plan"]) == 4
             other = {"X-Telegram-Init-Data": sign({"id": 12})}
             assert (await (await c.get("/api/scans", headers=other)).json())["scans"] == []
+    asyncio.run(run())
+
+
+def test_scan_furniture_photo_design_and_estimate(fresh_db, ai):
+    """Скан с мебелью и фото: точные материалы в чате, ремонт на картинке (iPhone и Mini App), смета."""
+    import base64
+
+    from bot import scan_ai
+    object.__setattr__(config, "bot_token", TOKEN)
+    bot = FakeBot()
+    jpeg = b"\xff\xd8\xff\xe0" + b"0" * 100
+
+    async def run():
+        async with TestClient(TestServer(create_app(bot))) as c:
+            h = {"X-Telegram-Init-Data": sign({"id": 21})}
+            code = (await (await c.post("/api/scan-code", headers=h)).json())["code"]
+            token = (await (await c.post("/scan/pair", json={"code": code})).json())["token"]
+            auth = {"Authorization": f"Bearer {token}"}
+            room = {"room": "Спальня",
+                    "sizes": {"length": 4, "width": 3, "height": 2.7, "perimeter": 14, "floor_area": 12,
+                              "wall_area": 34.1, "openings_area": 3.7, "skirting": 13.2, "slopes": 4.4},
+                    "walls": [{"length": 4, "height": 2.7, "openings_area": 2.1}, {"length": 3, "height": 2.7}] * 2,
+                    "openings": [{"kind": "window", "width": 1.4, "height": 1.5}, {"kind": "door", "width": 0.8, "height": 2}],
+                    "plan": [[0, 0], [4, 0], [4, 3], [0, 3]],
+                    "objects": [{"kind": "bed", "width": 1.6, "depth": 2.0, "height": 0.5, "x": 2, "y": 1.5, "angle": 0},
+                                {"kind": "spaceship", "width": 1, "depth": 1, "height": 1, "x": "bad", "y": 1, "angle": 0}],
+                    "photo": base64.b64encode(jpeg).decode()}
+            r = await c.post("/scan/rooms", json=room, headers=auth)
+            sid = (await r.json())["id"]
+            text = bot.messages[-1][1]
+            assert "Мебель: кровать 160×200×50 см, предмет" in text and "Материалы по скану" in text
+            assert "Откосы окон: 4,4" in text and "Плинтус: 13,2 м" in text
+            assert scan_ai.photo_path(sid).read_bytes() == jpeg
+
+            # без фото — картинка по размерам (text-to-image)
+            room2 = {k: v for k, v in room.items() if k != "photo"}
+            sid2 = (await (await c.post("/scan/rooms", json=room2, headers=auth)).json())["id"]
+
+            await db.add_credits(21, 10)
+            r = await c.post("/scan/design", json={"id": sid, "style": "loft"}, headers=auth)
+            data = await r.json()
+            assert r.status == 200 and data["image"] == "https://files/result.png"
+            assert ai[-1][0] == "edit" and "bed" in ai[-1][2] and "4 m × 3 m" in ai[-1][2]
+            r = await c.post(f"/api/scans/{sid2}/design", json={"style": "scandi"}, headers=h)
+            assert (await r.json())["image"] == "https://files/t2i.png" and ai[-1][0] == "t2i"
+            assert (await c.post("/scan/design", json={"id": sid, "style": "nope"}, headers=auth)).status == 400
+
+            # чужой скан не отдаём
+            h2 = {"X-Telegram-Init-Data": sign({"id": 22})}
+            assert (await c.post(f"/api/scans/{sid}/estimate", headers=h2)).status == 404
+
+            r = await c.post(f"/api/scans/{sid}/estimate", headers=h)
+            assert r.status == 200 and "кровать 160×200×50 см" in ai[-1][1] and "Ламинат" in ai[-1][1]
+
+            scans = (await (await c.get("/api/scans", headers=h)).json())["scans"]
+            assert scans[-1]["has_photo"] and scans[0]["has_photo"] is False
+            assert any("Ламинат" in m for m in scans[0]["materials"]) and scans[0]["furniture"][0].startswith("кровать")
+
+            # кредиты кончились → 402 и для iPhone
+            await db.add_credits(21, -1000)
+            r = await c.post("/scan/design", json={"id": sid, "style": "loft"}, headers=auth)
+            assert r.status == 402 and (await r.json())["error"] == "credits"
     asyncio.run(run())

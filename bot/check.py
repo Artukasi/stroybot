@@ -9,6 +9,7 @@ from . import kie
 from .config import config
 
 OK, BAD = "  [ok] ", "  [!!] "
+CHAT_TIMEOUT = 60  # сек: дольше не ждём пробный ответ модели
 
 
 async def check_telegram() -> bool:
@@ -46,8 +47,13 @@ async def check_kie() -> bool:
     except Exception as e:  # баланс — не главное, смотрим, отвечает ли модель
         print(BAD + f"Не удалось узнать баланс kie.ai: {e}")
     try:
-        answer = await kie.chat("Отвечай одним словом.", "Скажи: готово", max_tokens=200)
+        answer = await asyncio.wait_for(
+            kie.chat("Отвечай одним словом.", "Скажи: готово", max_tokens=200), CHAT_TIMEOUT)
         print(OK + f"Текстовая модель {config.text_model} ответила: {answer.strip()[:60]}")
+        return True
+    except asyncio.TimeoutError:
+        # Не держим запуск бота: медленный ответ — не ошибка ключа
+        print(BAD + f"kie.ai отвечает медленно (дольше {CHAT_TIMEOUT} сек), запускаю бота всё равно")
         return True
     except Exception as e:
         print(BAD + f"Текстовая модель не ответила: {e}")

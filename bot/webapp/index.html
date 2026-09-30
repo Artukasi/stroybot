@@ -6,164 +6,266 @@
 <title>СтройБот</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;700;800&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-  /* Палитра «стройплощадка»: бетон, графитовый карандаш, сигнальный жёлтый, синька чертежа */
-  :root {
-    --concrete: #D9DCDF;   /* фон — бетонная стена */
-    --sheet: #F7F8F9;      /* лист сметы */
-    --graphite: #1E242B;   /* текст — строительный карандаш */
-    --pencil: #6B7580;     /* вторичный текст */
-    --rule: #C5CBD1;       /* линейки */
-    --signal: #F2C230;     /* сигнальный жёлтый — рулетка, главное действие */
-    --blueprint: #1F4E8C;  /* синька — ссылки, отметки */
-    --overrun: #C8372D;    /* перерасход, просрочка */
-    --done: #2E7D4F;
-    --on-signal: #1E242B;
-  }
-  :root[data-theme="dark"] {
-    --concrete: #15191D;
-    --sheet: #20252B;
-    --graphite: #E9ECEF;
-    --pencil: #95A0AB;
-    --rule: #343B43;
-    --blueprint: #7FA8E0;
-    --overrun: #F0685D;
-    --done: #5BBF83;
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: var(--concrete); color: var(--graphite);
-    font: 16px/1.45 "Onest", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-variant-numeric: tabular-nums; }
-  body { padding: 18px 16px calc(28px + env(safe-area-inset-bottom)); max-width: 560px; margin: 0 auto; }
-  button, input { font: inherit; color: inherit; }
-  :focus-visible { outline: 3px solid var(--blueprint); outline-offset: 2px; }
+/*
+  Концепция «Чертёж, который строится».
+  Фон — синька (бумага чертежа с сеткой). Каждый объект нарисован как дом:
+  этаж = этап. Готовые этажи загораются сигнальным жёлтым, будущие — пунктир чертежа,
+  над недостроенным домом работает кран. Бюджет — рулетка, которая разматывается.
+  Один акцент (сигнальный жёлтый), две гарнитуры: Unbounded для цифр и заголовков, Onest для текста.
+  Радиусы: контейнеры 20px, поля и кнопки 14px, переключатели — пилюли.
+*/
+:root {
+  --paper: #E6ECF2;
+  --grid: rgba(31, 78, 140, .07);
+  --surface: #F7F9FB;
+  --ink: #14202E;
+  --ink-2: #5A6B7E;
+  --line: #C9D4DF;
+  --draft: #3D6FAE;
+  --signal: #F5C518;
+  --on-signal: #14202E;
+  --lit: #FFD84D;
+  --alarm: #D43D2F;
+  --shadow: 0 1px 0 rgba(20, 32, 46, .04), 0 8px 24px -12px rgba(31, 78, 140, .28);
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+:root[data-theme="dark"] {
+  --paper: #0C1826;
+  --grid: rgba(120, 170, 230, .07);
+  --surface: #13243A;
+  --ink: #EAF1F8;
+  --ink-2: #8FA6BF;
+  --line: #22384F;
+  --draft: #6F9FDB;
+  --alarm: #FF6B5E;
+  --shadow: 0 1px 0 rgba(0, 0, 0, .2), 0 10px 30px -14px rgba(0, 0, 0, .7);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { background: var(--paper); }
+body {
+  margin: 0 auto; max-width: 560px; min-height: 100dvh;
+  padding: 20px 16px calc(32px + env(safe-area-inset-bottom));
+  color: var(--ink); font: 16px/1.45 "Onest", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-attachment: fixed;
+}
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--draft); outline-offset: 2px; }
+.display { font-family: "Unbounded", "Onest", system-ui, sans-serif; letter-spacing: -.02em; }
+.muted { color: var(--ink-2); font-size: 14px; }
+.alarm { color: var(--alarm); }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grow { flex: 1; min-width: 0; }
+.row { display: flex; align-items: center; gap: 12px; }
 
-  /* типографика: одна гарнитура, контраст за счёт веса и размера */
-  .title { font-size: 28px; line-height: 1.1; font-weight: 800; letter-spacing: -.02em; margin: 0; }
-  .sub { color: var(--pencil); font-size: 14px; margin-top: 4px; }
-  .sum { font-size: 34px; line-height: 1; font-weight: 800; letter-spacing: -.03em; }
-  .muted { color: var(--pencil); font-size: 14px; }
-  .late { color: var(--overrun); }
-  .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* шапка */
+.top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
+.title { margin: 0; font: 700 26px/1.1 "Unbounded", "Onest", sans-serif; letter-spacing: -.03em; text-wrap: balance; }
+.sub { margin-top: 6px; color: var(--ink-2); font-size: 14px; text-wrap: pretty; }
+.fab { flex: none; width: 52px; height: 52px; border-radius: 16px; border: 0; cursor: pointer;
+  background: var(--signal); color: var(--on-signal); display: grid; place-items: center;
+  box-shadow: 0 10px 24px -10px rgba(245, 197, 24, .9); transition: transform .2s var(--spring); }
+.fab:active { transform: scale(.92) rotate(-6deg); }
+.fab svg { width: 24px; height: 24px; }
 
-  header.top { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 18px; }
-  header.top .grow { flex: 1; min-width: 0; }
-  .grow { flex: 1; min-width: 0; }
+/* сводка на главной */
+.hero { position: relative; overflow: hidden; border-radius: 20px; padding: 18px 18px 16px; margin-bottom: 14px;
+  background: #14202E; color: #EAF1F8; }
+:root[data-theme="dark"] .hero { background: #1A3150; }
+.hero .label { font-size: 14px; opacity: .7; }
+.hero .label, .hero .big, .hero .stats { padding-right: 96px; }
+.hero .big { font: 800 32px/1.05 "Unbounded", sans-serif; letter-spacing: -.04em; margin: 4px 0 14px; position: relative; z-index: 1; }
+.hero .skyline { position: absolute; right: 8px; bottom: 0; width: 96px; height: 114px; opacity: .95; pointer-events: none; }
+.hero .stats { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; position: relative; z-index: 1; }
+.hero .stats b { display: block; font: 700 18px/1.2 "Unbounded", sans-serif; }
+.hero .house .plan { stroke: #6F9FDB; }
+.hero .house .built { fill: #2A4466; }
+.hero .house .ground { stroke: #8FA6BF; }
 
-  /* Рулетка — главный визуальный элемент: жёлтая лента с делениями, метка «потрачено» */
-  .tape { position: relative; height: 34px; border-radius: 4px; background: var(--signal); overflow: hidden;
-    box-shadow: inset 0 -2px 0 rgba(0,0,0,.18); }
-  .tape.thin { height: 14px; border-radius: 3px; }
-  .tape::before { content: ""; position: absolute; inset: 0; opacity: .55;
-    background:
-      repeating-linear-gradient(90deg, var(--on-signal) 0 1px, transparent 1px 10%) 0 0 / 100% 45% no-repeat,
-      repeating-linear-gradient(90deg, var(--on-signal) 0 1px, transparent 1px 2%) 0 0 / 100% 22% no-repeat; }
-  .tape.thin::before { background: repeating-linear-gradient(90deg, var(--on-signal) 0 1px, transparent 1px 10%) 0 0 / 100% 45% no-repeat; }
-  .tape .used { position: absolute; left: 0; top: 0; bottom: 0; background: var(--on-signal); opacity: .8;
-    transition: width .5s cubic-bezier(.2,.8,.2,1); }
-  .tape .mark { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--overrun); }
-  .tape.over { background: repeating-linear-gradient(-45deg, var(--signal) 0 12px, var(--on-signal) 12px 24px); }
-  .tape.over::before { display: none; }
-  .tape.empty { background: var(--rule); }
-  .tape.empty::before { opacity: .25; }
-  .tape-legend { display: flex; justify-content: space-between; margin-top: 8px; font-size: 14px; color: var(--pencil); }
-  .tape-legend b { color: var(--graphite); font-weight: 600; }
-  .tape-legend .warn { color: var(--overrun); font-weight: 600; }
+/* список объектов */
+.sites { display: grid; gap: 10px; }
+.site { display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: end; cursor: pointer;
+  background: var(--surface); border-radius: 20px; padding: 14px 16px 14px 12px; box-shadow: var(--shadow);
+  transition: transform .18s var(--ease); }
+.site:active { transform: scale(.985); }
+.site .house { width: 64px; height: 76px; }
+.site-name { font-weight: 600; font-size: 17px; }
+.site-meta { display: flex; align-items: baseline; gap: 10px; margin: 2px 0 10px; }
+.site-sum { font: 700 15px/1.2 "Unbounded", sans-serif; white-space: nowrap; }
 
-  /* Лист — единая подложка для строк, без россыпи одинаковых карточек */
-  .sheet { background: var(--sheet); border-radius: 10px; padding: 4px 16px; margin-bottom: 16px; }
-  .sheet.pad { padding: 16px; }
-  .line { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
-  .line:last-child { border-bottom: 0; }
-  .line .amount { font-weight: 600; white-space: nowrap; }
-  .obj { padding: 16px 0; cursor: pointer; border-bottom: 1px solid var(--rule); }
-  .obj:last-child { border-bottom: 0; }
-  .obj-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; }
-  .obj-name { font-weight: 600; font-size: 17px; }
+/* рулетка */
+.tape-wrap { position: relative; padding-right: 30px; }
+.tape { position: relative; height: 30px; border-radius: 4px 0 0 4px; overflow: hidden; background: var(--line); }
+.tape.thin { height: 10px; border-radius: 3px; }
+.tape-wrap.thin { padding-right: 0; }
+.tape .band { position: absolute; inset: 0 auto 0 0; width: 0; background-color: var(--signal);
+  transition: width 1.1s var(--ease);
+  background-image:
+    repeating-linear-gradient(90deg, rgba(20,32,46,.75) 0 1.5px, transparent 1.5px 10%),
+    repeating-linear-gradient(90deg, rgba(20,32,46,.45) 0 1px, transparent 1px 2%);
+  background-size: 100% 46%, 100% 24%; background-repeat: no-repeat; }
+.tape.thin .band { background-image: none; }
+.tape .band::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 3px; background: var(--on-signal); }
+.tape.thin .band::after { display: none; }
+.case { position: absolute; right: 0; top: 50%; width: 40px; height: 40px; margin-top: -20px; border-radius: 12px;
+  background: var(--signal); display: grid; place-items: center; box-shadow: inset 0 -3px 0 rgba(20,32,46,.25); }
+.case i { width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--on-signal); border-right-color: transparent;
+  transition: transform 1.1s var(--ease); }
+.tape.over .band { width: 100% !important;
+  background: repeating-linear-gradient(-45deg, var(--signal) 0 10px, var(--on-signal) 10px 20px);
+  background-size: 28.28px 28.28px; animation: hazard 1.2s linear infinite; }
+.tape.over .band::after { display: none; }
+@keyframes hazard { to { background-position: 28.28px 0; } }
+.legend { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+.legend b { color: var(--ink); font-weight: 600; }
+.legend b.alarm { color: var(--alarm); }
 
-  .section { font-size: 15px; font-weight: 600; margin: 22px 2px 8px; }
+/* экран объекта */
+.stage-hero { display: grid; grid-template-columns: 132px 1fr; gap: 16px; align-items: end; margin-bottom: 18px; }
+.stage-hero .house { width: 132px; height: 170px; overflow: visible; }
+.spent-label { color: var(--ink-2); font-size: 14px; }
+.spent { font: 800 30px/1.02 "Unbounded", sans-serif; letter-spacing: -.045em; margin: 2px 0 10px; word-break: break-word; }
+.chips-stat { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+  padding: 5px 10px; border-radius: 999px; background: var(--surface); box-shadow: var(--shadow); }
+.pill.alarm { background: var(--alarm); color: #fff; }
 
-  /* кнопки */
-  .btn { border: 0; border-radius: 8px; padding: 14px 16px; cursor: pointer; font-weight: 600; }
-  .btn.primary { background: var(--signal); color: var(--on-signal); }
-  .btn.plain { background: var(--sheet); color: var(--graphite); }
-  .btn.wide { width: 100%; }
-  .btn.round { width: 48px; height: 48px; padding: 0; border-radius: 50%; font-size: 26px; line-height: 1;
-    background: var(--signal); color: var(--on-signal); flex: none; }
-  .x { border: 0; background: none; color: var(--pencil); padding: 8px; cursor: pointer; font-size: 18px; line-height: 1; }
-  .x:hover { color: var(--overrun); }
-  .link { border: 0; background: none; color: var(--blueprint); padding: 6px 0; cursor: pointer; font-weight: 500; }
-  .danger { color: var(--overrun); }
+/* вкладки с бегущим индикатором */
+.seg { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); padding: 4px; margin: 22px 0 14px;
+  background: var(--surface); border-radius: 999px; box-shadow: var(--shadow); }
+.seg .ind { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 3); border-radius: 999px;
+  background: var(--ink); transition: transform .38s var(--spring); }
+.seg button { position: relative; z-index: 1; border: 0; background: none; padding: 10px 4px; cursor: pointer;
+  font-weight: 600; color: var(--ink-2); transition: color .25s; }
+.seg button[aria-selected="true"] { color: var(--paper); }
 
-  /* переключатель вкладок */
-  .seg { display: flex; background: var(--sheet); border-radius: 10px; padding: 4px; margin: 18px 0 16px; }
-  .seg button { flex: 1; border: 0; background: none; padding: 10px 4px; border-radius: 7px; cursor: pointer;
-    color: var(--pencil); font-weight: 500; }
-  .seg button[aria-selected="true"] { background: var(--graphite); color: var(--sheet); font-weight: 600; }
+/* карточки и строки */
+.panel { background: var(--surface); border-radius: 20px; padding: 6px 16px; box-shadow: var(--shadow); margin-bottom: 12px; }
+.panel.pad { padding: 16px; }
+.line { display: flex; align-items: center; gap: 12px; padding: 13px 0; }
+.line + .line { border-top: 1px solid var(--line); }
+.amount { font-weight: 600; white-space: nowrap; }
+.h2 { font: 700 15px/1.2 "Unbounded", sans-serif; margin: 22px 4px 10px; letter-spacing: -.01em; }
+.split { display: flex; height: 12px; border-radius: 999px; overflow: hidden; gap: 3px; margin: 10px 0 4px; }
+.split span { transition: flex-grow .9s var(--ease); min-width: 0; }
+.sw { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+.k-material { background: var(--signal); }
+.k-payment { background: var(--draft); }
+.k-other { background: var(--ink-2); }
 
-  /* формы */
-  .field { display: block; margin-bottom: 12px; }
-  .field span { display: block; font-size: 14px; color: var(--pencil); margin-bottom: 6px; }
-  input { width: 100%; padding: 13px 14px; border-radius: 8px; border: 1.5px solid var(--rule);
-    background: var(--concrete); outline: none; }
-  input:focus { border-color: var(--blueprint); }
-  input.big { font-size: 26px; font-weight: 800; padding: 10px 14px; letter-spacing: -.02em; }
-  .chips { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
-  .chips button { flex: 1 1 auto; border: 1.5px solid var(--rule); background: none; border-radius: 20px; padding: 8px 10px;
-    cursor: pointer; font-weight: 500; }
-  .chips button[aria-pressed="true"] { border-color: var(--graphite); background: var(--graphite); color: var(--sheet); }
-  .row { display: flex; gap: 10px; align-items: center; }
+/* формы */
+.field { display: block; margin-bottom: 12px; }
+.field > span { display: block; font-size: 14px; color: var(--ink-2); margin-bottom: 6px; }
+input { width: 100%; padding: 13px 14px; border-radius: 14px; border: 1.5px solid var(--line);
+  background: var(--paper); outline: none; transition: border-color .2s, box-shadow .2s; }
+input:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in srgb, var(--draft) 18%, transparent); }
+input.money { font: 800 28px/1.1 "Unbounded", sans-serif; letter-spacing: -.03em; padding: 12px 14px; }
+.btn { border: 0; border-radius: 14px; padding: 15px 16px; cursor: pointer; font-weight: 700; width: 100%;
+  background: var(--signal); color: var(--on-signal); transition: transform .15s var(--ease); }
+.btn:active { transform: scale(.98) translateY(1px); }
+.btn.quiet { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
+.btn.danger { color: var(--alarm); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.chips { display: flex; gap: 6px; margin-bottom: 12px; }
+.chips button { flex: 1 1 auto; border: 1.5px solid var(--line); background: none; border-radius: 999px; padding: 9px 10px;
+  cursor: pointer; font-weight: 600; font-size: 14px; color: var(--ink-2); transition: all .25s var(--ease); }
+.chips button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--paper); }
+.x { border: 0; background: none; color: var(--ink-2); padding: 8px; cursor: pointer; font-size: 20px; line-height: 1; border-radius: 10px; }
+.x:active { color: var(--alarm); }
 
-  /* этапы — настоящая последовательность, поэтому линия времени */
-  .stages { list-style: none; margin: 0; padding: 4px 0; }
-  .stage { position: relative; display: flex; gap: 14px; align-items: flex-start; padding: 10px 0 14px; }
-  .stage::before { content: ""; position: absolute; left: 13px; top: 38px; bottom: -10px; width: 2px; background: var(--rule); }
-  .stage:last-child::before { display: none; }
-  .tick { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--pencil); background: var(--sheet);
-    cursor: pointer; display: grid; place-items: center; color: #fff; font-size: 15px; padding: 0; transition: transform .15s; }
-  .tick:active { transform: scale(.9); }
-  .tick[aria-checked="true"] { background: var(--done); border-color: var(--done); }
-  .stage.overdue .tick { border-color: var(--overrun); }
-  .stage .name { font-weight: 500; }
-  .stage.is-done .name { color: var(--pencil); text-decoration: line-through; }
+/* этапы как этажи */
+.floors { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column-reverse; }
+.floor { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.floor + .floor { border-bottom: 1px solid var(--line); }
+.lvl { flex: none; width: 36px; font: 700 12px/1 "Unbounded", sans-serif; color: var(--ink-2); text-align: right; }
+.tick { flex: none; width: 30px; height: 30px; border-radius: 10px; border: 2px dashed var(--draft); background: none;
+  cursor: pointer; display: grid; place-items: center; padding: 0; color: var(--on-signal);
+  transition: transform .35s var(--spring), background .25s, border-color .25s; }
+.tick svg { width: 16px; height: 16px; opacity: 0; transform: scale(.4); transition: all .35s var(--spring); }
+.tick[aria-checked="true"] { background: var(--signal); border: 2px solid var(--signal); }
+.tick[aria-checked="true"] svg { opacity: 1; transform: none; }
+.tick:active { transform: scale(.85); }
+.floor.overdue .tick { border-color: var(--alarm); }
+.floor.done .fname { color: var(--ink-2); }
+.result .line:first-child { font-weight: 700; }
 
-  .kind-dot { width: 10px; height: 10px; border-radius: 2px; flex: none; }
-  .k-material { background: var(--signal); }
-  .k-payment { background: var(--blueprint); }
-  .k-other { background: var(--pencil); }
+/* пустые состояния и скелетоны */
+.empty { padding: 22px 18px; }
+.empty .lot { width: 100%; height: 120px; margin-bottom: 8px; }
+.empty strong { display: block; font: 700 18px/1.25 "Unbounded", sans-serif; margin-bottom: 6px; }
+.empty p { margin: 0 0 16px; color: var(--ink-2); }
+.skel { border-radius: 20px; background: var(--surface); height: 96px; margin-bottom: 10px; position: relative; overflow: hidden; }
+.skel::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--draft) 14%, transparent), transparent);
+  animation: shimmer 1.2s infinite; }
+.skel.tall { height: 150px; }
+@keyframes shimmer { to { transform: translateX(100%); } }
 
-  .empty { padding: 28px 8px; text-align: center; color: var(--pencil); }
-  .empty strong { display: block; color: var(--graphite); font-size: 17px; margin-bottom: 6px; }
-  .foot { display: flex; gap: 10px; margin-top: 4px; }
-  .foot .btn { flex: 1; }
-  .balance { text-align: center; color: var(--pencil); font-size: 14px; margin-top: 18px; }
+.toast { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); z-index: 10;
+  transform: translate(-50%, 20px) scale(.96); opacity: 0; pointer-events: none;
+  display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 999px; white-space: nowrap;
+  background: var(--ink); color: var(--paper); font-weight: 600; font-size: 15px; box-shadow: 0 14px 30px -12px rgba(0,0,0,.5);
+  transition: all .35s var(--spring); }
+.toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--signal); }
+.toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.balance { margin-top: 20px; color: var(--ink-2); font-size: 14px; text-align: center; text-wrap: balance; }
 
-  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translate(-50%, 12px);
-    background: var(--graphite); color: var(--sheet); padding: 11px 18px; border-radius: 8px; font-size: 15px;
-    opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
-  .toast.show { opacity: 1; transform: translate(-50%, 0); }
-  .result .line { font-size: 15px; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* дом (SVG) */
+.house .ground { stroke: var(--ink-2); stroke-width: 2; stroke-linecap: round; }
+.house .plan { fill: none; stroke: var(--draft); stroke-width: 1.4; stroke-dasharray: 4 3; }
+.house .built { fill: var(--ink); }
+:root[data-theme="dark"] .house .built { fill: #1F3A5C; }
+.house .win { fill: color-mix(in srgb, var(--ink-2) 40%, transparent); }
+.house .win.on { fill: var(--lit); }
+.house .late { stroke: var(--alarm); }
+.house .crane { stroke: var(--signal); stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.house .hook { transform-box: fill-box; transform-origin: 50% 0; animation: sway 3.6s ease-in-out infinite; }
+.house .flag { fill: var(--signal); transform-box: fill-box; transform-origin: 0 50%; animation: flutter 1.6s ease-in-out infinite; }
+@keyframes sway { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+@keyframes flutter { 0%, 100% { transform: skewY(0); } 50% { transform: skewY(-8deg); } }
+.house .floor-g { transform-box: fill-box; }
+.house.animate .floor-g { opacity: 0; transform: translateY(8px); animation: rise .55s var(--ease) forwards; }
+.house.animate .win.on, .house.flash .win.on { animation: light .6s ease-out both; }
+@keyframes rise { to { opacity: 1; transform: none; } }
+@keyframes light { 0% { fill: color-mix(in srgb, var(--ink-2) 40%, transparent); } 55% { fill: #FFF7C7; } 100% { fill: var(--lit); } }
+
+/* переходы между экранами */
+::view-transition-old(root) { animation: .2s var(--ease) both fadeOut; }
+::view-transition-new(root) { animation: .32s var(--ease) both slideIn; }
+@keyframes fadeOut { to { opacity: 0; transform: scale(.985); } }
+@keyframes slideIn { from { opacity: 0; transform: translateY(10px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .house.animate .floor-g { opacity: 1; transform: none; }
+}
 </style>
 </head>
 <body>
-<main id="app"><p class="empty">Открываю объекты…</p></main>
+<main id="app"><div class="skel tall"></div><div class="skel"></div><div class="skel"></div></main>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 const initData = tg?.initData || "";
-const state = { me: null, obj: null, tab: "sum", kind: "material" };
+const state = { me: null, obj: null, tab: "sum", kind: "material", lastId: null };
 const $app = document.getElementById("app");
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// тема: следуем за Telegram, цвета шапки — в тон бетону
 function applyTheme() {
   const dark = tg?.colorScheme ? tg.colorScheme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  const bg = getComputedStyle(document.documentElement).getPropertyValue("--concrete").trim();
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--paper").trim();
   try { tg?.setHeaderColor?.(bg); tg?.setBackgroundColor?.(bg); } catch {}
 }
 applyTheme();
@@ -174,13 +276,18 @@ const money = n => Math.round(n || 0).toLocaleString("ru-RU").replace(/ |,/g, "
 const fdate = iso => iso ? iso.slice(0, 10).split("-").reverse().join(".") : "";
 const today = () => new Date().toISOString().slice(0, 10);
 const plural = (n, a, b, c) => { n = Math.abs(n) % 100; if (n > 10 && n < 20) return c; n %= 10; return n === 1 ? a : n > 1 && n < 5 ? b : c; };
+const haptic = (t = "light") => tg?.HapticFeedback?.impactOccurred?.(t);
+const notify = t => tg?.HapticFeedback?.notificationOccurred?.(t);
+const ICON = {
+  plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
+};
 
 function toast(text) {
   const t = document.getElementById("toast");
   t.textContent = text; t.classList.add("show");
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1900);
 }
-const haptic = (type = "light") => tg?.HapticFeedback?.impactOccurred(type);
 
 async function api(path, opts = {}) {
   const res = await fetch("../api" + path, {
@@ -201,21 +308,83 @@ function setBack(fn) {
   if (fn) { tg.BackButton.onClick(fn); tg.BackButton.show(); } else tg.BackButton.hide();
 }
 
-// Рулетка: жёлтая лента, тёмная часть — потрачено; при перерасходе — сигнальная штриховка
-function tape(spent, budget, thin = false) {
-  const cls = "tape" + (thin ? " thin" : "");
-  if (!budget) return `<div class="${cls} empty" role="img" aria-label="Бюджет не задан"></div>`;
-  if (spent > budget) {
-    const at = Math.round(budget / spent * 100);
-    return `<div class="${cls} over" role="img" aria-label="Перерасход"><span class="mark" style="left:${at}%"></span></div>`;
-  }
-  const pct = Math.round(spent / budget * 100);
-  return `<div class="${cls}" role="img" aria-label="Потрачено ${pct}% бюджета"><span class="used" style="width:${pct}%"></span></div>`;
+// сумма «набегает» до значения
+function countUp(el, to, ms = 900) {
+  if (!el) return;
+  if (reduced) { el.textContent = money(to); return; }
+  const start = performance.now();
+  const step = t => {
+    const p = Math.min(1, (t - start) / ms), e = 1 - Math.pow(1 - p, 3);
+    el.textContent = money(to * e);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
-function legend(spent, budget) {
-  if (!budget) return `<div class="tape-legend"><span>Бюджет не задан</span><button class="link" onclick="tab('sum'); setTimeout(() => document.getElementById('e-budget')?.focus(), 50)">Задать</button></div>`;
-  if (spent > budget) return `<div class="tape-legend"><span class="warn">Перерасход ${money(spent - budget)}</span><span>бюджет ${money(budget)}</span></div>`;
-  return `<div class="tape-legend"><span>Осталось <b>${money(budget - spent)}</b></span><span>из ${money(budget)}</span></div>`;
+
+// ---------- дом: этаж = этап ----------
+function house(stages, { big = false, animate = false, cls = "" } = {}) {
+  const W = big ? 132 : 64, H = big ? 170 : 76;
+  const n = Math.max(1, Math.min(stages.length || 1, big ? 8 : 6));
+  const list = stages.length ? stages.slice(0, n) : [{ done: 0 }];
+  const bw = big ? 80 : 40, bx = big ? 8 : 4;
+  const top = big ? 46 : 24;
+  const fh = Math.min(big ? 20 : 11, (H - top - 4) / n);
+  const doneAll = stages.length > 0 && stages.every(s => s.done);
+  const now = today(), g = H - 3;
+  const cols = big ? 4 : 3, ww = big ? 10 : 6, gap = (bw - cols * ww) / (cols + 1);
+  let floors = "";
+  list.forEach((s, i) => {
+    const y = g - fh * (i + 1);
+    const late = !s.done && s.due && s.due < now;
+    const delay = animate ? `style="animation-delay:${80 + i * 110}ms"` : "";
+    let wins = "";
+    if (s.done) for (let c = 0; c < cols; c++) {
+      const wx = bx + gap + c * (ww + gap);
+      wins += `<rect class="win on" x="${wx.toFixed(1)}" y="${(y + fh * .26).toFixed(1)}" width="${ww}" height="${(fh * .42).toFixed(1)}" rx="1"
+        ${animate ? `style="animation-delay:${300 + i * 110}ms"` : ""}/>`;
+    }
+    floors += s.done
+      ? `<g class="floor-g" ${delay}><rect class="built" x="${bx}" y="${y.toFixed(1)}" width="${bw}" height="${(fh - 1.5).toFixed(1)}" rx="2"/>${wins}</g>`
+      : `<g class="floor-g" ${delay}><rect class="plan ${late ? "late" : ""}" x="${bx}" y="${y.toFixed(1)}" width="${bw}" height="${(fh - 1.5).toFixed(1)}" rx="2"/></g>`;
+  });
+  const roofY = g - fh * n, mid = bx + bw / 2;
+  let extra;
+  if (doneAll) {
+    const p = big ? 22 : 11, f = big ? 16 : 9, k = big ? 5 : 3;
+    extra = `<path class="crane" d="M${mid} ${roofY} v-${p}"/>
+      <path class="flag" d="M${mid} ${roofY - p} h${f} l-${k - 1} ${k} l${k - 1} ${k} h-${f} z"/>`;
+  } else {
+    // башенный кран справа от дома, крюк качается над крышей
+    const mx = bx + bw + (big ? 22 : 12), mt = big ? 14 : 8, back = big ? 14 : 7;
+    const hx = mid, hy = roofY - (big ? 12 : 6), s = big ? 1 : .5;
+    extra = `<path class="crane" d="M${mx} ${g} V${mt - 10 * s} M${mx - 5 * s * 2} ${g} h${10 * s * 2}
+        M${mx + back} ${mt} H${bx - 2} M${mx} ${mt - 10 * s} L${bx + 6} ${mt} M${mx} ${mt - 10 * s} L${mx + back} ${mt}"/>
+      <rect x="${mx + back - 6 * s}" y="${mt}" width="${10 * s}" height="${8 * s}" fill="var(--signal)"/>
+      <g class="hook"><path class="crane" stroke-width="1.3" d="M${hx} ${mt} V${hy}"/>
+        <rect x="${hx - 7 * s}" y="${hy}" width="${14 * s}" height="${7 * s}" rx="1" fill="var(--signal)"/></g>`;
+  }
+  return `<svg class="house ${cls} ${animate && !reduced ? "animate" : ""}" viewBox="0 0 ${W} ${H}" role="img"
+    aria-label="Готово этапов: ${stages.filter(s => s.done).length} из ${stages.length}">
+    ${extra}${floors}<path class="ground" d="M2 ${g + 1.5} H${W - 2}"/></svg>`;
+}
+
+// ---------- рулетка ----------
+function tape(spent, budget, { thin = false } = {}) {
+  const over = budget && spent > budget;
+  const pct = !budget ? 0 : over ? 100 : Math.max(2, Math.round(spent / budget * 100));
+  return `<div class="tape-wrap ${thin ? "thin" : ""}">
+    <div class="tape ${thin ? "thin" : ""} ${over ? "over" : ""}" role="img"
+      aria-label="${!budget ? "Бюджет не задан" : over ? "Перерасход" : `Потрачено ${pct}% бюджета`}">
+      <span class="band" data-pct="${pct}"></span></div>
+    ${thin ? "" : `<span class="case" data-pct="${pct}"><i></i></span>`}</div>`;
+}
+// «разматываем» ленты после вставки в DOM
+function unroll(root = document) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    root.querySelectorAll(".band").forEach(b => { b.style.width = b.dataset.pct + "%"; });
+    root.querySelectorAll(".case i").forEach(i => { i.style.transform = `rotate(${i.parentNode.dataset.pct * 10}deg)`; });
+    root.querySelectorAll(".split span[data-w]").forEach(s => { s.style.flexGrow = s.dataset.w; });
+  }));
 }
 
 // ---------- маршруты ----------
@@ -228,14 +397,33 @@ async function route() {
     if (h === "archive") return await showArchive();
     return await showHome();
   } catch (e) {
-    $app.innerHTML = e.message === "auth"
-      ? `<div class="sheet empty"><strong>Откройте приложение из бота</strong>Так я узнаю, чьи это объекты.</div>`
-      : `<div class="sheet empty"><strong>Не удалось загрузить данные</strong>Проверьте интернет и попробуйте ещё раз.<br><br>
-         <button class="btn primary" onclick="route()">Обновить</button></div>`;
+    paint(e.message === "auth"
+      ? emptyBlock("Откройте приложение из бота", "Так я узнаю, чьи это объекты.")
+      : emptyBlock("Не удалось загрузить данные", "Проверьте интернет и попробуйте ещё раз.", `<button class="btn" onclick="route()">Обновить</button>`));
   }
 }
+// смена экрана с плавным переходом, если браузер умеет
+function paint(html, after) {
+  const apply = () => { $app.innerHTML = html; after?.(); unroll($app); window.scrollTo({ top: 0 }); };
+  if (document.startViewTransition && !reduced && $app.dataset.ready) document.startViewTransition(apply);
+  else apply();
+  $app.dataset.ready = 1;
+}
 window.addEventListener("hashchange", route);
-const go = h => { location.hash = h; };
+const go = h => { haptic(); location.hash = h; };
+
+function emptyBlock(title, text, action = "") {
+  return `<section class="panel empty">
+    <svg class="lot house" viewBox="0 0 320 120" aria-hidden="true">
+      <path d="M10 108H310" stroke="var(--ink-2)" stroke-width="2" stroke-linecap="round"/>
+      <rect x="92" y="44" width="96" height="62" rx="3" class="plan"/>
+      <path d="M92 44 L140 18 L188 44" class="plan"/>
+      <path class="crane" d="M244 106V14M234 106h20M262 22H120M244 14L128 22M244 14L262 22"/>
+      <rect x="254" y="22" width="10" height="8" fill="var(--signal)"/>
+      <g class="hook"><path class="crane" stroke-width="1.4" d="M150 22V60"/><rect x="143" y="60" width="14" height="7" rx="1" fill="var(--signal)"/></g>
+    </svg>
+    <strong>${title}</strong><p>${text}</p>${action}</section>`;
+}
 
 // ---------- главная ----------
 async function showHome() {
@@ -243,177 +431,228 @@ async function showHome() {
   state.me = await api("/me");
   const objs = state.me.objects;
   const total = objs.reduce((a, o) => a + o.spent, 0);
-  $app.innerHTML = `
+  const sDone = objs.reduce((a, o) => a + o.stages_done, 0), sAll = objs.reduce((a, o) => a + o.stages_total, 0);
+  const overrun = objs.filter(o => o.budget && o.spent > o.budget).length;
+  const credits = state.me.user.credits;
+  const stagesOf = o => Array.from({ length: o.stages_total }, (_, i) => ({ done: i < o.stages_done }));
+  const skyline = Array.from({ length: Math.min(Math.max(sAll, 1), 6) }, (_, i) => ({ done: i < Math.round(sDone / Math.max(sAll, 1) * Math.min(Math.max(sAll, 1), 6)) }));
+  paint(`
     <header class="top">
-      <div class="grow">
-        <h1 class="title">Мои объекты</h1>
-        ${objs.length ? `<div class="sub">${objs.length} ${plural(objs.length, "объект", "объекта", "объектов")}, всего потрачено ${money(total)}</div>` : ""}
-      </div>
-      <button class="btn round" onclick="go('new')" aria-label="Новый объект">+</button>
+      <div class="grow"><h1 class="title">Мои объекты</h1>
+        <div class="sub">${objs.length ? `${objs.length} ${plural(objs.length, "объект", "объекта", "объектов")} в работе` : "Расходы, этапы и сроки ремонта"}</div></div>
+      <button class="fab" onclick="go('new')" aria-label="Новый объект">${ICON.plus}</button>
     </header>
-    ${objs.length ? `<section class="sheet">${objs.map(o => `
-      <div class="obj" role="link" tabindex="0" onclick="go('obj/${o.id}')" onkeydown="event.key==='Enter'&&go('obj/${o.id}')">
-        <div class="obj-head">
-          <div class="grow"><div class="obj-name ellipsis">${esc(o.name)}</div>
-            <div class="muted ellipsis">${o.address ? esc(o.address) : (o.stages_total ? `этапов готово: ${o.stages_done} из ${o.stages_total}` : "этапов пока нет")}</div></div>
-          <div class="amount ${o.budget && o.spent > o.budget ? "late" : ""}" style="font-weight:600">${money(o.spent)}</div>
+    ${objs.length ? `
+    <section class="hero">
+      ${house(skyline, { cls: "skyline", animate: true })}
+      <div class="label">Потрачено на всех объектах</div>
+      <div class="big" id="total">0 ₽</div>
+      <div class="stats">
+        <div><b>${sDone}/${sAll}</b>этапов готово</div>
+        ${overrun ? `<div><b style="color:var(--signal)">${overrun}</b>с перерасходом</div>` : ""}
+      </div>
+    </section>
+    <div class="sites">${objs.map(o => `
+      <article class="site" role="link" tabindex="0" onclick="go('obj/${o.id}')" onkeydown="event.key==='Enter'&&go('obj/${o.id}')">
+        ${house(stagesOf(o))}
+        <div class="grow">
+          <div class="site-name ellipsis">${esc(o.name)}</div>
+          <div class="site-meta"><span class="muted grow ellipsis">${o.address ? esc(o.address)
+            : o.stages_total ? `этапов ${o.stages_done} из ${o.stages_total}` : "этапов пока нет"}</span>
+            <span class="site-sum ${o.budget && o.spent > o.budget ? "alarm" : ""}">${money(o.spent)}</span></div>
+          ${tape(o.spent, o.budget, { thin: true })}
         </div>
-        ${tape(o.spent, o.budget, true)}
-      </div>`).join("")}</section>`
-    : `<section class="sheet empty"><strong>Здесь будут ваши объекты</strong>
-        Записывайте расходы и выплаты, ставьте сроки этапов — бот напомнит, когда срок подойдёт.<br><br>
-        <button class="btn primary" onclick="go('new')">Добавить объект</button></section>`}
-    <div class="foot">
-      <button class="btn plain" onclick="go('calc')">Калькулятор материалов</button>
-      <button class="btn plain" onclick="go('archive')">Архив</button>
+      </article>`).join("")}</div>`
+    : emptyBlock("Первый объект", "Добавьте квартиру или дом, где идёт ремонт. Я посчитаю расходы и напомню о сроках этапов.",
+        `<button class="btn" onclick="go('new')">Добавить объект</button>`)}
+    <div class="pair" style="margin-top:14px">
+      <button class="btn quiet" onclick="go('calc')">Калькулятор</button>
+      <button class="btn quiet" onclick="go('archive')">Архив</button>
     </div>
-    <p class="balance">На балансе ${state.me.user.credits} ${plural(state.me.user.credits, "кредит", "кредита", "кредитов")}. Дизайн, сметы и отчёты — в чате бота.</p>`;
+    <p class="balance">На балансе ${credits} ${plural(credits, "кредит", "кредита", "кредитов")}. Дизайн, сметы и отчёты делаются в чате бота.</p>`,
+    () => countUp(document.getElementById("total"), total, 1100));
 }
 
 async function showArchive() {
   setBack(() => go(""));
   const { objects } = await api("/objects/archived");
-  $app.innerHTML = `<header class="top"><h1 class="title">Архив</h1></header>` + (objects.length
-    ? `<section class="sheet">${objects.map(o => `<div class="obj" onclick="go('obj/${o.id}')">
-        <div class="obj-name">${esc(o.name)}</div>${o.address ? `<div class="muted">${esc(o.address)}</div>` : ""}</div>`).join("")}</section>`
-    : `<section class="sheet empty"><strong>Архив пуст</strong>Сюда попадают завершённые объекты.</section>`);
+  paint(`<header class="top"><h1 class="title">Архив</h1></header>` + (objects.length
+    ? `<div class="sites">${objects.map(o => `<article class="site" onclick="go('obj/${o.id}')">
+        ${house([{ done: 1 }, { done: 1 }])}<div><div class="site-name">${esc(o.name)}</div>
+        ${o.address ? `<div class="muted">${esc(o.address)}</div>` : ""}</div></article>`).join("")}</div>`
+    : emptyBlock("Архив пуст", "Сюда попадают сданные объекты. Их можно вернуть в работу в любой момент.")));
 }
 
 // ---------- новый объект ----------
 function showNew() {
   setBack(() => go(""));
-  $app.innerHTML = `
-    <header class="top"><h1 class="title">Новый объект</h1></header>
-    <form class="sheet pad" id="f-new">
-      <label class="field"><span>Название</span><input id="n-name" placeholder="Квартира Ивановых" maxlength="100" required></label>
-      <label class="field"><span>Адрес, если нужен</span><input id="n-addr" placeholder="ул. Ленина, 5, кв. 12" maxlength="200"></label>
-      <label class="field"><span>Бюджет, ₽</span><input id="n-budget" inputmode="numeric" placeholder="850 000"></label>
-      <button class="btn primary wide" id="n-save">Создать объект</button>
-    </form>`;
-  document.getElementById("n-name").focus();
-  document.getElementById("f-new").onsubmit = async e => {
-    e.preventDefault();
-    const name = document.getElementById("n-name").value.trim();
-    if (!name) return toast("Введите название");
-    const budget = parseInt(document.getElementById("n-budget").value.replace(/\D/g, "")) || 0;
-    const { id } = await api("/objects", { method: "POST",
-      body: { name, address: document.getElementById("n-addr").value, budget } });
-    haptic("medium"); toast("Объект создан"); go("obj/" + id);
-  };
+  paint(`
+    <header class="top"><div class="grow"><h1 class="title">Новый объект</h1>
+      <div class="sub">Его видите только вы</div></div></header>
+    <form class="panel pad" id="f-new">
+      <label class="field"><span>Название</span><input id="n-name" placeholder="Квартира на Садовой" maxlength="100" required></label>
+      <label class="field"><span>Адрес, если нужен</span><input id="n-addr" placeholder="ул. Садовая, 14, кв. 37" maxlength="200"></label>
+      <label class="field"><span>Бюджет, ₽</span><input id="n-budget" inputmode="numeric" placeholder="780 000"></label>
+      <button class="btn" id="n-save">Создать объект</button>
+    </form>`, () => {
+    document.getElementById("n-name").focus();
+    document.getElementById("f-new").onsubmit = async e => {
+      e.preventDefault();
+      const name = document.getElementById("n-name").value.trim();
+      if (!name) return toast("Введите название");
+      const budget = parseInt(document.getElementById("n-budget").value.replace(/\D/g, "")) || 0;
+      const { id } = await api("/objects", { method: "POST", body: { name, address: document.getElementById("n-addr").value, budget } });
+      notify("success"); toast("Объект создан"); go("obj/" + id);
+    };
+  });
 }
 
 // ---------- объект ----------
 async function showObject(id) {
   setBack(() => go(""));
-  if (state.obj?.object.id !== id) state.tab = "sum";
+  const fresh = state.lastId !== id;
+  if (fresh) state.tab = "sum";
+  state.lastId = id;
   state.obj = await api("/objects/" + id);
-  renderObject();
+  renderObject({ animate: true });
 }
 
-function renderObject() {
+function renderObject({ animate = false, soft = false } = {}) {
   const { object: o, totals, expenses, stages } = state.obj;
   const kinds = state.me?.expense_kinds || { material: "🧱 Материалы", payment: "💵 Выплаты", other: "📦 Прочее" };
   const label = k => (kinds[k] || "").replace(/^\S+\s/, "");
   const spent = Object.values(totals).reduce((a, b) => a + b, 0);
-  const t = state.tab;
-  const tabBtn = (k, name) => `<button role="tab" aria-selected="${t === k}" onclick="tab('${k}')">${name}</button>`;
-  $app.innerHTML = `
-    <header class="top"><div class="grow">
-      <h1 class="title ellipsis">${esc(o.name)}</h1>
-      ${o.address ? `<div class="sub ellipsis">${esc(o.address)}</div>` : ""}
-    </div></header>
-    <section>
-      <div class="muted">Потрачено</div>
-      <div class="sum" style="margin:2px 0 12px">${money(spent)}</div>
-      ${tape(spent, o.budget)}
-      ${legend(spent, o.budget)}
-    </section>
-    <nav class="seg" role="tablist">${tabBtn("sum", "Сводка")}${tabBtn("exp", "Расходы")}${tabBtn("stg", "Этапы")}</nav>
-    <div id="tab"></div>`;
-  const $t = document.getElementById("tab");
+  const done = stages.filter(s => s.done).length;
+  const overdue = stages.filter(s => !s.done && s.due && s.due < today()).length;
+  const over = o.budget && spent > o.budget;
+  const t = state.tab, ti = { sum: 0, exp: 1, stg: 2 }[t];
+  // снизу дома — готовые этажи, выше — будущие
+  const floors = [...stages].sort((a, b) => (b.done - a.done));
 
-  if (t === "sum") {
-    const done = stages.filter(s => s.done).length;
-    const next = stages.find(s => !s.done);
-    $t.innerHTML = `
-      <section class="sheet">
-        ${Object.keys(kinds).map(k => `<div class="line"><span class="kind-dot k-${k}"></span>
-          <div class="grow">${label(k)}</div><span class="amount">${money(totals[k] || 0)}</span></div>`).join("")}
-        <div class="line"><div class="grow">Этапы</div><span class="amount">${done} из ${stages.length}</span></div>
-        ${next ? `<div class="line"><div class="grow">Следующий этап<div class="muted">${esc(next.name)}</div></div>
-          <span class="${next.due && next.due < today() ? "late" : "muted"}">${next.due ? "до " + fdate(next.due) : ""}</span></div>` : ""}
+  function tabHtml() {
+    if (t === "sum") {
+      const parts = Object.keys(kinds).map(k => ({ k, v: totals[k] || 0 }));
+      return `
+      <section class="panel pad">
+        <div class="row"><div class="grow muted">На что ушли деньги</div><span class="amount">${money(spent)}</span></div>
+        <div class="split">${spent ? parts.filter(p => p.v).map(p => `<span class="k-${p.k}" data-w="${p.v}" style="flex-grow:0"></span>`).join("")
+          : `<span style="flex-grow:1;background:var(--line)"></span>`}</div>
+        ${parts.map(p => `<div class="line"><span class="sw k-${p.k}"></span><div class="grow">${label(p.k)}</div>
+          <span class="amount">${money(p.v)}</span></div>`).join("")}
       </section>
-      <h2 class="section">Данные объекта</h2>
-      <form class="sheet pad" id="f-edit">
+      <h2 class="h2">Данные объекта</h2>
+      <form class="panel pad" id="f-edit">
         <label class="field"><span>Название</span><input id="e-name" value="${esc(o.name)}" maxlength="100"></label>
         <label class="field"><span>Адрес</span><input id="e-addr" value="${esc(o.address || "")}" maxlength="200"></label>
         <label class="field"><span>Бюджет, ₽</span><input id="e-budget" inputmode="numeric" value="${o.budget || ""}" placeholder="не задан"></label>
-        <button class="btn primary wide">Сохранить изменения</button>
+        <button class="btn">Сохранить</button>
       </form>
-      <div class="foot">
-        <button class="btn plain" onclick="archiveObject(${o.archived ? 0 : 1})">${o.archived ? "Вернуть из архива" : "Убрать в архив"}</button>
-        <button class="btn plain danger" onclick="deleteObject()">Удалить</button>
+      <div class="pair">
+        <button class="btn quiet" onclick="archiveObject(${o.archived ? 0 : 1})">${o.archived ? "Вернуть в работу" : "Сдать в архив"}</button>
+        <button class="btn quiet danger" onclick="deleteObject()">Удалить</button>
       </div>`;
-    document.getElementById("f-edit").onsubmit = e => { e.preventDefault(); saveObject(); };
-  }
-
-  if (t === "exp") {
-    $t.innerHTML = `
-      <form class="sheet pad" id="f-exp">
+    }
+    if (t === "exp") {
+      return `
+      <form class="panel pad" id="f-exp">
         <div class="chips" role="group" aria-label="Тип расхода">${Object.keys(kinds).map(k =>
-          `<button type="button" aria-pressed="${state.kind === k}" onclick="pickKind('${k}')">${label(k)}</button>`).join("")}</div>
-        <div class="row">
-          <input id="x-amount" class="big grow" inputmode="decimal" placeholder="0 ₽" aria-label="Сумма">
-        </div>
-        <input id="x-note" placeholder="За что: плитка, аванс Сергею…" maxlength="200" style="margin:10px 0 12px" aria-label="Комментарий">
-        <button class="btn primary wide">Записать расход</button>
+          `<button type="button" data-k="${k}" aria-pressed="${state.kind === k}">${label(k)}</button>`).join("")}</div>
+        <label class="field"><span>Сумма</span><input id="x-amount" class="money" inputmode="decimal" placeholder="0 ₽"></label>
+        <label class="field"><span>За что</span><input id="x-note" placeholder="Плитка, аванс Сергею" maxlength="200"></label>
+        <button class="btn">Записать расход</button>
       </form>
-      ${expenses.length ? `<h2 class="section">Записи</h2><section class="sheet">${expenses.map(e => `
-        <div class="line"><span class="kind-dot k-${esc(e.kind)}" title="${esc(label(e.kind))}"></span>
+      ${expenses.length ? `<h2 class="h2">Записи</h2><section class="panel">${expenses.map(e => `
+        <div class="line"><span class="sw k-${esc(e.kind)}" title="${esc(label(e.kind))}"></span>
           <div class="grow"><div class="ellipsis">${esc(e.note) || esc(label(e.kind))}</div>
             <div class="muted">${fdate(e.created_at)}</div></div>
           <span class="amount">${money(e.amount)}</span>
           <button class="x" onclick="delExpense(${e.id})" aria-label="Удалить запись">×</button></div>`).join("")}</section>`
-      : `<section class="sheet empty"><strong>Расходов пока нет</strong>Запишите первую покупку или выплату — сумма сразу появится на рулетке.</section>`}`;
-    document.getElementById("f-exp").onsubmit = e => { e.preventDefault(); addExpense(); };
-  }
-
-  if (t === "stg") {
-    const now = today();
-    $t.innerHTML = `
-      <form class="sheet pad" id="f-stage">
-        <label class="field"><span>Этап</span><input id="s-name" placeholder="Электрика, плитка в ванной…" maxlength="100"></label>
+      : emptyBlock("Записей пока нет", "Запишите первую покупку или выплату, и рулетка сразу покажет, сколько осталось.")}`;
+    }
+    return `
+      <form class="panel pad" id="f-stage">
+        <label class="field"><span>Этап</span><input id="s-name" placeholder="Электрика, плитка в ванной" maxlength="100"></label>
         <label class="field"><span>Срок, если есть</span><input id="s-due" type="date"></label>
-        <button class="btn primary wide">Добавить этап</button>
+        <button class="btn">Добавить этаж</button>
       </form>
-      ${stages.length ? `<section class="sheet"><ol class="stages">${stages.map(s => {
-        const overdue = !s.done && s.due && s.due < now;
-        return `<li class="stage ${s.done ? "is-done" : ""} ${overdue ? "overdue" : ""}">
+      ${stages.length ? `<h2 class="h2">Этажи стройки</h2><section class="panel"><ol class="floors">${floors.map((s, i) => {
+        const od = !s.done && s.due && s.due < today();
+        return `<li class="floor ${s.done ? "done" : ""} ${od ? "overdue" : ""}">
+          <span class="lvl">${i + 1} эт.</span>
           <button class="tick" role="checkbox" aria-checked="${!!s.done}" aria-label="${esc(s.name)}"
-            onclick="toggleStage(${s.id}, ${s.done ? 0 : 1})">${s.done ? "✓" : ""}</button>
-          <div class="grow"><div class="name">${esc(s.name)}</div>
-            ${s.due ? `<div class="${overdue ? "late" : "muted"}">${overdue ? "просрочен с " : "до "}${fdate(s.due)}</div>` : ""}</div>
+            onclick="toggleStage(${s.id}, ${s.done ? 0 : 1})">${ICON.check}</button>
+          <div class="grow"><div class="fname">${esc(s.name)}</div>
+            ${s.due ? `<div class="${od ? "alarm" : "muted"}" style="font-size:14px">${od ? "просрочен с " : "до "}${fdate(s.due)}</div>` : ""}</div>
           <button class="x" onclick="delStage(${s.id})" aria-label="Удалить этап">×</button></li>`;
       }).join("")}</ol></section>`
-      : `<section class="sheet empty"><strong>Этапов пока нет</strong>Добавьте этапы со сроками — в день срока бот пришлёт напоминание.</section>`}`;
-    document.getElementById("f-stage").onsubmit = e => { e.preventDefault(); addStage(); };
+      : emptyBlock("Этажей пока нет", "Каждый этап работ становится этажом дома. Отмечайте готовые, и дом будет расти.")}`;
   }
+
+  const html = `
+    <header class="top"><div class="grow"><h1 class="title">${esc(o.name)}</h1>
+      ${o.address ? `<div class="sub">${esc(o.address)}</div>` : ""}</div></header>
+    <section class="stage-hero">
+      <div id="house">${house(floors, { big: true, animate })}</div>
+      <div>
+        <div class="spent-label">Потрачено</div>
+        <div class="spent" id="spent">${money(animate ? 0 : spent)}</div>
+        <div class="chips-stat">
+          <span class="pill">${stages.length ? `${done} из ${stages.length} ${plural(stages.length, "этапа", "этапов", "этапов")}` : "этапов нет"}</span>
+          ${overdue ? `<span class="pill alarm">${overdue} ${plural(overdue, "просрочен", "просрочено", "просрочено")}</span>` : ""}
+        </div>
+      </div>
+    </section>
+    ${tape(spent, o.budget)}
+    <div class="legend">${!o.budget ? `<span>Бюджет не задан</span><span>его можно задать в сводке</span>`
+      : over ? `<span><b class="alarm">Перерасход ${money(spent - o.budget)}</b></span><span>бюджет ${money(o.budget)}</span>`
+      : `<span>Осталось <b>${money(o.budget - spent)}</b></span><span>из ${money(o.budget)}</span>`}</div>
+    <nav class="seg" role="tablist"><span class="ind" style="transform:translateX(${ti * 100}%)"></span>
+      <button role="tab" aria-selected="${t === "sum"}" onclick="tab('sum')">Сводка</button>
+      <button role="tab" aria-selected="${t === "exp"}" onclick="tab('exp')">Расходы</button>
+      <button role="tab" aria-selected="${t === "stg"}" onclick="tab('stg')">Этапы</button></nav>
+    <div id="tab">${tabHtml()}</div>`;
+
+  const wire = () => {
+    if (animate) countUp(document.getElementById("spent"), spent, 1000);
+    const f = id => document.getElementById(id);
+    if (f("f-edit")) f("f-edit").onsubmit = e => { e.preventDefault(); saveObject(); };
+    if (f("f-exp")) {
+      f("f-exp").onsubmit = e => { e.preventDefault(); addExpense(); };
+      document.querySelectorAll("#f-exp .chips button").forEach(b => b.onclick = () => {
+        state.kind = b.dataset.k; haptic();
+        document.querySelectorAll("#f-exp .chips button").forEach(x => x.setAttribute("aria-pressed", x === b));
+      });
+    }
+    if (f("f-stage")) f("f-stage").onsubmit = e => { e.preventDefault(); addStage(); };
+  };
+  if (soft) { const y = scrollY; $app.innerHTML = html; wire(); unroll($app); scrollTo({ top: y }); }
+  else paint(html, wire);
 }
 
-window.tab = t => { state.tab = t; renderObject(); };
-window.pickKind = k => { state.kind = k; document.querySelectorAll(".chips button").forEach(b =>
-  b.setAttribute("aria-pressed", b.getAttribute("onclick").includes(`'${k}'`))); };
-const reload = async () => { state.obj = await api("/objects/" + state.obj.object.id); renderObject(); };
+// вкладки: индикатор едет, потом меняется содержимое
+window.tab = t => {
+  if (state.tab === t) return;
+  state.tab = t; haptic();
+  const ti = { sum: 0, exp: 1, stg: 2 }[t];
+  const ind = document.querySelector(".seg .ind");
+  if (ind) ind.style.transform = `translateX(${ti * 100}%)`;
+  document.querySelectorAll(".seg button").forEach((b, i) => b.setAttribute("aria-selected", i === ti));
+  setTimeout(() => renderObject({ soft: true }), reduced ? 0 : 180);
+};
+const reload = async () => {
+  state.obj = await api("/objects/" + state.obj.object.id);
+  renderObject({ soft: true });
+};
 
 window.saveObject = async () => {
   const budget = parseInt(document.getElementById("e-budget").value.replace(/\D/g, "")) || 0;
   await api("/objects/" + state.obj.object.id, { method: "PATCH", body: {
     name: document.getElementById("e-name").value, address: document.getElementById("e-addr").value, budget } });
-  haptic(); toast("Изменения сохранены"); reload();
+  notify("success"); toast("Сохранено"); reload();
 };
 window.archiveObject = async v => {
   await api("/objects/" + state.obj.object.id, { method: "PATCH", body: { archived: v } });
-  toast(v ? "Объект в архиве" : "Объект вернулся из архива"); go("");
+  toast(v ? "Объект в архиве" : "Объект снова в работе"); go("");
 };
 window.deleteObject = () => {
   const run = async ok => { if (!ok) return; await api("/objects/" + state.obj.object.id, { method: "DELETE" }); toast("Объект удалён"); go(""); };
@@ -422,59 +661,67 @@ window.deleteObject = () => {
 };
 window.addExpense = async () => {
   const amount = parseFloat(document.getElementById("x-amount").value.replace(/[\s₽]/g, "").replace(",", "."));
-  if (!(amount > 0)) return toast("Введите сумму");
+  if (!(amount > 0)) { notify("error"); return toast("Введите сумму"); }
   await api(`/objects/${state.obj.object.id}/expenses`, { method: "POST", body: {
     kind: state.kind, amount, note: document.getElementById("x-note").value } });
-  haptic("medium"); toast("Расход записан"); reload();
+  notify("success"); toast("Расход записан"); reload();
 };
-window.delExpense = async id => { await api("/expenses/" + id, { method: "DELETE" }); toast("Запись удалена"); reload(); };
+window.delExpense = async id => { await api("/expenses/" + id, { method: "DELETE" }); haptic("medium"); toast("Запись удалена"); reload(); };
 window.addStage = async () => {
   const name = document.getElementById("s-name").value.trim();
-  if (!name) return toast("Введите название этапа");
-  await api(`/objects/${state.obj.object.id}/stages`, { method: "POST",
-    body: { name, due: document.getElementById("s-due").value || null } });
-  haptic("medium"); toast("Этап добавлен"); reload();
+  if (!name) { notify("error"); return toast("Введите название этапа"); }
+  await api(`/objects/${state.obj.object.id}/stages`, { method: "POST", body: { name, due: document.getElementById("s-due").value || null } });
+  haptic("medium"); toast("Этаж добавлен"); reload();
 };
-window.toggleStage = async (id, done) => { haptic(); await api("/stages/" + id, { method: "PATCH", body: { done } }); reload(); };
-window.delStage = async id => { await api("/stages/" + id, { method: "DELETE" }); toast("Этап удалён"); reload(); };
+window.toggleStage = async (id, done) => {
+  haptic(done ? "heavy" : "light");
+  await api("/stages/" + id, { method: "PATCH", body: { done } });
+  await reload();
+  if (done) {  // окна дома вспыхивают светом
+    const h = document.querySelector("#house .house");
+    h?.classList.add("flash"); setTimeout(() => h?.classList.remove("flash"), 800);
+    notify("success"); toast("Этаж готов");
+  }
+};
+window.delStage = async id => { await api("/stages/" + id, { method: "DELETE" }); haptic("medium"); toast("Этаж убран"); reload(); };
 
 // ---------- калькулятор ----------
 async function showCalc() {
   setBack(() => go(""));
   if (!state.me) state.me = await api("/me");
-  const calcs = state.me.calcs;
-  const first = Object.keys(calcs)[0];
-  $app.innerHTML = `
-    <header class="top"><h1 class="title">Калькулятор материалов</h1></header>
-    <form class="sheet pad" id="f-calc">
-      <div class="chips" role="group" aria-label="Материал">${Object.entries(calcs).map(([k, c]) =>
+  const calcs = state.me.calcs, first = Object.keys(calcs)[0];
+  let key = first;
+  paint(`
+    <header class="top"><div class="grow"><h1 class="title">Калькулятор</h1>
+      <div class="sub">Сколько материала купить, с запасом</div></div></header>
+    <form class="panel pad" id="f-calc">
+      <div class="chips" style="flex-wrap:wrap" role="group" aria-label="Материал">${Object.entries(calcs).map(([k, c]) =>
         `<button type="button" data-k="${k}" aria-pressed="${k === first}">${c.title.replace(/^\S+\s/, "")}</button>`).join("")}</div>
       <p class="muted" id="c-hint" style="margin:0 0 10px"></p>
-      <input id="c-nums" inputmode="decimal" placeholder="Числа через пробел" aria-label="Размеры">
-      <button class="btn primary wide" id="c-go" style="margin-top:12px">Посчитать</button>
+      <label class="field"><span>Размеры</span><input id="c-nums" inputmode="decimal" placeholder="Числа через пробел"></label>
+      <button class="btn" id="c-go">Посчитать</button>
     </form>
-    <section class="sheet result" id="c-res" hidden></section>`;
-  let key = first;
-  const hint = () => { document.getElementById("c-hint").innerHTML = calcs[key].hint; };
-  document.querySelectorAll("#f-calc .chips button").forEach(b => b.onclick = () => {
-    key = b.dataset.k;
-    document.querySelectorAll("#f-calc .chips button").forEach(x => x.setAttribute("aria-pressed", x === b));
-    hint(); document.getElementById("c-nums").focus();
+    <section class="panel result" id="c-res" hidden></section>`, () => {
+    const hint = () => { document.getElementById("c-hint").innerHTML = calcs[key].hint; };
+    document.querySelectorAll("#f-calc .chips button").forEach(b => b.onclick = () => {
+      key = b.dataset.k; haptic();
+      document.querySelectorAll("#f-calc .chips button").forEach(x => x.setAttribute("aria-pressed", x === b));
+      hint(); document.getElementById("c-nums").focus();
+    });
+    hint();
+    document.getElementById("f-calc").onsubmit = async e => {
+      e.preventDefault();
+      const numbers = document.getElementById("c-nums").value.replace(/,/g, ".").split(/[\s x×х*;\/]+/i).map(parseFloat).filter(n => !isNaN(n));
+      try {
+        const r = await api("/calc", { method: "POST", body: { key, numbers } });
+        const $r = document.getElementById("c-res");
+        $r.hidden = false;
+        $r.innerHTML = `<div class="line">${esc(r.title)}</div>${r.lines.map(l => `<div class="line">${esc(l)}</div>`).join("")}
+          <div class="line muted">Расчёт ориентировочный. Сверьте с расходом на упаковке.</div>`;
+        notify("success"); $r.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
+      } catch { notify("error"); toast("Проверьте числа по подсказке"); }
+    };
   });
-  hint();
-  document.getElementById("f-calc").onsubmit = async e => {
-    e.preventDefault();
-    const numbers = document.getElementById("c-nums").value.replace(/,/g, ".").split(/[\s x×х*;\/]+/i)
-      .map(parseFloat).filter(n => !isNaN(n));
-    try {
-      const r = await api("/calc", { method: "POST", body: { key, numbers } });
-      const $r = document.getElementById("c-res");
-      $r.hidden = false;
-      $r.innerHTML = `<div class="line"><b>${esc(r.title)}</b></div>${r.lines.map(l => `<div class="line">${esc(l)}</div>`).join("")}
-        <div class="line muted">Расчёт ориентировочный: сверьте с расходом на упаковке.</div>`;
-      haptic();
-    } catch { toast("Проверьте числа по подсказке"); }
-  };
 }
 
 route();

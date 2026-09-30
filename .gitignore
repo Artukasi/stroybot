@@ -3,3 +3,5 @@
 __pycache__/
 *.db
 .pytest_cache/
+windows/cloudflared.exe
+windows/cloudflared.log

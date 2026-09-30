@@ -12,7 +12,11 @@ Telegram-бот и Mini App (приложение внутри Telegram) для 
 3. **Свой Telegram ID** — написать @userinfobot.
 4. **Python 3.11+** на компьютере или сервере.
 
-## Запуск
+## Запуск на Windows одним щелчком
+
+Дважды щёлкните `start-bot.bat`: он всё поставит, спросит токен и ключ, откроет бесплатный https-адрес через Cloudflare и запустит бота. Подробно: [windows/README.md](windows/README.md). Проверить ключи отдельно: `python -m bot.check`.
+
+## Запуск вручную
 ```bash
 cd stroybot
 python -m venv .venv

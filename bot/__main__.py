@@ -19,6 +19,14 @@ log = logging.getLogger("stroybot")
 
 REMIND_FROM_HOUR = 9  # не будим людей ночью
 
+# Профиль бота в Telegram: ставим сами при запуске, чтобы не заполнять вручную в @BotFather
+DESCRIPTION = (
+    "Помощник по ремонту. Покажет дизайн комнаты по фото, посчитает смету и материалы, "
+    "проверит работу бригады по фото, соберёт фотоотчёт в PDF и поможет вести объекты.\n\n"
+    "Можно писать текстом или голосом. Нажмите «Старт»."
+)
+SHORT_DESCRIPTION = "Ремонт без нервов: дизайн по фото, смета, проверка работы бригады, фотоотчёты."
+
 
 async def remind_loop(bot: Bot):
     """Раз в полчаса напоминает о этапах, у которых наступил срок."""
@@ -58,6 +66,12 @@ async def main():
         BotCommand(command="paysupport", description="Помощь с оплатой"),
         BotCommand(command="terms", description="Условия"),
     ])
+
+    try:
+        await bot.set_my_description(DESCRIPTION)
+        await bot.set_my_short_description(SHORT_DESCRIPTION)
+    except Exception:
+        log.warning("не удалось обновить описание бота", exc_info=True)
 
     runner = None
     if config.webapp_url.startswith("https://"):

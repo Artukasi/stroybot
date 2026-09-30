@@ -6,6 +6,10 @@ struct ContentView: View {
     @State private var scanning = false
     @State private var showPair = false
     @State private var result: RoomResult?
+    /// Новый скан — новый экран результата (сбрасываем отправку, фото и ремонт)
+    @State private var resultID = UUID()
+    /// Пересъёмка с экрана результата: он сам обновится новым сканом
+    @State private var rescanning = false
 
     var body: some View {
         NavigationStack {
@@ -29,7 +33,7 @@ struct ContentView: View {
                     }
                     connection
                     if let result {
-                        NavigationLink { ResultView(result: result) } label: {
+                        NavigationLink { ResultView(result: result, onRescan: rescan).id(resultID) } label: {
                             card {
                                 Text("Последний скан").font(.subheadline).foregroundStyle(.secondary)
                                 Text("\(result.room): пол \(fmt(result.floorArea)) м², стены \(fmt(result.wallArea)) м²").font(.headline)
@@ -42,11 +46,19 @@ struct ContentView: View {
             .background(Palette.paper.opacity(0.6).ignoresSafeArea())
             .navigationTitle("СтройСкан")
             .navigationDestination(isPresented: Binding(get: { result != nil && justScanned }, set: { if !$0 { justScanned = false } })) {
-                if let result { ResultView(result: result) }
+                if let result { ResultView(result: result, onRescan: rescan).id(resultID) }
             }
         }
         .fullScreenCover(isPresented: $scanning) {
-            ScanScreen { r in result = r; justScanned = true }
+            ScanScreen { r in
+                result = r
+                resultID = UUID()
+                if !rescanning { justScanned = true }
+                rescanning = false
+            }
+        }
+        .onChange(of: scanning) { open in
+            if !open { rescanning = false }
         }
         .sheet(isPresented: $showPair) { PairView() }
         .alert(link.message ?? "", isPresented: Binding(get: { link.message != nil }, set: { if !$0 { link.message = nil } })) {
@@ -55,6 +67,11 @@ struct ContentView: View {
     }
 
     @State private var justScanned = false
+
+    private func rescan() {
+        rescanning = true
+        scanning = true
+    }
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 6) {

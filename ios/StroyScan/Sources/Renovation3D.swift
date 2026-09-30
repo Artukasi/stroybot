@@ -1,591 +1,1502 @@
 import SceneKit
-import SwiftUI
 import UIKit
 import simd
 
-// MARK: - Стили
+// MARK: - Комната в метрах для 3D
 
-/// Стиль готового ремонта в 3D
-enum RenoStyle: String, CaseIterable, Identifiable {
-    case scandi, loft, minimal, classic, japandi
+/// Стена в сцене. Концы по полу, комната — слева по ходу от a к b (локальная +z смотрит внутрь).
+struct WallGeo {
+    /// Номер стены в скане (как в wallLines)
+    let index: Int
+    let a: SIMD2<Float>
+    let b: SIMD2<Float>
+    let length: Float
+    /// Концы переставлены относительно wallLines: отступы проёмов считаем с другого конца
+    let flipped: Bool
 
-    var id: String { rawValue }
+    var dir: SIMD2<Float> { length > 0 ? (b - a) / length : SIMD2(1, 0) }
+    /// Нормаль внутрь комнаты
+    var normal: SIMD2<Float> { SIMD2(-dir.y, dir.x) }
+    var mid: SIMD2<Float> { (a + b) / 2 }
+    func point(_ s: Float) -> SIMD2<Float> { a + dir * s }
+}
 
-    var title: String {
-        switch self {
-        case .scandi: return "Скандинавский"
-        case .loft: return "Лофт"
-        case .minimal: return "Минимализм"
-        case .classic: return "Классика"
-        case .japandi: return "Японди"
+/// Окно, дверь или проём на стене: середина от начала стены, размеры, высота низа
+struct OpeningGeo {
+    /// Номер в result.openings
+    let index: Int
+    let kind: String
+    let center: Float
+    let width: Float
+    let height: Float
+    let bottom: Float
+
+    var left: Float { center - width / 2 }
+    var right: Float { center + width / 2 }
+    var top: Float { bottom + height }
+}
+
+/// План комнаты для сцены: контур пола, стены с внутренней стороной, проёмы по местам
+struct Room3D {
+    /// Контур пола против часовой стрелки (x, y плана)
+    let polygon: [SIMD2<Float>]
+    let walls: [WallGeo]
+    /// Проёмы по стенам (тот же порядок, что у walls)
+    let openings: [[OpeningGeo]]
+    let height: Float
+    let lo: SIMD2<Float>
+    let hi: SIMD2<Float>
+    /// Точка внутри комнаты, куда смотрит камера
+    let centroid: SIMD2<Float>
+
+    init(_ r: RoomResult) {
+        var pts: [SIMD2<Float>] = []
+        for p in r.plan {
+            let q = SIMD2(Float(p.x), Float(p.y))
+            if let last = pts.last, simd_distance(last, q) < 0.02 { continue }
+            pts.append(q)
         }
-    }
-
-    var look: StyleLook {
-        switch self {
-        case .scandi:
-            return StyleLook(wall: rgb(0.95, 0.94, 0.91), brick: false,
-                             floor: .planks(rgb(0.88, 0.77, 0.62), rgb(0.78, 0.64, 0.47)),
-                             soft: rgb(0.80, 0.80, 0.78), wood: rgb(0.85, 0.73, 0.56),
-                             accent: rgb(0.86, 0.66, 0.26), appliance: rgb(0.94, 0.94, 0.94),
-                             trim: rgb(0.98, 0.98, 0.97))
-        case .loft:
-            return StyleLook(wall: rgb(0.62, 0.30, 0.22), brick: true,
-                             floor: .concrete,
-                             soft: rgb(0.45, 0.26, 0.15), wood: rgb(0.30, 0.22, 0.16),
-                             accent: rgb(0.12, 0.12, 0.13), appliance: rgb(0.30, 0.31, 0.33),
-                             trim: rgb(0.10, 0.10, 0.11))
-        case .minimal:
-            return StyleLook(wall: rgb(0.97, 0.97, 0.97), brick: false,
-                             floor: .planks(rgb(0.90, 0.84, 0.74), rgb(0.84, 0.77, 0.66)),
-                             soft: rgb(0.88, 0.88, 0.87), wood: rgb(0.93, 0.93, 0.92),
-                             accent: rgb(0.15, 0.15, 0.16), appliance: rgb(0.86, 0.86, 0.87),
-                             trim: rgb(0.99, 0.99, 0.99))
-        case .classic:
-            return StyleLook(wall: rgb(0.90, 0.84, 0.74), brick: false,
-                             floor: .planks(rgb(0.58, 0.38, 0.23), rgb(0.44, 0.27, 0.16)),
-                             soft: rgb(0.88, 0.82, 0.70), wood: rgb(0.40, 0.25, 0.15),
-                             accent: rgb(0.78, 0.62, 0.30), appliance: rgb(0.92, 0.90, 0.86),
-                             trim: rgb(0.98, 0.97, 0.94))
-        case .japandi:
-            return StyleLook(wall: rgb(0.88, 0.85, 0.79), brick: false,
-                             floor: .planks(rgb(0.74, 0.60, 0.44), rgb(0.62, 0.48, 0.34)),
-                             soft: rgb(0.78, 0.74, 0.66), wood: rgb(0.55, 0.42, 0.30),
-                             accent: rgb(0.52, 0.58, 0.48), appliance: rgb(0.35, 0.34, 0.32),
-                             trim: rgb(0.35, 0.28, 0.22))
-        }
-    }
-}
-
-enum FloorKind {
-    /// Доска: два крайних оттенка, между ними — случайный
-    case planks(UIColor, UIColor)
-    case concrete
-}
-
-struct StyleLook {
-    let wall: UIColor
-    let brick: Bool
-    let floor: FloorKind
-    /// Мягкая мебель
-    let soft: UIColor
-    /// Столы, шкафы, двери
-    let wood: UIColor
-    /// Подушки и мелочи
-    let accent: UIColor
-    /// Техника
-    let appliance: UIColor
-    /// Рамы окон, плинтус
-    let trim: UIColor
-}
-
-func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> UIColor {
-    UIColor(red: r, green: g, blue: b, alpha: 1)
-}
-
-private func mix(_ a: UIColor, _ b: UIColor, _ t: CGFloat) -> UIColor {
-    var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
-    var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
-    a.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
-    b.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
-    let r = r1 + (r2 - r1) * t
-    let g = g1 + (g2 - g1) * t
-    let bl = b1 + (b2 - b1) * t
-    return UIColor(red: r, green: g, blue: bl, alpha: 1)
-}
-
-private func shade(_ c: UIColor, _ k: CGFloat) -> UIColor {
-    mix(c, k < 1 ? .black : .white, abs(1 - k))
-}
-
-/// Предсказуемый генератор случайных чисел: текстура одинаковая при каждом открытии
-private struct SeededRandom: RandomNumberGenerator {
-    var state: UInt64
-    mutating func next() -> UInt64 {
-        state = state &* 6364136223846793005 &+ 1442695040888963407
-        var x = state
-        x ^= x >> 33
-        return x
-    }
-}
-
-// MARK: - Текстуры, нарисованные кодом
-
-enum Textures {
-    /// Паркетная доска. Картинка = 2 × 2 м.
-    static func planks(_ light: UIColor, _ dark: UIColor) -> UIImage {
-        let side: CGFloat = 1024
-        let rows = 10
-        let rowH = side / CGFloat(rows)
-        var rnd = SeededRandom(state: 42)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
-            let g = ctx.cgContext
-            for row in 0..<rows {
-                let y = CGFloat(row) * rowH
-                var x = -CGFloat.random(in: 0...400, using: &rnd)
-                while x < side {
-                    let len = CGFloat.random(in: 260...620, using: &rnd)
-                    let tone = mix(light, dark, CGFloat.random(in: 0...1, using: &rnd))
-                    g.setFillColor(tone.cgColor)
-                    g.fill(CGRect(x: x, y: y, width: len, height: rowH))
-                    // волокна дерева
-                    for _ in 0..<7 {
-                        let gy = y + CGFloat.random(in: 3...(rowH - 3), using: &rnd)
-                        let alpha = CGFloat.random(in: 0.04...0.12, using: &rnd)
-                        g.setStrokeColor(UIColor.black.withAlphaComponent(alpha).cgColor)
-                        g.setLineWidth(CGFloat.random(in: 0.8...2.2, using: &rnd))
-                        g.move(to: CGPoint(x: x + 4, y: gy))
-                        let mid = gy + CGFloat.random(in: -3...3, using: &rnd)
-                        g.addQuadCurve(to: CGPoint(x: x + len - 4, y: gy), control: CGPoint(x: x + len / 2, y: mid))
-                        g.strokePath()
-                    }
-                    // шов между досками
-                    g.setFillColor(UIColor.black.withAlphaComponent(0.35).cgColor)
-                    g.fill(CGRect(x: x + len - 1.5, y: y, width: 1.5, height: rowH))
-                    x += len
-                }
-                g.setFillColor(UIColor.black.withAlphaComponent(0.3).cgColor)
-                g.fill(CGRect(x: 0, y: y, width: side, height: 1.5))
-            }
-        }
-    }
-
-    /// Бетон / микроцемент. Картинка = 2 × 2 м.
-    static func concrete() -> UIImage {
-        let side: CGFloat = 512
-        var rnd = SeededRandom(state: 7)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
-            let g = ctx.cgContext
-            g.setFillColor(rgb(0.60, 0.60, 0.58).cgColor)
-            g.fill(CGRect(x: 0, y: 0, width: side, height: side))
-            for _ in 0..<260 {
-                let r = CGFloat.random(in: 10...60, using: &rnd)
-                let x = CGFloat.random(in: 0...side, using: &rnd)
-                let y = CGFloat.random(in: 0...side, using: &rnd)
-                let light = Bool.random(using: &rnd)
-                let color: UIColor = light ? .white : .black
-                g.setFillColor(color.withAlphaComponent(CGFloat.random(in: 0.02...0.06, using: &rnd)).cgColor)
-                g.fillEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
-            }
-            for _ in 0..<5000 {
-                let x = CGFloat.random(in: 0...side, using: &rnd)
-                let y = CGFloat.random(in: 0...side, using: &rnd)
-                let color: UIColor = Bool.random(using: &rnd) ? .white : .black
-                g.setFillColor(color.withAlphaComponent(CGFloat.random(in: 0.05...0.18, using: &rnd)).cgColor)
-                g.fill(CGRect(x: x, y: y, width: 1.5, height: 1.5))
-            }
-        }
-    }
-
-    /// Кирпичная кладка. Картинка = 1 × 1 м.
-    static func brick(_ base: UIColor) -> UIImage {
-        let side: CGFloat = 512
-        let rows = 12
-        let rowH = side / CGFloat(rows)
-        let brickW = side / 4
-        let mortar: CGFloat = 5
-        var rnd = SeededRandom(state: 99)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
-            let g = ctx.cgContext
-            g.setFillColor(rgb(0.78, 0.75, 0.70).cgColor)
-            g.fill(CGRect(x: 0, y: 0, width: side, height: side))
-            for row in 0..<rows {
-                let y = CGFloat(row) * rowH
-                let offset: CGFloat = row % 2 == 0 ? 0 : -brickW / 2
-                for col in 0...4 {
-                    let x = offset + CGFloat(col) * brickW
-                    let k = CGFloat.random(in: 0.78...1.12, using: &rnd)
-                    g.setFillColor(shade(base, k).cgColor)
-                    let rect = CGRect(x: x + mortar / 2, y: y + mortar / 2, width: brickW - mortar, height: rowH - mortar)
-                    g.fill(rect)
-                    // пятна на кирпиче
-                    for _ in 0..<6 {
-                        let px = rect.minX + CGFloat.random(in: 0...rect.width, using: &rnd)
-                        let py = rect.minY + CGFloat.random(in: 0...rect.height, using: &rnd)
-                        let s = CGFloat.random(in: 2...8, using: &rnd)
-                        g.setFillColor(UIColor.black.withAlphaComponent(0.08).cgColor)
-                        g.fillEllipse(in: CGRect(x: px, y: py, width: s, height: s))
-                    }
-                }
-            }
-        }
-    }
-
-    /// Мягкий свет окружения: светлое небо сверху, тёплый пол снизу
-    static func environment() -> UIImage {
-        let size = CGSize(width: 256, height: 128)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-            let colors = [rgb(0.95, 0.97, 1.0).cgColor, rgb(0.85, 0.85, 0.83).cgColor, rgb(0.55, 0.50, 0.45).cgColor]
-            let space = CGColorSpaceCreateDeviceRGB()
-            if let gradient = CGGradient(colorsSpace: space, colors: colors as CFArray, locations: [0, 0.5, 1]) {
-                ctx.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
-            }
-        }
-    }
-}
-
-// MARK: - Сцена
-
-final class BuiltScene {
-    let id = UUID()
-    let scene: SCNScene
-    let camera: SCNNode
-    init(scene: SCNScene, camera: SCNNode) {
-        self.scene = scene
-        self.camera = camera
-    }
-}
-
-enum RenovationScene {
-    static func material(_ color: UIColor, rough: CGFloat, metal: CGFloat = 0) -> SCNMaterial {
-        let m = SCNMaterial()
-        m.lightingModel = .physicallyBased
-        m.diffuse.contents = color
-        m.roughness.contents = NSNumber(value: Double(rough))
-        m.metalness.contents = NSNumber(value: Double(metal))
-        return m
-    }
-
-    static func textured(_ image: UIImage, repeatX: Float, repeatY: Float, rough: CGFloat) -> SCNMaterial {
-        let m = SCNMaterial()
-        m.lightingModel = .physicallyBased
-        m.diffuse.contents = image
-        m.diffuse.wrapS = .repeat
-        m.diffuse.wrapT = .repeat
-        m.diffuse.mipFilter = .linear
-        m.diffuse.contentsTransform = SCNMatrix4MakeScale(max(repeatX, 0.1), max(repeatY, 0.1), 1)
-        m.roughness.contents = NSNumber(value: Double(rough))
-        m.metalness.contents = NSNumber(value: 0.0)
-        return m
-    }
-
-    static func box(_ w: Float, _ h: Float, _ d: Float, _ m: SCNMaterial,
-                    at p: SCNVector3 = SCNVector3Zero, chamfer: Float = 0) -> SCNNode {
-        let smallest = min(w, min(h, d))
-        let r = CGFloat(max(0, min(chamfer, smallest / 2 - 0.001)))
-        let geo = SCNBox(width: CGFloat(w), height: CGFloat(h), length: CGFloat(d), chamferRadius: r)
-        geo.materials = [m]
-        let node = SCNNode(geometry: geo)
-        node.position = p
-        return node
-    }
-
-    /// Строит сцену готового ремонта. Камера смотрит на комнату сверху по диагонали.
-    static func build(_ world: RoomResult.World, style: RenoStyle, animate: Bool) -> BuiltScene {
-        let look = style.look
-        let scene = SCNScene()
-        let root = scene.rootNode
-        scene.background.contents = rgb(0.90, 0.93, 0.95)
-        scene.lightingEnvironment.contents = Textures.environment()
-        scene.lightingEnvironment.intensity = 1.0
-
-        // уровень пола — низ стен
-        var floorY: Float = 0
-        let bottoms = world.walls.map { $0.transform.columns.3.y - $0.dimensions.y / 2 }
-        if let lowest = bottoms.min() { floorY = lowest }
-
-        // габариты комнаты
-        var pts = world.floor
+        if pts.count > 1, let first = pts.first, let last = pts.last, simd_distance(first, last) < 0.02 { pts.removeLast() }
         if pts.count < 3 {
-            pts = world.walls.map { SIMD2($0.transform.columns.3.x, $0.transform.columns.3.z) }
+            let ends = r.wallLines.flatMap { [SIMD2($0.x, $0.y), SIMD2($0.z, $0.w)] }
+            pts = RoomResult.convexHull(ends).map { SIMD2(Float($0.x), Float($0.y)) }
         }
-        let xs = pts.map(\.x), zs = pts.map(\.y)
-        let minX = xs.min() ?? 0, maxX = xs.max() ?? 0
-        let minZ = zs.min() ?? 0, maxZ = zs.max() ?? 0
-        let cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2
-        let size = max(maxX - minX, maxZ - minZ, 2)
+        if Room3D.area(pts) < 0 { pts.reverse() }
+        polygon = pts
 
-        root.addChildNode(floorNode(world.floor, look: look, floorY: floorY, size: size))
-        for wall in world.walls { root.addChildNode(wallNode(wall, look: look)) }
-        for o in world.openings { root.addChildNode(openingNode(o, look: look)) }
-        for o in world.objects { root.addChildNode(furnitureNode(o, look: look)) }
-        addLights(to: root, center: SCNVector3(cx, floorY, cz), size: size)
+        let h = Float(r.height)
+        height = h >= 1.9 && h <= 5 ? h : 2.6
 
-        // камера на «штативе», который медленно поворачивается вокруг комнаты
-        let pivot = SCNNode()
-        pivot.position = SCNVector3(cx, floorY, cz)
-        root.addChildNode(pivot)
-        let camera = SCNCamera()
-        camera.fieldOfView = 55
-        camera.zNear = 0.05
-        camera.zFar = 200
-        camera.wantsHDR = true
-        camera.screenSpaceAmbientOcclusionIntensity = 0.7
-        let cameraNode = SCNNode()
-        cameraNode.camera = camera
-        let dist = size * 0.95 + 1
-        cameraNode.position = SCNVector3(dist * 0.7, dist * 1.05, dist * 0.7)
-        pivot.addChildNode(cameraNode)
-        cameraNode.look(at: SCNVector3(cx, floorY + 0.4, cz))
-        if animate {
-            let orbit = SCNAction.rotateBy(x: 0, y: CGFloat.pi * 0.6, z: 0, duration: 9)
-            orbit.timingMode = .easeInEaseOut
-            pivot.runAction(orbit)
+        var all = pts
+        for l in r.wallLines {
+            all.append(SIMD2(Float(l.x), Float(l.y)))
+            all.append(SIMD2(Float(l.z), Float(l.w)))
         }
-        return BuiltScene(scene: scene, camera: cameraNode)
-    }
-
-    private static func floorNode(_ polygon: [SIMD2<Float>], look: StyleLook, floorY: Float, size: Float) -> SCNNode {
-        let path = UIBezierPath()
-        for (i, p) in polygon.enumerated() {
-            // после поворота на -90° по X: y пути → -z мира
-            let pt = CGPoint(x: CGFloat(p.x), y: CGFloat(-p.y))
-            if i == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
-        }
-        path.close()
-        let shape = SCNShape(path: path, extrusionDepth: 0.02)
-        let repeats = size / 2
-        let m: SCNMaterial
-        switch look.floor {
-        case .planks(let light, let dark):
-            m = textured(Textures.planks(light, dark), repeatX: repeats, repeatY: repeats, rough: 0.55)
-        case .concrete:
-            m = textured(Textures.concrete(), repeatX: repeats, repeatY: repeats, rough: 0.8)
-        }
-        shape.materials = [m]
-        let node = SCNNode(geometry: shape)
-        node.eulerAngles.x = -Float.pi / 2
-        node.position.y = floorY - 0.01
-        return node
-    }
-
-    private static func wallNode(_ wall: RoomResult.Solid, look: StyleLook) -> SCNNode {
-        let len = wall.dimensions.x, h = wall.dimensions.y
-        let m: SCNMaterial
-        if look.brick {
-            m = textured(Textures.brick(look.wall), repeatX: len, repeatY: h, rough: 0.9)
+        if let first = all.first {
+            lo = all.reduce(first) { pointwiseMin($0, $1) }
+            hi = all.reduce(first) { pointwiseMax($0, $1) }
         } else {
-            m = material(look.wall, rough: 0.85)
+            lo = SIMD2(0, 0)
+            hi = SIMD2(3, 3)
         }
-        let node = SCNNode()
-        node.simdTransform = wall.transform
-        node.addChildNode(box(len, h, 0.08, m))
-        // плинтус с обеих сторон
-        let trim = material(look.trim, rough: 0.5)
-        let y = -h / 2 + 0.04
-        node.addChildNode(box(len, 0.08, 0.015, trim, at: SCNVector3(0, y, 0.047)))
-        node.addChildNode(box(len, 0.08, 0.015, trim, at: SCNVector3(0, y, -0.047)))
-        return node
+
+        var c = Room3D.centroid(pts)
+        if !Room3D.contains(pts, c) {
+            let box = (lo + hi) / 2
+            c = Room3D.contains(pts, box) || pts.count < 3 ? box : (pts[0] + pts[1] + pts[2]) / 3
+        }
+        centroid = c
+
+        // стены: внутренняя сторона — та, где пол
+        var ws: [WallGeo] = []
+        for (i, l) in r.wallLines.enumerated() {
+            var a = SIMD2(Float(l.x), Float(l.y)), b = SIMD2(Float(l.z), Float(l.w))
+            let len = simd_distance(a, b)
+            guard len > 0.05 else { continue }
+            let d = (b - a) / len, n = SIMD2(-d.y, d.x), m = (a + b) / 2
+            let plus = Room3D.contains(pts, m + n * 0.25), minus = Room3D.contains(pts, m - n * 0.25)
+            let flip = plus != minus ? minus : simd_dot(c - m, n) < 0
+            if flip { swap(&a, &b) }
+            ws.append(WallGeo(index: i, a: a, b: b, length: len, flipped: flip))
+        }
+        walls = ws
+
+        // проёмы: место на стене, ширина и высота в пределах стены
+        var ops = Array(repeating: [OpeningGeo](), count: ws.count)
+        let top = height
+        for (k, o) in r.openings.enumerated() {
+            guard let wi = o.wall, let pos = ws.firstIndex(where: { $0.index == wi }) else { continue }
+            let len = ws[pos].length
+            let w = min(Float(o.width), len - 0.1)
+            guard w > 0.2 else { continue }
+            var s = Float(o.offset ?? Double(len / 2))
+            if ws[pos].flipped { s = len - s }
+            s = min(max(s, w / 2), len - w / 2)
+            let window = o.kind == "window"
+            var bottom = Float(o.bottom ?? (window ? 0.85 : 0))
+            if !window && bottom < 0.12 { bottom = 0 }
+            bottom = min(max(bottom, 0), top - 0.4)
+            let oh = min(Float(o.height), top - 0.03 - bottom)
+            guard oh > 0.3 else { continue }
+            ops[pos].append(OpeningGeo(index: k, kind: o.kind, center: s, width: w, height: oh, bottom: bottom))
+        }
+        openings = ops.map { list in list.sorted { $0.center < $1.center } }
     }
 
-    private static func frame(_ w: Float, _ h: Float, _ m: SCNMaterial, bottom: Bool) -> [SCNNode] {
-        let t: Float = 0.05, d: Float = 0.13
-        var nodes = [
-            box(w, t, d, m, at: SCNVector3(0, h / 2 - t / 2, 0)),
-            box(t, h, d, m, at: SCNVector3(-w / 2 + t / 2, 0, 0)),
-            box(t, h, d, m, at: SCNVector3(w / 2 - t / 2, 0, 0)),
+    func inside(_ q: SIMD2<Float>) -> Bool { Room3D.contains(polygon, q) }
+
+    /// Площадь со знаком: > 0 — обход против часовой стрелки
+    static func area(_ p: [SIMD2<Float>]) -> Float {
+        guard p.count > 2 else { return 0 }
+        var s: Float = 0
+        for i in p.indices {
+            let a = p[i], b = p[(i + 1) % p.count]
+            s += a.x * b.y - b.x * a.y
+        }
+        return s / 2
+    }
+
+    static func centroid(_ p: [SIMD2<Float>]) -> SIMD2<Float> {
+        guard !p.isEmpty else { return SIMD2(1.5, 1.5) }
+        var a: Float = 0
+        var c = SIMD2<Float>(0, 0)
+        for i in p.indices {
+            let q = p[i], r = p[(i + 1) % p.count]
+            let k = q.x * r.y - r.x * q.y
+            a += k
+            c += (q + r) * k
+        }
+        if abs(a) < 1e-6 { return p.reduce(SIMD2<Float>(0, 0), +) / Float(p.count) }
+        return c / (3 * a)
+    }
+
+    /// Точка внутри многоугольника (луч вправо)
+    static func contains(_ p: [SIMD2<Float>], _ q: SIMD2<Float>) -> Bool {
+        guard p.count > 2 else { return false }
+        var inside = false
+        var j = p.count - 1
+        for i in p.indices {
+            let a = p[i], b = p[j]
+            if (a.y > q.y) != (b.y > q.y) {
+                let x = (b.x - a.x) * (q.y - a.y) / (b.y - a.y) + a.x
+                if q.x < x { inside.toggle() }
+            }
+            j = i
+        }
+        return inside
+    }
+
+    /// Разбивка многоугольника на треугольники (отсечение «ушей»), обход против часовой
+    static func triangulate(_ p: [SIMD2<Float>]) -> [(Int, Int, Int)] {
+        var idx = Array(p.indices)
+        var tris: [(Int, Int, Int)] = []
+        func cross(_ u: SIMD2<Float>, _ v: SIMD2<Float>) -> Float { u.x * v.y - u.y * v.x }
+        func inTri(_ q: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>, _ c: SIMD2<Float>) -> Bool {
+            cross(b - a, q - a) >= 0 && cross(c - b, q - b) >= 0 && cross(a - c, q - c) >= 0
+        }
+        var guardCount = 0
+        while idx.count > 3 && guardCount < 5000 {
+            guardCount += 1
+            var clipped = false
+            for i in idx.indices {
+                let i0 = idx[(i + idx.count - 1) % idx.count], i1 = idx[i], i2 = idx[(i + 1) % idx.count]
+                let a = p[i0], b = p[i1], c = p[i2]
+                if cross(b - a, c - b) <= 1e-7 { continue }
+                var ear = true
+                for j in idx where j != i0 && j != i1 && j != i2 {
+                    if inTri(p[j], a, b, c) { ear = false; break }
+                }
+                if ear {
+                    tris.append((i0, i1, i2))
+                    idx.remove(at: i)
+                    clipped = true
+                    break
+                }
+            }
+            if !clipped { break }
+        }
+        if idx.count == 3 {
+            tris.append((idx[0], idx[1], idx[2]))
+        } else if idx.count > 3 {
+            // контур с самопересечением — веером, лучше чем дыра в полу
+            for k in 1..<(idx.count - 1) { tris.append((idx[0], idx[k], idx[k + 1])) }
+        }
+        return tris
+    }
+
+    /// Расстояние от точки до стены
+    static func distance(_ q: SIMD2<Float>, _ w: WallGeo) -> Float {
+        let t = max(0, min(w.length, simd_dot(q - w.a, w.dir)))
+        return simd_distance(q, w.point(t))
+    }
+}
+
+// MARK: - Сетки
+
+enum Mesh {
+    static func make(_ v: [SIMD3<Float>], _ n: [SIMD3<Float>], _ uv: [SIMD2<Float>], _ idx: [UInt32],
+                     _ m: SCNMaterial) -> SCNGeometry {
+        let sources = [
+            SCNGeometrySource(vertices: v.map { SCNVector3($0.x, $0.y, $0.z) }),
+            SCNGeometrySource(normals: n.map { SCNVector3($0.x, $0.y, $0.z) }),
+            SCNGeometrySource(textureCoordinates: uv.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }),
         ]
-        if bottom { nodes.append(box(w, t, d, m, at: SCNVector3(0, -h / 2 + t / 2, 0))) }
-        return nodes
+        let g = SCNGeometry(sources: sources, elements: [SCNGeometryElement(indices: idx, primitiveType: .triangles)])
+        g.materials = [m]
+        return g
     }
 
-    private static func openingNode(_ o: RoomResult.Solid, look: StyleLook) -> SCNNode {
-        let w = o.dimensions.x, h = o.dimensions.y
-        let node = SCNNode()
-        node.simdTransform = o.transform
-        let trim = material(look.trim, rough: 0.4)
-        switch o.kind {
-        case "window":
-            let glass = material(rgb(0.70, 0.86, 0.97), rough: 0.05)
-            glass.transparency = 0.45
-            glass.blendMode = .alpha
-            glass.isDoubleSided = true
-            glass.writesToDepthBuffer = false
-            node.addChildNode(box(max(w - 0.08, 0.05), max(h - 0.08, 0.05), 0.1, glass))
-            frame(w, h, trim, bottom: true).forEach { node.addChildNode($0) }
-            // подоконник
-            node.addChildNode(box(w + 0.1, 0.03, 0.26, trim, at: SCNVector3(0, -h / 2 - 0.015, 0)))
-        case "door":
-            let panel = material(look.wood, rough: 0.55)
-            node.addChildNode(box(max(w - 0.08, 0.05), max(h - 0.04, 0.05), 0.1, panel, at: SCNVector3(0, -0.02, 0)))
-            frame(w, h, trim, bottom: false).forEach { node.addChildNode($0) }
-            let metal = material(rgb(0.75, 0.72, 0.65), rough: 0.3, metal: 1)
-            let hx = w / 2 - 0.12
-            node.addChildNode(box(0.12, 0.02, 0.03, metal, at: SCNVector3(hx, 0, 0.07)))
-            node.addChildNode(box(0.12, 0.02, 0.03, metal, at: SCNVector3(hx, 0, -0.07)))
-        default:
-            // проём без двери: тёмный проход в рамке
-            let dark = material(rgb(0.22, 0.22, 0.24), rough: 0.9)
-            node.addChildNode(box(max(w - 0.08, 0.05), max(h - 0.04, 0.05), 0.1, dark, at: SCNVector3(0, -0.02, 0)))
-            frame(w, h, trim, bottom: false).forEach { node.addChildNode($0) }
+    /// Прямоугольник в плоскости z = 0, смотрит в +z. Текстура в метрах: рисунок одного размера на всех стенах.
+    static func quad(_ x0: Float, _ x1: Float, _ y0: Float, _ y1: Float, top: Float, _ m: SCNMaterial) -> SCNGeometry {
+        let v = [SIMD3(x0, y0, 0), SIMD3(x1, y0, 0), SIMD3(x1, y1, 0), SIMD3(x0, y1, 0)]
+        let n = Array(repeating: SIMD3<Float>(0, 0, 1), count: 4)
+        let uv = v.map { SIMD2($0.x, top - $0.y) }
+        return make(v, n, uv, [0, 1, 2, 0, 2, 3], m)
+    }
+
+    /// Плоский многоугольник на высоте y: пол (нормаль вверх) или потолок (вниз)
+    static func polygon(_ p: [SIMD2<Float>], y: Float, up: Bool, _ m: SCNMaterial) -> SCNGeometry {
+        let v = p.map { SIMD3($0.x, y, $0.y) }
+        let n = Array(repeating: SIMD3<Float>(0, up ? 1 : -1, 0), count: p.count)
+        var idx: [UInt32] = []
+        for t in Room3D.triangulate(p) {
+            let e = simd_cross(v[t.1] - v[t.0], v[t.2] - v[t.0])
+            if (e.y > 0) == up {
+                idx += [UInt32(t.0), UInt32(t.1), UInt32(t.2)]
+            } else {
+                idx += [UInt32(t.0), UInt32(t.2), UInt32(t.1)]
+            }
         }
-        return node
+        return make(v, n, p, idx, m)
     }
 
-    private static func furnitureNode(_ o: RoomResult.Solid, look: StyleLook) -> SCNNode {
-        let w = o.dimensions.x, h = o.dimensions.y, d = o.dimensions.z
-        let node = SCNNode()
-        node.simdTransform = o.transform
-        let soft = material(look.soft, rough: 0.95)
-        let wood = material(look.wood, rough: 0.6)
-        let accent = material(look.accent, rough: 0.8)
-        let ceramic = material(rgb(0.97, 0.97, 0.97), rough: 0.12)
-        let appliance = material(look.appliance, rough: 0.3, metal: 0.3)
-        let r: Float = 0.03
-        switch o.kind {
-        case "sofa":
-            let seatH = h * 0.45
-            node.addChildNode(box(w, seatH, d, soft, at: SCNVector3(0, -h / 2 + seatH / 2, 0), chamfer: r))
-            node.addChildNode(box(w, h, d * 0.25, soft, at: SCNVector3(0, 0, -d / 2 + d * 0.125), chamfer: r))
-            let armW = min(Float(0.15), w * 0.1), armH = h * 0.7
-            node.addChildNode(box(armW, armH, d, soft, at: SCNVector3(-w / 2 + armW / 2, -h / 2 + armH / 2, 0), chamfer: r))
-            node.addChildNode(box(armW, armH, d, soft, at: SCNVector3(w / 2 - armW / 2, -h / 2 + armH / 2, 0), chamfer: r))
-            let py = -h / 2 + seatH + 0.17
-            node.addChildNode(box(0.4, 0.34, 0.12, accent, at: SCNVector3(-w / 4, py, -d / 4), chamfer: 0.05))
-            node.addChildNode(box(0.4, 0.34, 0.12, accent, at: SCNVector3(w / 4, py, -d / 4), chamfer: 0.05))
-        case "bed":
-            let baseH = min(h * 0.45, 0.3)
-            node.addChildNode(box(w, baseH, d, wood, at: SCNVector3(0, -h / 2 + baseH / 2, 0), chamfer: r))
-            let mattressH: Float = 0.2
-            let my = -h / 2 + baseH + mattressH / 2
-            let linen = material(rgb(0.96, 0.95, 0.93), rough: 0.95)
-            node.addChildNode(box(w - 0.04, mattressH, d - 0.04, linen, at: SCNVector3(0, my, 0), chamfer: 0.05))
-            node.addChildNode(box(w - 0.02, 0.05, d * 0.55, accent, at: SCNVector3(0, my + 0.1, d * 0.2), chamfer: 0.02))
-            node.addChildNode(box(w, max(h, baseH + 0.5), 0.07, wood, at: SCNVector3(0, 0, -d / 2 + 0.035), chamfer: r))
-            node.addChildNode(box(w * 0.7, 0.12, 0.35, linen, at: SCNVector3(0, my + 0.15, -d / 2 + 0.3), chamfer: 0.05))
-        case "table":
-            node.addChildNode(box(w, 0.04, d, wood, at: SCNVector3(0, h / 2 - 0.02, 0), chamfer: 0.01))
-            addLegs(to: node, w: w, h: h - 0.04, d: d, top: h / 2 - 0.04, m: wood)
-        case "chair":
-            let seatY = -h / 2 + h * 0.47
-            node.addChildNode(box(w, 0.05, d, soft, at: SCNVector3(0, seatY, 0), chamfer: 0.02))
-            let backH = h / 2 - seatY
-            node.addChildNode(box(w, backH, 0.04, wood, at: SCNVector3(0, seatY + backH / 2, -d / 2 + 0.02), chamfer: 0.01))
-            addLegs(to: node, w: w, h: seatY + h / 2, d: d, top: seatY - 0.025, m: wood)
-        case "storage":
-            node.addChildNode(box(w, h - 0.05, d, wood, at: SCNVector3(0, 0.025, 0), chamfer: 0.01))
-            node.addChildNode(box(w - 0.04, 0.05, d - 0.04, material(look.trim, rough: 0.6), at: SCNVector3(0, -h / 2 + 0.025, 0)))
-        case "television":
-            let screen = material(rgb(0.04, 0.04, 0.05), rough: 0.08, metal: 0.2)
-            node.addChildNode(box(w, h, max(d, 0.04), screen, chamfer: 0.005))
-        case "sink", "toilet", "bathtub":
-            node.addChildNode(box(w, h, d, ceramic, chamfer: 0.06))
-        case "refrigerator", "stove", "oven", "dishwasher", "washerDryer":
-            node.addChildNode(box(w, h, d, appliance, chamfer: 0.02))
-        case "fireplace":
-            node.addChildNode(box(w, h, d, material(rgb(0.56, 0.53, 0.49), rough: 0.9), chamfer: 0.01))
-        case "stairs":
-            node.addChildNode(box(w, h, d, wood, chamfer: 0.01))
-        default:
-            node.addChildNode(box(w, h, d, soft, chamfer: r))
+    /// Ткань в складках: волна по ширине. Начало — левый нижний угол.
+    static func drape(width: Float, height: Float, fold: Float, depth: Float, _ m: SCNMaterial) -> SCNGeometry {
+        let count = max(8, Int(width / 0.03))
+        let k = 2 * Float.pi / max(fold, 0.02)
+        var v: [SIMD3<Float>] = [], nr: [SIMD3<Float>] = [], uv: [SIMD2<Float>] = [], idx: [UInt32] = []
+        for i in 0...count {
+            let x = width * Float(i) / Float(count)
+            let z = depth / 2 * sin(k * x)
+            let slope = depth / 2 * k * cos(k * x)
+            let normal = simd_normalize(SIMD3<Float>(-slope, 0, 1))
+            for y in [Float(0), height] {
+                v.append(SIMD3(x, y, z))
+                nr.append(normal)
+                uv.append(SIMD2(x, height - y))
+            }
+            if i < count {
+                let b = UInt32(i * 2)
+                idx += [b, b + 2, b + 3, b, b + 3, b + 1]
+            }
         }
-        return node
+        return make(v, nr, uv, idx, m)
+    }
+}
+
+/// След предмета на полу: центр, оси, половины размеров
+private struct Foot {
+    let c: SIMD2<Float>
+    let ux: SIMD2<Float>
+    let uz: SIMD2<Float>
+    let hw: Float
+    let hd: Float
+
+    init(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) {
+        self.c = c
+        ux = SIMD2(cos(angle), sin(angle))
+        uz = SIMD2(-sin(angle), cos(angle))
+        hw = w / 2
+        hd = d / 2
     }
 
-    private static func addLegs(to node: SCNNode, w: Float, h: Float, d: Float, top: Float, m: SCNMaterial) {
-        let leg: Float = 0.045
-        let lx = w / 2 - leg, lz = d / 2 - leg
-        let y = top - h / 2
-        for sx in [Float(-1), 1] {
-            for sz in [Float(-1), 1] {
-                node.addChildNode(box(leg, max(h, 0.02), leg, m, at: SCNVector3(sx * lx, y, sz * lz)))
+    var corners: [SIMD2<Float>] {
+        [c + ux * hw + uz * hd, c - ux * hw + uz * hd, c - ux * hw - uz * hd, c + ux * hw - uz * hd]
+    }
+
+    /// Пересекаются ли два повёрнутых прямоугольника (разделяющие оси)
+    func overlaps(_ o: Foot) -> Bool {
+        let mine = corners, theirs = o.corners
+        for axis in [ux, uz, o.ux, o.uz] {
+            let p1 = mine.map { simd_dot($0, axis) }, p2 = theirs.map { simd_dot($0, axis) }
+            if (p1.max() ?? 0) < (p2.min() ?? 0) || (p2.max() ?? 0) < (p1.min() ?? 0) { return false }
+        }
+        return true
+    }
+}
+
+// MARK: - Редактор ремонта
+
+/// 3D-ремонт по скану: строит комнату точно по размерам, выделяет то, что нажали, и меняет только это.
+final class RenoEditor: NSObject, ObservableObject {
+    enum Pick: Equatable {
+        case wall(Int), floor, ceiling, window(Int), door(Int), object(Int), added(Int)
+
+        init?(name: String) {
+            let parts = name.split(separator: ":")
+            let n = parts.count > 1 ? Int(parts[1]) : nil
+            switch String(parts.first ?? "") {
+            case "wall": guard let n else { return nil }; self = .wall(n)
+            case "win": guard let n else { return nil }; self = .window(n)
+            case "door": guard let n else { return nil }; self = .door(n)
+            case "obj": guard let n else { return nil }; self = .object(n)
+            case "add": guard let n else { return nil }; self = .added(n)
+            case "floor": self = .floor
+            case "ceiling", "lamps": self = .ceiling
+            default: return nil
             }
         }
     }
 
-    private static func addLights(to root: SCNNode, center: SCNVector3, size: Float) {
-        let ambient = SCNLight()
-        ambient.type = .ambient
-        ambient.intensity = 350
-        ambient.color = UIColor(white: 1, alpha: 1)
-        let ambientNode = SCNNode()
-        ambientNode.light = ambient
-        root.addChildNode(ambientNode)
+    /// Что выбрал человек (экран показывает это сразу)
+    @Published private(set) var look: Look
+    @Published private(set) var pick: Pick?
+    /// Камера в комнате на уровне глаз (иначе — сверху)
+    @Published private(set) var inside = false
+    @Published private(set) var ready = false
 
+    let result: RoomResult
+    let room: Room3D
+    let view: SCNView
+
+    /// Что сейчас построено (look может уйти вперёд, пока в фоне рисуются текстуры)
+    private var shown: Look
+    private let scene = SCNScene()
+    private let floorHolder = SCNNode()
+    private let ceilingHolder = SCNNode()
+    private let lampHolder = SCNNode()
+    private let wallHolder = SCNNode()
+    private let itemHolder = SCNNode()
+    private let addedHolder = SCNNode()
+    private let lightHolder = SCNNode()
+    private var wallNodes: [SCNNode] = []
+    /// Вид за окнами и коридоры за проёмами — только для вида из комнаты
+    private var outsideNodes: [[SCNNode]] = []
+    private var itemNodes: [Int: SCNNode] = [:]
+    private var addedNodes: [SCNNode] = []
+    /// Где проём на стене: позиция стены в room.walls, лево, право, низ, верх
+    private var openingRects: [Int: (wall: Int, l: Float, r: Float, b: Float, t: Float)] = [:]
+    private var curtainMats: [String: SCNMaterial] = [:]
+    private let orbitCamera = SCNNode()
+    private let roomCamera = SCNNode()
+    private var viewpoints: [(SIMD2<Float>, SIMD2<Float>)] = []
+    private var viewpointIndex = 0
+    private var yaw: Float = 0
+    private var pitch: Float = -0.12
+    private var lookStart: (Float, Float) = (0, 0)
+    private var fovStart: CGFloat = 75
+    private var selectionNode: SCNNode?
+    private var timer: Timer?
+    private var dragIndex: Int?
+    private var dragOffset = SIMD2<Float>(0, 0)
+    private var preparing = false
+    private let warmQueue = DispatchQueue(label: "stroyscan.warm", qos: .userInitiated)
+    private let tap = UITapGestureRecognizer()
+    private let pan = UIPanGestureRecognizer()
+    private let pinch = UIPinchGestureRecognizer()
+
+    init(result: RoomResult, look: Look) {
+        self.result = result
+        self.room = Room3D(result)
+        self.look = look
+        self.shown = look
+        self.view = SCNView(frame: .zero)
+        super.init()
+        setupScene()
+        setupGestures()
+        viewpoints = makeViewpoints()
+    }
+
+    deinit {
+        timer?.invalidate()
+    }
+
+    // MARK: Для экрана
+
+    var firstWall: Int { room.walls.first?.index ?? 0 }
+    var firstWindow: Int? {
+        result.openings.indices.first { result.openings[$0].kind == "window" && openingRects[$0] != nil }
+    }
+    var hasHidden: Bool { look.objects.values.contains { $0.hidden } }
+
+    func variant(ofItem i: Int) -> String {
+        look.objects[String(i)]?.variant ?? LookOptions.defaultVariant(result.items[i])
+    }
+
+    func color(ofItem i: Int) -> String {
+        look.objects[String(i)]?.color
+            ?? LookOptions.defaultColor(kind: result.items[i].kind, variant: variant(ofItem: i), palette: look.palette)
+    }
+
+    func wallFinish(_ i: Int) -> Look.Finish {
+        if let a = look.accent, a.wall == i { return Look.Finish(finish: a.finish, color: a.color, pattern: a.pattern) }
+        return look.wall
+    }
+
+    /// Экран открылся: в фоне рисуем текстуры, потом собираем сцену
+    func start() {
+        if !ready && !preparing {
+            preparing = true
+            let first = look
+            warmQueue.async { [weak self] in
+                self?.warm(first)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.shown = self.look
+                    self.buildAll()
+                    self.setInside(self.inside)
+                    self.preparing = false
+                    self.ready = true
+                }
+            }
+        }
+        if timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                self?.updateCutaway()
+            }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func select(_ p: Pick?) {
+        pick = p
+        highlight()
+    }
+
+    // MARK: Правки
+
+    /// Любая правка: экран обновляется сразу, сцена — когда готовы текстуры
+    func edit(_ change: (inout Look) -> Void) {
+        var l = look
+        change(&l)
+        guard l != look else { return }
+        look = l
+        warmQueue.async { [weak self] in
+            self?.warm(l)
+            DispatchQueue.main.async { self?.show(l) }
+        }
+    }
+
+    /// Ремонт целиком (например, с сервера)
+    func replace(_ l: Look) { edit { $0 = l } }
+
+    func setStyle(_ s: RenoStyle) { edit { $0 = $0.withStyle(s) } }
+
+    /// Акцентная стена: nil — все стены одинаковые
+    func setAccent(_ wall: Int?) {
+        edit { l in
+            guard let wall else { l.accent = nil; return }
+            guard l.accent?.wall != wall else { return }
+            let base = l.wall
+            let color = UIColor(hex: base.color).luma > 0.6 ? "#7c8b7a" : "#e9e4da"
+            l.accent = Look.Accent(wall: wall, finish: base.finish, color: color, pattern: base.pattern)
+        }
+    }
+
+    /// Отделка стены: акцентной — только её, иначе всех
+    func editWall(_ wall: Int, finish: String? = nil, color: String? = nil, pattern: String? = nil) {
+        edit { l in
+            if var a = l.accent, a.wall == wall {
+                if let finish { a.finish = finish }
+                if let color { a.color = color }
+                if let pattern { a.pattern = pattern }
+                l.accent = a
+            } else {
+                if let finish { l.wall.finish = finish }
+                if let color { l.wall.color = color }
+                if let pattern { l.wall.pattern = pattern }
+            }
+        }
+    }
+
+    func setFloor(finish: String? = nil, color: String? = nil) {
+        edit { l in
+            if let finish { l.floor.finish = finish }
+            if let color { l.floor.color = color }
+        }
+    }
+
+    func setCeiling(light: String? = nil, color: String? = nil) {
+        edit { l in
+            if let light { l.ceiling.light = light }
+            if let color { l.ceiling.color = color }
+        }
+    }
+
+    func setCurtains(_ v: String) { edit { $0.curtains = v } }
+
+    func setObject(_ i: Int, variant: String? = nil, color: String? = nil) {
+        let kind = result.items[i].kind
+        edit { l in
+            var o = l.objects[String(i)] ?? Look.Item()
+            if let variant {
+                o.variant = variant
+                if let c = o.color, !LookOptions.colors(kind: kind, variant: variant).contains(c) { o.color = nil }
+            }
+            if let color { o.color = color }
+            l.objects[String(i)] = o
+        }
+    }
+
+    func hideObject(_ i: Int) {
+        select(nil)
+        edit { l in
+            var o = l.objects[String(i)] ?? Look.Item()
+            o.hidden = true
+            l.objects[String(i)] = o
+        }
+    }
+
+    func restoreHidden() {
+        edit { l in
+            for (key, var o) in l.objects where o.hidden {
+                o.hidden = false
+                l.objects[key] = o
+            }
+        }
+    }
+
+    func setAdded(_ j: Int, variant: String? = nil, color: String? = nil) {
+        edit { l in
+            guard l.added.indices.contains(j) else { return }
+            var a = l.added[j]
+            if let variant, variant != a.variant {
+                a.variant = variant
+                let s = LookOptions.size(kind: a.kind, variant: variant)
+                a.width = s.x
+                a.depth = s.y
+                a.height = s.z
+                if !LookOptions.colors(kind: a.kind, variant: variant).contains(a.color) {
+                    a.color = LookOptions.defaultColor(kind: a.kind, variant: variant, palette: l.palette)
+                }
+            }
+            if let color { a.color = color }
+            l.added[j] = a
+        }
+    }
+
+    func rotateAdded(_ j: Int) {
+        edit { l in
+            guard l.added.indices.contains(j) else { return }
+            l.added[j].angle = (l.added[j].angle + .pi / 2).truncatingRemainder(dividingBy: 2 * .pi)
+        }
+    }
+
+    func removeAdded(_ j: Int) {
+        select(nil)
+        edit { l in
+            guard l.added.indices.contains(j) else { return }
+            l.added.remove(at: j)
+        }
+    }
+
+    /// Новая мебель на свободное место: к стене или ближе к середине комнаты
+    @discardableResult
+    func add(kind: String, variant: String) -> Bool {
+        guard look.added.count < Look.maxAdded else { return false }
+        let s = LookOptions.size(kind: kind, variant: variant)
+        let spot = freeSpot(kind: kind, variant: variant, w: Float(s.x), d: Float(s.y), h: Float(s.z))
+            ?? (room.centroid, 0)
+        let item = Look.Added(kind: kind, variant: variant,
+                              color: LookOptions.defaultColor(kind: kind, variant: variant, palette: look.palette),
+                              width: s.x, depth: s.y, height: s.z,
+                              x: Double(spot.0.x), y: Double(spot.0.y), angle: Double(spot.1))
+        let j = look.added.count
+        edit { $0.added.append(item) }
+        select(.added(j))
+        return true
+    }
+
+    // MARK: Камера
+
+    func setInside(_ on: Bool) {
+        inside = on
+        if on {
+            view.allowsCameraControl = false
+            view.pointOfView = roomCamera
+            goToViewpoint()
+        } else {
+            view.pointOfView = orbitCamera
+            resetOrbit()
+            view.allowsCameraControl = true
+            let control = view.defaultCameraController
+            control.interactionMode = .orbitTurntable
+            control.inertiaEnabled = true
+            control.target = SCNVector3(room.centroid.x, 0.6, room.centroid.y)
+            chainGestures()
+        }
+        applyVisibility()
+    }
+
+    func nextViewpoint() {
+        guard !viewpoints.isEmpty else { return }
+        viewpointIndex = (viewpointIndex + 1) % viewpoints.count
+        goToViewpoint()
+    }
+
+    /// Кадр с экрана — для фото «как в жизни»
+    func snapshot() -> UIImage { view.snapshot() }
+
+    /// 3D-модель с ремонтом файлом USDZ
+    func exportUSDZ() -> URL? {
+        let saved = pick
+        select(nil)
+        defer { select(saved) }
+        let name = result.room.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Ремонт-\(name).usdz")
+        try? FileManager.default.removeItem(at: url)
+        return scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) ? url : nil
+    }
+
+    // MARK: - Сцена
+
+    private func setupScene() {
+        let backdrop = rgb(0.86, 0.88, 0.90)
+        scene.background.contents = backdrop
+        // свет окружения: мягкие блики и тени без чёрных провалов
+        scene.lightingEnvironment.contents = Tex.environment()
+        scene.lightingEnvironment.intensity = 1.0
+        floorHolder.name = "floor"
+        ceilingHolder.name = "ceiling"
+        lampHolder.name = "lamps"
+        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder] {
+            scene.rootNode.addChildNode(n)
+        }
+        orbitCamera.camera = RenoEditor.camera(room: false)
+        roomCamera.camera = RenoEditor.camera(room: true)
+        scene.rootNode.addChildNode(orbitCamera)
+        scene.rootNode.addChildNode(roomCamera)
+        view.scene = scene
+        view.backgroundColor = backdrop
+        view.antialiasingMode = .multisampling4X
+        view.rendersContinuously = true
+        view.preferredFramesPerSecond = 60
+        view.pointOfView = orbitCamera
+        resetOrbit()
+    }
+
+    /// Камера как у фотографа интерьеров: HDR, автоэкспозиция, мягкое затенение углов
+    private static func camera(room: Bool) -> SCNCamera {
+        let c = SCNCamera()
+        c.zNear = 0.03
+        c.zFar = 150
+        c.projectionDirection = .horizontal
+        c.fieldOfView = room ? 75 : 55
+        c.wantsHDR = true
+        c.wantsExposureAdaptation = room
+        c.exposureAdaptationBrighteningSpeedFactor = 0.8
+        c.exposureAdaptationDarkeningSpeedFactor = 0.8
+        c.minimumExposure = -1.5
+        c.maximumExposure = 1.5
+        c.exposureOffset = room ? 0 : 0.15
+        c.whitePoint = 1.15
+        c.bloomThreshold = 0.95
+        c.bloomIntensity = 0.3
+        c.bloomBlurRadius = 10
+        c.screenSpaceAmbientOcclusionIntensity = room ? 1.0 : 0.8
+        c.screenSpaceAmbientOcclusionRadius = 0.3
+        c.screenSpaceAmbientOcclusionBias = 0.03
+        c.screenSpaceAmbientOcclusionDepthThreshold = 0.2
+        c.screenSpaceAmbientOcclusionNormalThreshold = 0.3
+        c.vignettingIntensity = room ? 0.3 : 0.15
+        c.vignettingPower = 0.8
+        c.saturation = 1.04
+        c.contrast = 0.06
+        return c
+    }
+
+    private func resetOrbit() {
+        let c = room.centroid
+        let span = max(room.hi.x - room.lo.x, room.hi.y - room.lo.y, 2.5)
+        let d = span * 1.1 + 1.5
+        orbitCamera.simdPosition = SIMD3(c.x + d * 0.5, d * 0.95 + room.height * 0.3, c.y + d * 0.8)
+        orbitCamera.simdLook(at: SIMD3(c.x, 0.6, c.y))
+    }
+
+    private func goToViewpoint() {
+        guard !viewpoints.isEmpty else { return }
+        let (p, target) = viewpoints[viewpointIndex % viewpoints.count]
+        roomCamera.simdPosition = SIMD3(p.x, 1.45, p.y)
+        let d = target - p
+        yaw = atan2(-d.x, -d.y)
+        pitch = -0.12
+        roomCamera.camera?.fieldOfView = 75
+        applyRoomCamera()
+    }
+
+    private func applyRoomCamera() {
+        roomCamera.simdOrientation = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)) * simd_quatf(angle: pitch, axis: SIMD3(1, 0, 0))
+    }
+
+    /// Точки съёмки: из дальних углов и из дверей, взгляд на середину комнаты
+    private func makeViewpoints() -> [(SIMD2<Float>, SIMD2<Float>)] {
+        let c = room.centroid
+        var corners: [(SIMD2<Float>, Float)] = []
+        for v in room.polygon {
+            let d = c - v
+            let len = simd_length(d)
+            guard len > 1 else { continue }
+            let p = v + d / len * 0.55
+            if room.inside(p) { corners.append((p, len)) }
+        }
+        corners.sort { $0.1 > $1.1 }
+        var doors: [SIMD2<Float>] = []
+        for (pos, list) in room.openings.enumerated() {
+            for o in list where o.kind != "window" {
+                let g = room.walls[pos]
+                let p = g.point(o.center) + g.normal * 0.45
+                if room.inside(p) { doors.append(p) }
+            }
+        }
+        var out: [(SIMD2<Float>, SIMD2<Float>)] = []
+        if let best = corners.first { out.append((best.0, c)) }
+        out += doors.map { ($0, c) }
+        out += corners.dropFirst().prefix(3).map { ($0.0, c) }
+        if out.isEmpty { out.append((c + SIMD2(0, 0.01), c + SIMD2(0, -1))) }
+        return out
+    }
+
+    /// Прячем стены между камерой и комнатой, потолок и вид за окнами — когда смотрим сверху
+    private func applyVisibility() {
+        let orbit = !inside
+        ceilingHolder.isHidden = orbit
+        for list in outsideNodes {
+            for n in list { n.isHidden = orbit }
+        }
+        if !orbit { wallNodes.forEach { $0.isHidden = false } }
+        updateCutaway()
+    }
+
+    private func updateCutaway() {
+        guard !inside, let cam = view.pointOfView?.presentation.simdWorldPosition else { return }
+        let c = SIMD2(cam.x, cam.z)
+        for (pos, g) in room.walls.enumerated() where pos < wallNodes.count {
+            let hide = simd_dot(c - g.mid, g.normal) < -0.05
+            if wallNodes[pos].isHidden != hide { wallNodes[pos].isHidden = hide }
+        }
+    }
+
+    private func buildAll() {
+        buildFloor()
+        buildCeiling()
+        buildWalls()
+        buildItems()
+        buildAdded()
+        buildLamps()
+        buildLights()
+        highlight()
+        applyVisibility()
+    }
+
+    /// Показывает готовую правку: перестраивает только то, что поменялось
+    private func show(_ l: Look) {
+        guard ready, l == look else { return }
+        let old = shown
+        shown = l
+        refresh(from: old, to: l)
+    }
+
+    private func refresh(from old: Look, to new: Look) {
+        if old.style != new.style {
+            buildAll()
+            return
+        }
+        var walls = Set<Int>()
+        if old.wall != new.wall || old.curtains != new.curtains {
+            walls = Set(room.walls.indices)
+        } else if old.accent != new.accent {
+            for i in [old.accent?.wall, new.accent?.wall].compactMap({ $0 }) {
+                if let pos = room.walls.firstIndex(where: { $0.index == i }) { walls.insert(pos) }
+            }
+        }
+        for pos in walls.sorted() { rebuildWall(pos) }
+        if old.floor != new.floor { buildFloor() }
+        if old.ceiling.color != new.ceiling.color { buildCeiling() }
+
+        var tables = false
+        for i in result.items.indices where old.objects[String(i)] != new.objects[String(i)] {
+            rebuildItem(i)
+            if result.items[i].kind == "table" { tables = true }
+        }
+        let sameList = old.added.count == new.added.count
+            && !zip(old.added, new.added).contains { pair in pair.0.id != pair.1.id }
+        if !sameList || addedNodes.count != new.added.count {
+            buildAdded()
+            tables = true
+        } else {
+            for j in new.added.indices where old.added[j] != new.added[j] {
+                let a = old.added[j], b = new.added[j]
+                if a.kind == b.kind && a.variant == b.variant && a.color == b.color
+                    && a.width == b.width && a.depth == b.depth && a.height == b.height {
+                    place(addedNodes[j], b)
+                } else {
+                    replaceAdded(j)
+                }
+                if b.kind == "table" { tables = true }
+            }
+        }
+        if old.ceiling.light != new.ceiling.light || (tables && new.ceiling.light == "pendant") { buildLamps() }
+        highlight()
+        applyVisibility()
+    }
+
+    // MARK: Пол, потолок, свет
+
+    /// Контур чуть шире стен: пол и потолок заходят под стены без щелей
+    private func expanded(_ p: [SIMD2<Float>], by d: Float) -> [SIMD2<Float>] {
+        p.map { q in
+            let v = q - room.centroid
+            let len = simd_length(v)
+            return len > 0.01 ? q + v / len * d : q
+        }
+    }
+
+    private func buildFloor() {
+        floorHolder.childNodes.forEach { $0.removeFromParentNode() }
+        let m = Mat.floor(shown.floor.finish, shown.floor.color)
+        floorHolder.addChildNode(SCNNode(geometry: Mesh.polygon(expanded(room.polygon, by: 0.06), y: 0, up: true, m)))
+    }
+
+    private func buildCeiling() {
+        ceilingHolder.childNodes.forEach { $0.removeFromParentNode() }
+        let m = Mat.wall("paint", shown.ceiling.color, "plain")
+        ceilingHolder.addChildNode(SCNNode(geometry: Mesh.polygon(expanded(room.polygon, by: 0.06), y: room.height, up: false, m)))
+    }
+
+    private func buildLamps() {
+        lampHolder.childNodes.forEach { $0.removeFromParentNode() }
+        let node = Lamps.build(shown.ceiling.light, center: room.centroid, ceiling: room.height, lo: room.lo, hi: room.hi,
+                               table: diningTable(), palette: shown.palette, inside: room.inside)
+        lampHolder.addChildNode(node)
+    }
+
+    /// Обеденный стол для подвесов: центр, длинная сторона, высота, угол длинной стороны
+    private func diningTable() -> (SIMD2<Float>, Float, Float, Float)? {
+        for (i, it) in result.items.enumerated() where it.kind == "table" {
+            let edit = shown.objects[String(i)]
+            if edit?.hidden == true { continue }
+            let v = edit?.variant ?? LookOptions.defaultVariant(it)
+            guard v == "dining_rect" || v == "dining_round" else { continue }
+            let angle = Float(it.angle) + (it.width >= it.depth ? 0 : .pi / 2)
+            return (SIMD2(Float(it.x), Float(it.y)), Float(max(it.width, it.depth)), Float(it.height), angle)
+        }
+        for a in shown.added where a.kind == "table" && (a.variant == "dining_rect" || a.variant == "dining_round") {
+            let angle = Float(a.angle) + (a.width >= a.depth ? 0 : .pi / 2)
+            return (SIMD2(Float(a.x), Float(a.y)), Float(max(a.width, a.depth)), Float(a.height), angle)
+        }
+        return nil
+    }
+
+    /// Солнце через главное окно (с тенями) и мягкий дневной свет от окон
+    private func buildLights() {
+        lightHolder.childNodes.forEach { $0.removeFromParentNode() }
+        var windows: [(WallGeo, OpeningGeo)] = []
+        for (pos, list) in room.openings.enumerated() {
+            for o in list where o.kind == "window" { windows.append((room.walls[pos], o)) }
+        }
+        windows.sort { $0.1.width * $0.1.height > $1.1.width * $1.1.height }
+        let c = room.centroid
+        var dir = simd_normalize(SIMD3<Float>(0.35, -1, 0.5))
+        if let main = windows.first?.0 {
+            let n = main.normal, t = main.dir
+            dir = simd_normalize(SIMD3(n.x + t.x * 0.35, -0.8, n.y + t.y * 0.35))
+        }
         let sun = SCNLight()
         sun.type = .directional
-        sun.intensity = 1300
-        sun.color = rgb(1.0, 0.97, 0.92)
+        sun.intensity = 1500
+        sun.temperature = 5600
         sun.castsShadow = true
         sun.shadowMode = .deferred
-        sun.shadowRadius = 8
-        sun.shadowSampleCount = 16
+        sun.shadowSampleCount = 12
+        sun.shadowRadius = 2.5
         sun.shadowMapSize = CGSize(width: 2048, height: 2048)
-        sun.shadowColor = UIColor(white: 0, alpha: 0.4)
-        sun.orthographicScale = CGFloat(size)
+        sun.shadowColor = UIColor(white: 0, alpha: 0.8)
+        sun.maximumShadowDistance = 30
         let sunNode = SCNNode()
         sunNode.light = sun
-        sunNode.position = SCNVector3(center.x + size, center.y + size * 2, center.z + size * 0.6)
-        sunNode.look(at: center)
-        root.addChildNode(sunNode)
+        let target = SIMD3(c.x, 0, c.y)
+        sunNode.simdPosition = target - dir * 8
+        sunNode.simdLook(at: target)
+        lightHolder.addChildNode(sunNode)
+
+        for (w, o) in windows.prefix(2) {
+            let p = w.point(o.center)
+            let l = SCNLight()
+            l.type = .spot
+            l.intensity = 800
+            l.temperature = 6500
+            l.spotInnerAngle = 40
+            l.spotOuterAngle = 140
+            l.attenuationStartDistance = 0.5
+            l.attenuationEndDistance = 8
+            l.attenuationFalloffExponent = 1.4
+            let node = SCNNode()
+            node.light = l
+            let at = SIMD3(p.x + w.normal.x * 0.05, o.bottom + o.height * 0.6, p.y + w.normal.y * 0.05)
+            node.simdPosition = at
+            node.simdLook(at: at + SIMD3(w.normal.x, -0.3, w.normal.y))
+            lightHolder.addChildNode(node)
+        }
+    }
+
+    // MARK: Стены, окна, двери
+
+    private func buildWalls() {
+        wallHolder.childNodes.forEach { $0.removeFromParentNode() }
+        wallNodes = []
+        outsideNodes = []
+        openingRects = [:]
+        for pos in room.walls.indices {
+            let (node, outside) = buildWall(pos)
+            wallHolder.addChildNode(node)
+            wallNodes.append(node)
+            outsideNodes.append(outside)
+        }
+    }
+
+    private func rebuildWall(_ pos: Int) {
+        guard pos < wallNodes.count, pos < outsideNodes.count else { return }
+        wallNodes[pos].removeFromParentNode()
+        let (node, outside) = buildWall(pos)
+        wallHolder.addChildNode(node)
+        wallNodes[pos] = node
+        outsideNodes[pos] = outside
+    }
+
+    private func surface(forWall i: Int) -> Look.Finish {
+        if let a = shown.accent, a.wall == i { return Look.Finish(finish: a.finish, color: a.color, pattern: a.pattern) }
+        return shown.wall
+    }
+
+    /// Стена: куски вокруг проёмов, толщина, плинтус, окна со шторами, двери
+    private func buildWall(_ pos: Int) -> (SCNNode, [SCNNode]) {
+        let g = room.walls[pos]
+        let len = g.length, top = room.height, thick: Float = 0.12
+        let group = SCNNode()
+        group.name = "wall:\(g.index)"
+        group.simdPosition = SIMD3(g.a.x, 0, g.a.y)
+        group.eulerAngles.y = atan2(-g.dir.y, g.dir.x)
+        let f = surface(forWall: g.index)
+        let wallMat = Mat.wall(f.finish, f.color, f.pattern)
+        let cut = Mat.flat(rgb(0.95, 0.94, 0.92), rough: 0.9)
+        let bodyMats = [Mat.invisible, cut, cut, cut, cut, cut]
+        let trim = Mat.flat(shown.palette.trim, rough: 0.4)
+        let classic = shown.style == "classic"
+        let k = Kit(group)
+        var outside: [SCNNode] = []
+
+        var rects: [(Float, Float, Float, Float)] = []
+        var cursor: Float = 0
+        var kept: [(OpeningGeo, Float, Float)] = []
+        for o in room.openings[pos] {
+            let l = max(o.left, cursor), r = min(o.right, len)
+            guard r - l > 0.2 else { continue }
+            if l > cursor + 0.001 { rects.append((cursor, l, 0, top)) }
+            if o.bottom > 0.001 { rects.append((l, r, 0, o.bottom)) }
+            if o.top < top - 0.001 { rects.append((l, r, o.top, top)) }
+            cursor = r
+            kept.append((o, l, r))
+        }
+        if cursor < len - 0.001 { rects.append((cursor, len, 0, top)) }
+
+        for (x0, x1, y0, y1) in rects {
+            group.addChildNode(SCNNode(geometry: Mesh.quad(x0, x1, y0, y1, top: top, wallMat)))
+            // толщина стены: видна на срезе сверху и в откосах окон
+            let e0: Float = x0 < 0.001 ? thick : 0, e1: Float = x1 > len - 0.001 ? thick : 0
+            let box = SCNBox(width: CGFloat(x1 - x0 + e0 + e1), height: CGFloat(y1 - y0), length: CGFloat(thick), chamferRadius: 0)
+            box.materials = bodyMats
+            let body = SCNNode(geometry: box)
+            body.simdPosition = SIMD3((x0 - e0 + x1 + e1) / 2, (y0 + y1) / 2, -thick / 2)
+            group.addChildNode(body)
+            if y0 < 0.001 {
+                k.box(x1 - x0, 0.08, 0.014, trim, x: (x0 + x1) / 2, y: 0, z: 0.007)
+            }
+            if classic && y1 > top - 0.001 {
+                k.box(x1 - x0, 0.09, 0.05, trim, x: (x0 + x1) / 2, y: top - 0.09, z: 0.025, r: 0.012)
+            }
+        }
+
+        for (o, l, r) in kept {
+            openingRects[o.index] = (pos, l, r, o.bottom, o.top)
+            let holder = SCNNode()
+            group.addChildNode(holder)
+            let ok = Kit(holder)
+            let cx = (l + r) / 2
+            if o.kind == "window" {
+                holder.name = "win:\(o.index)"
+                window(ok, l: l, r: r, b: o.bottom, t: o.top, thick: thick)
+                let scenery = backdrop(w: r - l + 4, h: o.height + 3, x: cx, y: o.bottom + o.height / 2, z: -thick - 2.2)
+                holder.addChildNode(scenery)
+                outside.append(scenery)
+            } else {
+                holder.name = "door:\(o.index)"
+                door(ok, l: l, r: r, t: o.top, thick: thick, leaf: o.kind == "door")
+                if o.kind != "door" {
+                    let hall = passage(w: r - l, t: o.top, x: cx, thick: thick)
+                    holder.addChildNode(hall)
+                    outside.append(hall)
+                }
+            }
+        }
+        return (group, outside)
+    }
+
+    private func window(_ k: Kit, l: Float, r: Float, b: Float, t: Float, thick: Float) {
+        let frame = Mat.flat(shown.palette.trim, rough: 0.35)
+        let w = r - l, h = t - b, cx = (l + r) / 2
+        let zf = -thick * 0.45
+        let bar: Float = 0.06
+        k.box(w, bar, 0.07, frame, x: cx, y: b, z: zf)
+        k.box(w, bar, 0.07, frame, x: cx, y: t - bar, z: zf)
+        k.box(bar, h, 0.07, frame, x: l + bar / 2, y: b, z: zf)
+        k.box(bar, h, 0.07, frame, x: r - bar / 2, y: b, z: zf)
+        let panes = max(1, Int((w / 0.8).rounded()))
+        if panes > 1 {
+            for i in 1..<panes {
+                k.box(0.05, h - 2 * bar, 0.06, frame, x: l + w * Float(i) / Float(panes), y: b + bar, z: zf)
+            }
+        }
+        if h > 1.7 { k.box(w - 2 * bar, 0.05, 0.06, frame, x: cx, y: t - 0.5, z: zf) }
+        let glass = k.box(w - 2 * bar, h - 2 * bar, 0.006, Mat.glass, x: cx, y: b + bar, z: zf)
+        glass.castsShadow = false
+        if b > 0.25 {
+            // подоконник
+            let depth = thick * 0.5 + 0.08
+            k.box(w + 0.12, 0.035, depth, Mat.flat(rgb(0.95, 0.95, 0.94), rough: 0.25), x: cx, y: b - 0.035, z: 0.08 - depth / 2)
+        }
+        curtains(k, l: l, r: r, b: b, t: t)
+    }
+
+    private func twoSided(_ hex: String) -> SCNMaterial {
+        if let m = curtainMats[hex] { return m }
+        let m = (Mat.fabric(hex).copy() as? SCNMaterial) ?? Mat.fabric(hex)
+        m.isDoubleSided = true
+        curtainMats[hex] = m
+        return m
+    }
+
+    private func curtains(_ k: Kit, l: Float, r: Float, b: Float, t: Float) {
+        let pal = shown.palette
+        let w = r - l, cx = (l + r) / 2
+        switch shown.curtains {
+        case "curtains":
+            // карниз под потолком, шторы до пола и тюль
+            let rodY = min(room.height - 0.06, t + 0.22)
+            let span = w + 0.5
+            k.rod(SIMD3(cx - span / 2 - 0.06, rodY, 0.14), SIMD3(cx + span / 2 + 0.06, rodY, 0.14), 0.011,
+                  Mat.metal(pal.metal, rough: 0.3))
+            let drop = rodY - 0.03
+            let fabric = twoSided(pal.curtain)
+            let pw = max(0.35, min(0.8, w * 0.28 + 0.12))
+            for x in [cx - span / 2, cx + span / 2 - pw] {
+                let n = SCNNode(geometry: Mesh.drape(width: pw, height: drop, fold: 0.13, depth: 0.07, fabric))
+                n.simdPosition = SIMD3(x, 0.015, 0.14)
+                k.node.addChildNode(n)
+            }
+            let tulle = SCNNode(geometry: Mesh.drape(width: span - 0.1, height: drop - 0.02, fold: 0.09, depth: 0.03, Mat.sheer))
+            tulle.simdPosition = SIMD3(cx - span / 2 + 0.05, 0.025, 0.085)
+            tulle.castsShadow = false
+            k.node.addChildNode(tulle)
+        case "blinds":
+            // жалюзи опущены на две трети
+            let slats = Kit()
+            let m = Mat.flat(UIColor(hex: pal.curtain), rough: 0.5)
+            let low = b + (t - b) * 0.35
+            slats.box(w - 0.08, 0.035, 0.05, m, x: cx, y: t - 0.035, z: 0)
+            var y = t - 0.08
+            while y > low {
+                slats.box(w - 0.12, 0.004, 0.05, m, x: cx, y: y, z: 0)
+                y -= 0.045
+            }
+            slats.box(w - 0.12, 0.02, 0.05, m, x: cx, y: low - 0.02, z: 0)
+            k.node.addChildNode(slats.node.flattenedClone())
+        case "roman":
+            let m = Mat.fabric(pal.curtain)
+            let drop = (t - b) * 0.42
+            k.box(w - 0.1, drop, 0.012, m, x: cx, y: t - drop - 0.01, z: 0.01)
+            for i in 0..<3 {
+                k.box(w - 0.1, 0.06, 0.045, m, x: cx, y: t - drop - 0.03 + Float(i) * 0.075, z: 0.02, r: 0.022)
+            }
+        default:
+            break
+        }
+    }
+
+    private func door(_ k: Kit, l: Float, r: Float, t: Float, thick: Float, leaf: Bool) {
+        let pal = shown.palette
+        let trim = Mat.flat(pal.trim, rough: 0.4)
+        let w = r - l, cx = (l + r) / 2
+        // наличники
+        k.box(0.07, t + 0.07, 0.02, trim, x: l - 0.035, y: 0, z: 0.01)
+        k.box(0.07, t + 0.07, 0.02, trim, x: r + 0.035, y: 0, z: 0.01)
+        k.box(w + 0.14, 0.07, 0.02, trim, x: cx, y: t, z: 0.01)
+        guard leaf else { return }
+        let m = Mat.wood(pal.door)
+        let zl = -thick * 0.35
+        k.box(w - 0.01, t - 0.01, 0.04, m, x: cx, y: 0.005, z: zl)
+        if shown.style == "classic" || shown.style == "budget" {
+            // филёнки
+            let ph = (t - 0.45) / 2
+            for i in 0..<2 {
+                k.box(w - 0.24, ph, 0.01, m, x: cx, y: 0.15 + Float(i) * (ph + 0.15), z: zl + 0.022, r: 0.003)
+            }
+        }
+        let metal = Mat.metal(pal.metal, rough: 0.25)
+        let hx = r - 0.09, face = zl + 0.02
+        k.box(0.035, 0.12, 0.01, metal, x: hx, y: 0.94, z: face + 0.005, r: 0.004)
+        k.rod(SIMD3(hx, 1.0, face + 0.01), SIMD3(hx, 1.0, face + 0.05), 0.008, metal)
+        k.rod(SIMD3(hx, 1.0, face + 0.05), SIMD3(hx - 0.12, 1.0, face + 0.05), 0.009, metal)
+    }
+
+    /// Вид за окном
+    private func backdrop(w: Float, h: Float, x: Float, y: Float, z: Float) -> SCNNode {
+        let plane = SCNPlane(width: CGFloat(w), height: CGFloat(h))
+        plane.materials = [Mat.outdoor]
+        let n = SCNNode(geometry: plane)
+        n.simdPosition = SIMD3(x, y, z)
+        n.castsShadow = false
+        return n
+    }
+
+    /// Коридор за проёмом без двери
+    private func passage(w: Float, t: Float, x: Float, thick: Float) -> SCNNode {
+        let k = Kit()
+        let wall = Mat.flat(rgb(0.84, 0.83, 0.81), rough: 0.9)
+        let floor = Mat.flat(UIColor(hex: shown.floor.color), rough: 0.6)
+        let depth: Float = 1.6, z0 = -thick
+        k.box(w + 1.2, t + 0.3, 0.02, wall, x: x, y: 0, z: z0 - depth)
+        k.box(w + 1.2, 0.02, depth, floor, x: x, y: -0.02, z: z0 - depth / 2)
+        k.box(0.02, t + 0.3, depth, wall, x: x - w / 2 - 0.6, y: 0, z: z0 - depth / 2)
+        k.box(0.02, t + 0.3, depth, wall, x: x + w / 2 + 0.6, y: 0, z: z0 - depth / 2)
+        return k.node
+    }
+
+    // MARK: Мебель
+
+    private func buildItems() {
+        itemHolder.childNodes.forEach { $0.removeFromParentNode() }
+        itemNodes = [:]
+        for i in result.items.indices { rebuildItem(i) }
+    }
+
+    private func rebuildItem(_ i: Int) {
+        itemNodes[i]?.removeFromParentNode()
+        itemNodes[i] = nil
+        guard let node = makeItem(i) else { return }
+        itemHolder.addChildNode(node)
+        itemNodes[i] = node
+    }
+
+    /// Отсканированный предмет точно в размер скана, в выбранном варианте и цвете
+    private func makeItem(_ i: Int) -> SCNNode? {
+        let it = result.items[i]
+        let edit = shown.objects[String(i)]
+        if edit?.hidden == true { return nil }
+        let variant = edit?.variant ?? LookOptions.defaultVariant(it)
+        let color = edit?.color ?? LookOptions.defaultColor(kind: it.kind, variant: variant, palette: shown.palette)
+        let body = Furniture3D.build(kind: it.kind, variant: variant, width: Float(it.width), depth: Float(it.depth),
+                                     height: Float(it.height), color: color, palette: shown.palette,
+                                     againstWall: LookOptions.againstWall(it.kind, variant))
+        let node = SCNNode()
+        node.name = "obj:\(i)"
+        node.addChildNode(body.flattenedClone())
+        let p = SIMD2(Float(it.x), Float(it.y))
+        node.simdPosition = SIMD3(p.x, Float(it.bottom), p.y)
+        node.eulerAngles.y = facing(kind: it.kind, variant: variant, at: p, angle: Float(it.angle), skip: i)
+        return node
+    }
+
+    /// Поворот: спинкой к ближней стене, стулья — лицом к столу
+    private func facing(kind: String, variant: String, at p: SIMD2<Float>, angle: Float, skip: Int) -> Float {
+        let front = SIMD2(-sin(angle), cos(angle))
+        var flip = false
+        if kind == "chair" && variant != "armchair", let t = nearestTable(to: p, skip: skip), simd_distance(t, p) < 1.5 {
+            flip = simd_dot(front, t - p) < 0
+        } else if let w = room.walls.min(by: { Room3D.distance(p, $0) < Room3D.distance(p, $1) }) {
+            flip = simd_dot(front, w.normal) < 0
+        }
+        return -(angle + (flip ? .pi : 0))
+    }
+
+    private func nearestTable(to p: SIMD2<Float>, skip: Int) -> SIMD2<Float>? {
+        var points: [SIMD2<Float>] = []
+        for (i, it) in result.items.enumerated() where i != skip && it.kind == "table" && shown.objects[String(i)]?.hidden != true {
+            points.append(SIMD2(Float(it.x), Float(it.y)))
+        }
+        for a in shown.added where a.kind == "table" { points.append(SIMD2(Float(a.x), Float(a.y))) }
+        return points.min { simd_distance($0, p) < simd_distance($1, p) }
+    }
+
+    private func buildAdded() {
+        addedHolder.childNodes.forEach { $0.removeFromParentNode() }
+        addedNodes = shown.added.indices.map { makeAdded($0) }
+        addedNodes.forEach { addedHolder.addChildNode($0) }
+    }
+
+    private func replaceAdded(_ j: Int) {
+        guard j < addedNodes.count else { return }
+        addedNodes[j].removeFromParentNode()
+        let node = makeAdded(j)
+        addedHolder.addChildNode(node)
+        addedNodes[j] = node
+    }
+
+    private func makeAdded(_ j: Int) -> SCNNode {
+        let a = shown.added[j]
+        let body = Furniture3D.build(kind: a.kind, variant: a.variant, width: Float(a.width), depth: Float(a.depth),
+                                     height: Float(a.height), color: a.color, palette: shown.palette,
+                                     againstWall: LookOptions.againstWall(a.kind, a.variant))
+        let node = SCNNode()
+        node.name = "add:\(j)"
+        node.addChildNode(body.flattenedClone())
+        place(node, a)
+        return node
+    }
+
+    private func place(_ node: SCNNode, _ a: Look.Added) {
+        // телевизор вешаем на стену
+        node.simdPosition = SIMD3(Float(a.x), a.kind == "television" ? 0.75 : 0, Float(a.y))
+        node.eulerAngles.y = -Float(a.angle)
+    }
+
+    /// Свободное место под новую вещь: не на проходе у дверей, не перед окном, не поверх мебели
+    private func freeSpot(kind: String, variant: String, w: Float, d: Float, h: Float) -> (SIMD2<Float>, Float)? {
+        var blocks: [Foot] = []
+        for (i, it) in result.items.enumerated() where look.objects[String(i)]?.hidden != true {
+            blocks.append(Foot(SIMD2(Float(it.x), Float(it.y)), angle: Float(it.angle),
+                               w: Float(it.width) + 0.3, d: Float(it.depth) + 0.3))
+        }
+        for a in look.added {
+            blocks.append(Foot(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle), w: Float(a.width) + 0.3, d: Float(a.depth) + 0.3))
+        }
+        for (pos, list) in room.openings.enumerated() {
+            let g = room.walls[pos]
+            let along = atan2(g.dir.y, g.dir.x)
+            for o in list {
+                if o.kind != "window" {
+                    blocks.append(Foot(g.point(o.center) + g.normal * 0.5, angle: along, w: o.width + 0.3, d: 1.0))
+                } else if h > o.bottom {
+                    blocks.append(Foot(g.point(o.center) + g.normal * 0.3, angle: along, w: o.width + 0.1, d: 0.6))
+                }
+            }
+        }
+        func fits(_ f: Foot) -> Bool {
+            f.corners.allSatisfy { room.inside($0) } && !blocks.contains { $0.overlaps(f) }
+        }
+        if LookOptions.againstWall(kind, variant) {
+            for g in room.walls.sorted(by: { $0.length > $1.length }) where g.length > w + 0.1 {
+                let angle = atan2(g.dir.y, g.dir.x)
+                let steps = Int((g.length - w - 0.1) / 0.1)
+                // от середины стены к краям
+                let order = (0...max(steps, 0)).sorted { abs(Float($0) - Float(steps) / 2) < abs(Float($1) - Float(steps) / 2) }
+                for s in order {
+                    let c = g.point(w / 2 + 0.05 + Float(s) * 0.1) + g.normal * (d / 2 + 0.03)
+                    if fits(Foot(c, angle: angle, w: w, d: d)) { return (c, angle) }
+                }
+            }
+        }
+        var best: (SIMD2<Float>, Float)?
+        var bestDist = Float.greatestFiniteMagnitude
+        var y = room.lo.y + 0.3
+        while y < room.hi.y - 0.3 {
+            var x = room.lo.x + 0.3
+            while x < room.hi.x - 0.3 {
+                let c = SIMD2(x, y)
+                if fits(Foot(c, angle: 0, w: w + 0.6, d: d + 0.6)) {
+                    let dist = simd_distance(c, room.centroid)
+                    if dist < bestDist { bestDist = dist; best = (c, 0) }
+                }
+                x += 0.15
+            }
+            y += 0.15
+        }
+        return best
+    }
+
+    // MARK: Текстуры заранее
+
+    /// Рисует текстуры ремонта в фоне, чтобы сцена не подвисала
+    private func warm(_ l: Look) {
+        Mat.prewarm(l)
+        let pal = l.palette
+        if let a = l.accent {
+            var t = l
+            t.wall = Look.Finish(finish: a.finish, color: a.color, pattern: a.pattern)
+            Mat.prewarm(t)
+        }
+        _ = Tex.fabric(pal.curtain)
+        _ = Tex.fabric(pal.bedding.hexString)
+        _ = Tex.fabric(mix(pal.bedding, UIColor(hex: pal.fabric), 0.12).hexString)
+        if pal.leather { _ = Tex.leather(pal.fabric) }
+        func one(_ kind: String, _ variant: String, _ color: String) {
+            if LookOptions.isSoft(kind, variant) {
+                if pal.leather || variant == "chesterfield" { _ = Tex.leather(color) } else { _ = Tex.fabric(color) }
+            } else if ["table", "storage", "chair", "stairs"].contains(kind) {
+                let luma = UIColor(hex: color).luma
+                if luma <= 0.82 && luma >= 0.1 { _ = Tex.wood(color) }
+            }
+        }
+        for (i, it) in result.items.enumerated() {
+            let e = l.objects[String(i)]
+            let v = e?.variant ?? LookOptions.defaultVariant(it)
+            one(it.kind, v, e?.color ?? LookOptions.defaultColor(kind: it.kind, variant: v, palette: pal))
+        }
+        for a in l.added { one(a.kind, a.variant, a.color) }
+    }
+
+    // MARK: Выделение
+
+    private func highlight() {
+        selectionNode?.removeFromParentNode()
+        selectionNode = nil
+        guard let pick else { return }
+        var lines: [(SIMD3<Float>, SIMD3<Float>)] = []
+        var parent: SCNNode?
+        func rect(_ l: Float, _ r: Float, _ b: Float, _ t: Float, z: Float) {
+            let p = [SIMD3(l, b, z), SIMD3(r, b, z), SIMD3(r, t, z), SIMD3(l, t, z)]
+            for i in 0..<4 { lines.append((p[i], p[(i + 1) % 4])) }
+        }
+        switch pick {
+        case .wall(let i):
+            guard let pos = room.walls.firstIndex(where: { $0.index == i }), pos < wallNodes.count else { return }
+            rect(0.01, room.walls[pos].length - 0.01, 0.01, room.height - 0.01, z: 0.015)
+            parent = wallNodes[pos]
+        case .floor, .ceiling:
+            let y: Float = pick == .floor ? 0.02 : room.height - 0.02
+            let p = room.polygon
+            for i in p.indices {
+                let a = p[i], b = p[(i + 1) % p.count]
+                lines.append((SIMD3(a.x, y, a.y), SIMD3(b.x, y, b.y)))
+            }
+            parent = scene.rootNode
+        case .window(let k), .door(let k):
+            guard let r = openingRects[k], r.wall < wallNodes.count else { return }
+            rect(r.l - 0.03, r.r + 0.03, max(0.01, r.b - 0.03), r.t + 0.03, z: 0.04)
+            parent = wallNodes[r.wall]
+        case .object(let i):
+            guard let n = itemNodes[i] else { return }
+            lines = boxEdges(n)
+            parent = n
+        case .added(let j):
+            guard j < addedNodes.count else { return }
+            lines = boxEdges(addedNodes[j])
+            parent = addedNodes[j]
+        }
+        guard let parent else { return }
+        let frame = Kit()
+        frame.node.name = "sel"
+        for (a, b) in lines {
+            let n = frame.rod(a, b, 0.012, Mat.selection)
+            n.castsShadow = false
+            n.renderingOrder = 50
+        }
+        parent.addChildNode(frame.node)
+        selectionNode = frame.node
+    }
+
+    private func boxEdges(_ n: SCNNode) -> [(SIMD3<Float>, SIMD3<Float>)] {
+        let (mn, mx) = n.boundingBox
+        let lo = SIMD3<Float>(mn.x, mn.y, mn.z) - 0.02, hi = SIMD3<Float>(mx.x, mx.y, mx.z) + 0.02
+        func corner(_ i: Int) -> SIMD3<Float> {
+            SIMD3(i & 1 == 0 ? lo.x : hi.x, i & 2 == 0 ? lo.y : hi.y, i & 4 == 0 ? lo.z : hi.z)
+        }
+        var out: [(SIMD3<Float>, SIMD3<Float>)] = []
+        for i in 0..<8 {
+            for bit in [1, 2, 4] where i & bit == 0 { out.append((corner(i), corner(i | bit))) }
+        }
+        return out
+    }
+
+    /// Что под пальцем
+    private func hitPick(at p: CGPoint) -> Pick? {
+        let hits = view.hitTest(p, options: [.searchMode: SCNHitTestSearchMode.all.rawValue, .ignoreHiddenNodes: true])
+        for h in hits {
+            var n: SCNNode? = h.node
+            while let cur = n {
+                if cur.name == "sel" { break }
+                if let name = cur.name, let found = Pick(name: name) { return found }
+                n = cur.parent
+            }
+        }
+        return nil
+    }
+
+    // MARK: Жесты
+
+    private func setupGestures() {
+        tap.addTarget(self, action: #selector(onTap(_:)))
+        pan.addTarget(self, action: #selector(onPan(_:)))
+        pinch.addTarget(self, action: #selector(onPinch(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        pinch.delegate = self
+        view.addGestureRecognizer(tap)
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(pinch)
+    }
+
+    /// Встроенное вращение камеры ждёт, не тащат ли мебель
+    private func chainGestures() {
+        for g in view.gestureRecognizers ?? [] where g !== tap && g !== pan && g !== pinch {
+            if g is UIPanGestureRecognizer { g.require(toFail: pan) }
+        }
+    }
+
+    @objc private func onTap(_ g: UITapGestureRecognizer) {
+        select(hitPick(at: g.location(in: view)))
+    }
+
+    @objc private func onPan(_ g: UIPanGestureRecognizer) {
+        let p = g.location(in: view)
+        switch g.state {
+        case .began:
+            if let j = dragIndex, j < addedNodes.count, let hit = floorPoint(p) {
+                let pos = addedNodes[j].simdPosition
+                dragOffset = SIMD2(pos.x, pos.z) - hit
+            } else {
+                dragIndex = nil
+                lookStart = (yaw, pitch)
+            }
+        case .changed:
+            if let j = dragIndex, j < addedNodes.count {
+                guard let hit = floorPoint(p) else { return }
+                let q = hit + dragOffset
+                if room.inside(q) {
+                    addedNodes[j].simdPosition.x = q.x
+                    addedNodes[j].simdPosition.z = q.y
+                }
+            } else if inside {
+                let t = g.translation(in: view)
+                yaw = lookStart.0 + Float(t.x) * 0.005
+                pitch = max(-1.0, min(0.7, lookStart.1 + Float(t.y) * 0.004))
+                applyRoomCamera()
+            }
+        default:
+            if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
+                let pos = addedNodes[j].simdPosition
+                edit { l in
+                    l.added[j].x = Double(pos.x)
+                    l.added[j].y = Double(pos.z)
+                }
+            }
+            dragIndex = nil
+        }
+    }
+
+    @objc private func onPinch(_ g: UIPinchGestureRecognizer) {
+        guard inside, let cam = roomCamera.camera else { return }
+        if g.state == .began { fovStart = cam.fieldOfView }
+        cam.fieldOfView = max(35, min(95, fovStart / max(g.scale, 0.1)))
+    }
+
+    /// Точка пола под пальцем
+    private func floorPoint(_ p: CGPoint) -> SIMD2<Float>? {
+        let a = view.unprojectPoint(SCNVector3(Float(p.x), Float(p.y), 0))
+        let b = view.unprojectPoint(SCNVector3(Float(p.x), Float(p.y), 1))
+        let dy = b.y - a.y
+        guard abs(dy) > 1e-5 else { return nil }
+        let t = -a.y / dy
+        guard t > 0 else { return nil }
+        return SIMD2(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t)
     }
 }
 
-// MARK: - Экран «Ремонт в 3D»
-
-struct Renovation3DView: View {
-    let world: RoomResult.World
-    let room: String
-    @State private var style: RenoStyle = .scandi
-    @State private var built: BuiltScene?
-    @State private var exportURL: URL?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            stylePicker
-            ZStack {
-                Color(red: 0.90, green: 0.93, blue: 0.95)
-                if let built {
-                    SceneView(scene: built.scene, pointOfView: built.camera, options: [.allowsCameraControl])
-                        .id(built.id)
-                } else {
-                    ProgressView("Собираю комнату…")
-                }
+extension RenoEditor: UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g === pinch { return inside }
+        if g === pan {
+            // тащить можно только выбранную добавленную мебель
+            dragIndex = nil
+            if case .added(let j)? = pick, case .added(let hit)? = hitPick(at: g.location(in: view)), hit == j {
+                dragIndex = j
+                return true
             }
-            Text("Крутите комнату пальцем, приближайте двумя пальцами. Это пример отделки: цвета и мебель условные.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
+            return inside
         }
-        .navigationTitle("Ремонт в 3D")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if let exportURL {
-                    ShareLink(item: exportURL) { Image(systemName: "square.and.arrow.up") }
-                } else {
-                    ProgressView()
-                }
-            }
-        }
-        .task(id: style) { await rebuild() }
-    }
-
-    private var stylePicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(RenoStyle.allCases) { s in
-                    Button { style = s } label: {
-                        Text(s.title).font(.subheadline.bold())
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(s == style ? Palette.signal : Color(.secondarySystemGroupedBackground), in: Capsule())
-                            .foregroundStyle(Palette.ink)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-        }
-    }
-
-    private func rebuild() async {
-        exportURL = nil
-        built = RenovationScene.build(world, style: style, animate: true)
-        // файл для «Поделиться»: отдельная копия сцены без анимации
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Remont-\(style.rawValue).usdz")
-        try? FileManager.default.removeItem(at: url)
-        let copy = RenovationScene.build(world, style: style, animate: false)
-        if copy.scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) {
-            exportURL = url
-        }
+        return true
     }
 }

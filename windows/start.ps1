@@ -204,6 +204,15 @@ function Start-Tunnel([int]$port) {
 # При подключении через точку (. .\start.ps1) только объявляем функции — так их проверяют тесты.
 if ($MyInvocation.InvocationName -eq ".") { return }
 
+# Всё, что видно в окне, пишем ещё и в файл — его можно прислать, если что-то пошло не так
+try { Start-Transcript -Path (Join-Path $PSScriptRoot "start-bot.log") -Force | Out-Null } catch { }
+trap {
+    Say "" ; Say "Ошибка: $($_.Exception.Message)" "Red"
+    Say "Место: $($_.InvocationInfo.PositionMessage)" "Red"
+    Say "Пришлите, пожалуйста, скриншот этого окна или файл windows\start-bot.log." "Red"
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
 Say "СтройБот: запуск" "Yellow"
 if (-not (Test-Path (Join-Path $Root "bot\__main__.py")) -and -not (Test-Path (Join-Path $Root "bot/__main__.py"))) {
     Say "Не вижу папку bot. Положите папку windows рядом с папкой bot (в корне проекта)." "Red"; exit 1

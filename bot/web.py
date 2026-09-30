@@ -244,6 +244,8 @@ def create_app(bot=None) -> web.Application:
     app.router.add_delete("/api/stages/{sid:\\d+}", api_delete_stage)
     app.router.add_post("/api/calc", api_calc)
     add_routes(app)
+    from .web_scan import add_routes as add_scan_routes
+    add_scan_routes(app)
     return app
 
 

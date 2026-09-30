@@ -1364,6 +1364,45 @@ function planSvg(s) {
     <text x="${x + w + 24}" y="${y + h / 2 + 4}" transform="rotate(90 ${x + w + 24} ${y + h / 2 + 4})" text-anchor="middle">${m(s.width)}</text>
     ${s.height ? `<text x="${x + w / 2}" y="${y + h / 2 + 5}" text-anchor="middle" style="fill:var(--draft)">h ${m(s.height)}</text>` : ""}</svg>`;
 }
+// размеры комнаты: план, площади и переходы в калькулятор и смету (для скриншота и для LiDAR-скана)
+function showSizes(out, s, plan) {
+  state.sizes = s;
+  const n = v => v ? String(v).replace(".", ",") : "—";
+  const calc = (key, nums, name) => nums.every(Boolean) ? `<button type="button" data-calc="${key}" data-nums="${nums.join(" ")}">${name}</button>` : "";
+  out.innerHTML = `<section class="panel pad">
+    <div class="row"><strong class="grow">${esc(s.room || "Помещение")}</strong><span class="muted">${esc(s.notes || "")}</span></div>
+    ${plan?.length > 2 ? polySvg(plan) : planSvg(s)}
+    <div class="stats3"><div><b>${n(s.floor_area)}</b><span>пол, м²</span></div><div><b>${n(s.wall_area)}</b><span>стены, м²</span></div><div><b>${n(s.perimeter)}</b><span>периметр, м</span></div></div>
+    <p class="muted" style="margin:0 0 8px">Посчитать материалы</p>
+    <div class="chips wrap">${calc("tile", [s.floor_area, 30, 60], "Плитка на пол")}${calc("laminate", [s.floor_area], "Ламинат")}
+      ${calc("wallpaper", [s.perimeter, s.height], "Обои")}${calc("paint", [s.wall_area, 2], "Краска")}${calc("plaster", [s.wall_area, 10], "Штукатурка")}</div>
+    <button class="btn" data-est>Смета по этим размерам</button></section>`;
+  out.querySelectorAll("[data-calc]").forEach(b => b.onclick = () => { state.calcPrefill = { key: b.dataset.calc, nums: b.dataset.nums }; go("calc"); });
+  out.querySelector("[data-est]").onclick = () => {
+    const parts = [s.room || "Помещение", s.length && s.width ? `${n(s.length)} × ${n(s.width)} м` : "", s.height ? `высота ${n(s.height)} м` : "",
+      s.floor_area ? `пол ${n(s.floor_area)} м²` : "", s.wall_area ? `стены ${n(s.wall_area)} м²` : ""].filter(Boolean);
+    state.prefill = { kind: "estimate", text: parts.join(", ") + ". Работы: " }; go("t/estimate");
+  };
+}
+// план по точкам из LiDAR-скана: стены с длинами
+function polySvg(pts) {
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minX = Math.min(...xs), minY = Math.min(...ys), w = Math.max(...xs) - minX || 1, h = Math.max(...ys) - minY || 1;
+  const W = 320, H = 220, pad = 40, k = Math.min((W - pad * 2) / w, (H - pad * 2) / h);
+  const ox = (W - w * k) / 2, oy = (H - h * k) / 2;
+  const P = pts.map(([x, y]) => [ox + (x - minX) * k, oy + (y - minY) * k]);
+  const cx = P.reduce((a, p) => a + p[0], 0) / P.length, cy = P.reduce((a, p) => a + p[1], 0) / P.length;
+  const labels = P.map((p, i) => {
+    const q = P[(i + 1) % P.length], len = Math.hypot(pts[(i + 1) % pts.length][0] - pts[i][0], pts[(i + 1) % pts.length][1] - pts[i][1]);
+    if (len < .4) return "";
+    let mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
+    const dx = mx - cx, dy = my - cy, d = Math.hypot(dx, dy) || 1;
+    mx += dx / d * 16; my += dy / d * 16 + 4;
+    return `<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${len.toFixed(2).replace(".", ",")}</text>`;
+  }).join("");
+  return `<svg class="plan-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="План комнаты по скану">
+    <path class="wall" d="M${P.map(p => p.map(v => v.toFixed(1)).join(" ")).join("L")}Z"/>${labels}</svg>`;
+}
 async function showMeasure() {
   setBack(() => go("tools"));
   await loadProfile();
@@ -1376,10 +1415,12 @@ async function showMeasure() {
       <div class="line"><b class="display" style="color:var(--draft)">2</b><div class="grow">Сделайте скриншот, где видны размеры стен</div></div>
       <div class="line" style="padding-bottom:4px"><b class="display" style="color:var(--draft)">3</b><div class="grow">Загрузите его сюда. Без лидара подойдёт фото плана или комнаты с рулеткой</div></div>
     </section>
+    <div id="m-scans"></div>
     ${photoBox("m-shot", "Скриншот скана", "Или фото плана с размерами")}
     <button class="btn" id="m-go">Распознать размеры${costWord("measure")}</button>
     <div id="m-out" style="margin-top:12px"></div>`, () => {
     wirePhotoBox("m-shot", b => { photo = b; }, "Снимите план или стену с рулеткой");
+    loadScans(document.getElementById("m-scans"), document.getElementById("m-out"));
     document.getElementById("m-go").onclick = async e => {
       if (!photo) { notify("error"); return toast("Загрузите скриншот скана"); }
       const fd = new FormData(); fd.append("photo", photo, "scan.jpg");
@@ -1387,29 +1428,47 @@ async function showMeasure() {
       out.innerHTML = drafting(["Ищу размеры на скане…", "Считаю площади…", "Черчу план…"]); rotateMsgs(out);
       out.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
       try {
-        const { sizes: s } = await api("/ai/measure", { method: "POST", body: fd });
-        clearScreen(); notify("success"); state.sizes = s;
-        const n = v => v ? String(v).replace(".", ",") : "—";
-        const calc = (key, nums, name) => nums.every(Boolean) ? `<button type="button" data-calc="${key}" data-nums="${nums.join(" ")}">${name}</button>` : "";
-        out.innerHTML = `<section class="panel pad">
-          <div class="row"><strong class="grow">${esc(s.room || "Помещение")}</strong><span class="muted">${esc(s.notes || "")}</span></div>
-          ${planSvg(s)}
-          <div class="stats3"><div><b>${n(s.floor_area)}</b><span>пол, м²</span></div><div><b>${n(s.wall_area)}</b><span>стены, м²</span></div><div><b>${n(s.perimeter)}</b><span>периметр, м</span></div></div>
-          <p class="muted" style="margin:0 0 8px">Посчитать материалы</p>
-          <div class="chips wrap">${calc("tile", [s.floor_area, 30, 60], "Плитка на пол")}${calc("laminate", [s.floor_area], "Ламинат")}
-            ${calc("wallpaper", [s.perimeter, s.height], "Обои")}${calc("paint", [s.wall_area, 2], "Краска")}${calc("plaster", [s.wall_area, 10], "Штукатурка")}</div>
-          <button class="btn" data-est>Смета по этим размерам</button></section>`;
-        out.querySelectorAll("[data-calc]").forEach(b => b.onclick = () => { state.calcPrefill = { key: b.dataset.calc, nums: b.dataset.nums }; go("calc"); });
-        out.querySelector("[data-est]").onclick = () => {
-          const parts = [s.room || "Помещение", s.length && s.width ? `${n(s.length)} × ${n(s.width)} м` : "", s.height ? `высота ${n(s.height)} м` : "",
-            s.floor_area ? `пол ${n(s.floor_area)} м²` : "", s.wall_area ? `стены ${n(s.wall_area)} м²` : ""].filter(Boolean);
-          state.prefill = { kind: "estimate", text: parts.join(", ") + ". Работы: " }; go("t/estimate");
-        };
+        const { sizes } = await api("/ai/measure", { method: "POST", body: fd });
+        clearScreen(); notify("success"); showSizes(out, sizes);
       } catch (err) { clearScreen(); out.innerHTML = ""; aiError(err); }
       e.target.disabled = false;
     };
   });
 }
+
+// сканы из приложения СтройСкан (LiDAR на iPhone)
+async function loadScans(box, out) {
+  let scans = [];
+  try { ({ scans } = await api("/scans")); } catch { return; }
+  const n = v => v ? String(+v.toFixed(2)).replace(".", ",") : "—";
+  box.innerHTML = `<h2 class="h2">Сканы с iPhone</h2>` + (scans.length
+    ? `<section class="panel">${scans.map((x, i) => `<div class="line" role="button" tabindex="0" data-scan="${i}" style="cursor:pointer">
+        <span class="sw k-material"></span><div class="grow"><div>${esc(x.room)}</div><div class="muted">${fdate(x.created_at)}, пол ${n(x.sizes.floor_area)} м²</div></div>
+        <span class="amount">${n(x.sizes.wall_area)} м²</span></div>`).join("")}</section>`
+    : `<section class="panel pad"><div>Приложение СтройСкан меряет комнату лидаром iPhone Pro: стены, окна и двери. Сканы появятся здесь.</div>
+       <button class="btn quiet" style="margin-top:12px" data-pair>Подключить iPhone</button></section>`);
+  box.querySelectorAll("[data-scan]").forEach(el => el.onclick = () => {
+    const x = scans[+el.dataset.scan]; haptic();
+    showSizes(out, { ...x.sizes, room: x.room, notes: "скан лидаром" }, x.plan);
+    out.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  });
+  box.querySelector("[data-pair]")?.addEventListener("click", pairIphone);
+}
+window.pairIphone = async () => {
+  try {
+    const { code, link } = await api("/scan-code", { method: "POST" });
+    const bg = document.createElement("div"), sh = document.createElement("div");
+    bg.className = "sheet-bg"; sh.className = "sheet"; sh.setAttribute("role", "dialog");
+    sh.innerHTML = `<strong>Подключить СтройСкан</strong>
+      <p>Откройте ссылку на iPhone, где установлен СтройСкан, или введите в приложении код. Он действует 10 минут.</p>
+      <div class="linkbox display" style="font-size:24px;letter-spacing:.12em;text-align:center">${esc(code)}</div>
+      <div class="pair"><button class="btn quiet" data-x>Закрыть</button><button class="btn" data-open>Открыть ссылку</button></div>`;
+    const close = () => { bg.remove(); sh.remove(); };
+    bg.onclick = close; sh.querySelector("[data-x]").onclick = close;
+    sh.querySelector("[data-open]").onclick = () => tg?.openLink ? tg.openLink(link) : open(link);
+    document.body.append(bg, sh);
+  } catch (e) { aiError(e); }
+};
 
 // ---------- строительный уровень ----------
 function showLevel() {
@@ -1559,6 +1618,9 @@ async function showMe() {
       <div class="pair"><button class="btn" id="inv-share">Поделиться</button><button class="btn quiet" id="inv-copy">Скопировать</button></div>` : ""}
       <p class="muted" style="margin:12px 0 0">Пригласили: ${p.invite.invited}, бонусов получено: ${p.invite.rewarded}</p>
     </section>
+    <h2 class="h2">LiDAR-сканер</h2>
+    <section class="panel pad"><div>Приложение СтройСкан на iPhone Pro меряет комнату лидаром и присылает размеры сюда и в чат.</div>
+      <button class="btn quiet" style="margin-top:12px" onclick="pairIphone()">Подключить iPhone</button></section>
     <h2 class="h2">Кто вы</h2>
     <div class="chips wrap" role="group" aria-label="Роль">${Object.entries(p.roles).map(([k, v]) =>
       `<button type="button" data-role="${k}" aria-pressed="${p.role === k}">${esc(v.replace(/^\S+\s/, ""))}</button>`).join("")}</div>

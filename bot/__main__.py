@@ -54,6 +54,7 @@ async def main():
         BotCommand(command="menu", description="Главное меню"),
         BotCommand(command="objects", description="Мои объекты"),
         BotCommand(command="report", description="Фотоотчёт в PDF"),
+        BotCommand(command="scanner", description="LiDAR-сканер на iPhone"),
         BotCommand(command="paysupport", description="Помощь с оплатой"),
         BotCommand(command="terms", description="Условия"),
     ])

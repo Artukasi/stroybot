@@ -1,4 +1,8 @@
-"""SQLite-хранилище: пользователи, баланс, платежи, журнал генераций, объекты, состояния диалогов."""
+"""SQLite-хранилище: пользователи, баланс, платежи, журнал генераций, объекты, состояния диалогов,
+LiDAR-сканы с iPhone."""
+import json
+import secrets
+import time
 from datetime import date
 
 import aiosqlite
@@ -62,6 +66,25 @@ CREATE TABLE IF NOT EXISTS stages (
     reminded INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS scan_codes (
+    code TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    expires INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scan_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    device TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    room TEXT,
+    data TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_scans_user ON scans(user_id);
 CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_object ON expenses(object_id);
 CREATE INDEX IF NOT EXISTS idx_stages_object ON stages(object_id);
@@ -469,3 +492,62 @@ async def mark_reminded(stage_id: int) -> None:
     async with _conn() as db:
         await db.execute("UPDATE stages SET reminded=1 WHERE id=?", (stage_id,))
         await db.commit()
+
+
+# ---------- LiDAR-сканер на iPhone ----------
+# Приложение СтройСкан подключается к аккаунту по одноразовому коду (живёт 10 минут)
+# и получает постоянный токен, с которым отправляет сканы комнат.
+
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+async def create_scan_code(user_id: int, ttl: int = 600) -> str:
+    code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
+    async with _conn() as db:
+        await db.execute("DELETE FROM scan_codes WHERE user_id=? OR expires<?", (user_id, int(time.time())))
+        await db.execute("INSERT INTO scan_codes (code, user_id, expires) VALUES (?, ?, ?)",
+                         (code, user_id, int(time.time()) + ttl))
+        await db.commit()
+    return code
+
+
+async def redeem_scan_code(code: str, device: str = "") -> tuple[int, str] | None:
+    """Код → (user_id, токен). Код одноразовый."""
+    code = "".join(ch for ch in code.upper() if ch.isalnum())
+    async with _conn() as db:
+        row = await (await db.execute("SELECT user_id, expires FROM scan_codes WHERE code=?", (code,))).fetchone()
+        if not row:
+            return None
+        await db.execute("DELETE FROM scan_codes WHERE code=?", (code,))
+        if row[1] < time.time():
+            await db.commit()
+            return None
+        token = secrets.token_urlsafe(32)
+        await db.execute("INSERT INTO scan_tokens (token, user_id, device) VALUES (?, ?, ?)",
+                         (token, row[0], device[:60]))
+        await db.commit()
+        return row[0], token
+
+
+async def user_by_scan_token(token: str) -> int | None:
+    if not token:
+        return None
+    async with _conn() as db:
+        row = await (await db.execute("SELECT user_id FROM scan_tokens WHERE token=?", (token,))).fetchone()
+        return row[0] if row else None
+
+
+async def add_scan(user_id: int, room: str, data: dict) -> int:
+    async with _conn() as db:
+        cur = await db.execute("INSERT INTO scans (user_id, room, data) VALUES (?, ?, ?)",
+                               (user_id, room[:60], json.dumps(data, ensure_ascii=False)))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def list_scans(user_id: int, limit: int = 20) -> list[dict]:
+    async with _conn() as db:
+        rows = await (await db.execute(
+            "SELECT id, room, data, created_at FROM scans WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (user_id, limit))).fetchall()
+    return [{"id": r[0], "room": r[1], "created_at": r[3], **json.loads(r[2])} for r in rows]

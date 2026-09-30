@@ -5,7 +5,8 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message,
+                           PreCheckoutQuery)
 
 from .. import db
 from ..config import PACKS, PRICES, REFERRAL_BONUS, config
@@ -313,11 +314,27 @@ async def cmd_reply(message: Message, command: CommandObject, bot: Bot):
     await message.answer("✅ Отправлено")
 
 
+@router.message(Command("scanner"))
+async def cmd_scanner(message: Message):
+    """Подключить приложение СтройСкан (LiDAR на iPhone Pro) к аккаунту."""
+    code = await db.create_scan_code(message.from_user.id)
+    text = ("📐 <b>СтройСкан: замер комнаты лидаром iPhone</b>\n\n"
+            "1. Установите приложение СтройСкан на iPhone Pro (инструкция в папке ios проекта).\n"
+            f"2. Откройте его и введите код <code>{code}</code>"
+            + (f" и адрес <code>{config.webapp_url}</code>" if config.webapp_url else "") + ".\n"
+            "Код действует 10 минут. После подключения сканы комнат будут приходить сюда.")
+    kb = None
+    if config.webapp_url.startswith("https://"):
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="📲 Подключить iPhone", url=f"{config.webapp_url}/scan/link?c={code}")]])
+    await message.answer(text, reply_markup=kb)
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
         "Команды: /start — начало, /menu — меню, /objects — мои объекты, "
-        "/report — фотоотчёт, /paysupport — помощь с оплатой, /terms — условия.\n"
+        "/report — фотоотчёт, /scanner — LiDAR-сканер на iPhone, /paysupport — помощь с оплатой, /terms — условия.\n"
         "Можно отправлять голосовые 🎙 — я их распознаю.",
         reply_markup=home_kb(),
     )

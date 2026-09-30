@@ -174,3 +174,41 @@ def test_report_needs_bot(fresh_db, ai):
             assert (await c.post("/api/report", data=f, headers=h)).status == 503
             assert (await db.get_user(9))["credits"] == config.welcome_credits
     asyncio.run(run())
+
+
+def test_lidar_scanner_pairing_and_rooms(fresh_db):
+    object.__setattr__(config, "bot_token", TOKEN)
+    bot = FakeBot()
+
+    async def run():
+        async with TestClient(TestServer(create_app(bot))) as c:
+            h = {"X-Telegram-Init-Data": sign({"id": 11})}
+            r = await (await c.post("/api/scan-code", headers=h)).json()
+            code = r["code"]
+            assert len(code) == 8 and f"/scan/link?c={code}" in r["link"]
+            page = await (await c.get(f"/scan/link?c={code}")).text()
+            assert "stroyscan://pair?server=" in page and code in page
+
+            assert (await c.post("/scan/pair", json={"code": "WRONG123"})).status == 403
+            r = await c.post("/scan/pair", json={"code": code.lower(), "device": "iPhone 15 Pro"})
+            token = (await r.json())["token"]
+            assert (await c.post("/scan/pair", json={"code": code})).status == 403   # код одноразовый
+            auth = {"Authorization": f"Bearer {token}"}
+            assert (await c.get("/scan/me", headers=auth)).status == 200
+            assert (await c.post("/scan/rooms", json={}, headers={"Authorization": "Bearer x"})).status == 401
+
+            room = {"room": "Кухня", "sizes": {"length": 3.4, "width": 2.9, "height": 2.7, "perimeter": 12.6,
+                                               "floor_area": 9.86, "wall_area": 30.1, "openings_area": 3.9},
+                    "walls": [{"length": 3.4, "height": 2.7}] * 4,
+                    "openings": [{"kind": "window", "width": 1.4, "height": 1.5}, {"kind": "door", "width": 0.8, "height": 2}],
+                    "plan": [[0, 0], [3.4, 0], [3.4, 2.9], [0, 2.9], ["x", 1]]}
+            r = await c.post("/scan/rooms", json=room, headers=auth)
+            assert r.status == 201
+            assert "Кухня" in bot.messages[-1][1] and "Окон: 1, дверей: 1" in bot.messages[-1][1]
+            assert (await c.post("/scan/rooms", json={"room": "x", "sizes": {}}, headers=auth)).status == 400
+
+            scans = (await (await c.get("/api/scans", headers=h)).json())["scans"]
+            assert scans[0]["room"] == "Кухня" and scans[0]["sizes"]["floor_area"] == 9.86 and len(scans[0]["plan"]) == 4
+            other = {"X-Telegram-Init-Data": sign({"id": 12})}
+            assert (await (await c.get("/api/scans", headers=other)).json())["scans"] == []
+    asyncio.run(run())

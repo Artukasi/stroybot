@@ -174,8 +174,8 @@ input.money { font: 800 28px/1.1 "Unbounded", sans-serif; letter-spacing: -.03em
 .btn:active { transform: scale(.98) translateY(1px); }
 .btn.quiet { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
 .btn.danger { color: var(--alarm); }
-.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.chips { display: flex; gap: 6px; margin-bottom: 12px; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .chips button { flex: 1 1 auto; border: 1.5px solid var(--line); background: none; border-radius: 999px; padding: 9px 10px;
   cursor: pointer; font-weight: 600; font-size: 14px; color: var(--ink-2); transition: all .25s var(--ease); }
 .chips button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--paper); }
@@ -212,7 +212,7 @@ input.money { font: 800 28px/1.1 "Unbounded", sans-serif; letter-spacing: -.03em
 
 .toast { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); z-index: 10;
   transform: translate(-50%, 20px) scale(.96); opacity: 0; pointer-events: none;
-  display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 999px; white-space: nowrap;
+  display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 999px; width: max-content; max-width: calc(100vw - 32px);
   background: var(--ink); color: var(--paper); font-weight: 600; font-size: 15px; box-shadow: 0 14px 30px -12px rgba(0,0,0,.5);
   transition: all .35s var(--spring); }
 .toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--signal); }
@@ -274,7 +274,7 @@ body.docked .dock { transform: translate(-50%, 0); visibility: visible; transiti
 @keyframes drawwall { 0% { stroke-dashoffset: 260; } 55%, 85% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 0; opacity: 0; } }
 @keyframes blink { 0%, 40% { opacity: 0; } 50%, 90% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes beam { 0%, 100% { transform: rotate(-28deg); } 50% { transform: rotate(28deg); } }
-.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .tool { text-align: left; border: 0; cursor: pointer; background: var(--surface); border-radius: 20px; padding: 14px 14px 13px;
   box-shadow: var(--shadow); display: grid; gap: 8px; align-content: start; min-height: 128px; transition: transform .18s var(--ease); }
 .tool:active { transform: scale(.97); }
@@ -309,7 +309,7 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 .examples { display: flex; gap: 6px; overflow-x: auto; margin: -2px -16px 12px; padding: 2px 16px; scrollbar-width: none; }
 .examples button { flex: none; border: 1.5px dashed var(--line); background: none; border-radius: 12px; padding: 7px 11px; cursor: pointer;
   font-size: 13px; color: var(--ink-2); max-width: 260px; text-align: left; }
-.styles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
+.styles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 12px; }
 .styles button { border: 1.5px solid var(--line); background: none; border-radius: 14px; padding: 11px 10px; cursor: pointer; font-weight: 600;
   font-size: 14px; color: var(--ink-2); transition: all .25s var(--ease); }
 .styles button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--paper); }
@@ -319,7 +319,7 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 .answer b, .answer strong { font-weight: 700; }
 .answer code { font-size: 14px; padding: 1px 5px; border-radius: 6px; background: var(--paper); }
 @keyframes plot { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
-.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
 
 /* ожидание ИИ: карандаш чертит план */
 .drafting { display: grid; justify-items: center; gap: 10px; padding: 26px 16px 22px; text-align: center; }
@@ -405,7 +405,7 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 .plan-svg text { fill: var(--ink); font: 700 13px "Unbounded", sans-serif; opacity: 0; animation: fadein .5s 1.3s forwards; }
 @keyframes drawplan { to { stroke-dashoffset: 0; } }
 @keyframes fadein { to { opacity: 1; } }
-.stats3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.stats3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
 .stats3 div { background: var(--paper); border-radius: 14px; padding: 10px; }
 .stats3 b { display: block; font: 700 16px/1.2 "Unbounded", sans-serif; }
 .stats3 span { font-size: 12px; color: var(--ink-2); }
@@ -599,7 +599,7 @@ function unroll(root = document) {
 // ---------- маршруты ----------
 async function route() {
   const h = location.hash.slice(1);
-  clearScreen(); dock(h);
+  clearScreen(); closeOverlays(); dock(h);
   try {
     if (h.startsWith("obj/")) return await showObject(+h.split("/")[1]);
     if (h === "new") return showNew();
@@ -628,6 +628,11 @@ function paint(html, after) {
   $app.dataset.ready = 1;
 }
 window.addEventListener("hashchange", route);
+// любое действие, которое не дошло до сервера: говорим об этом, а не молчим
+window.addEventListener("unhandledrejection", e => {
+  e.preventDefault(); notify("error");
+  toast(e.reason?.message === "auth" ? "Откройте приложение из бота" : "Не сохранилось, проверьте интернет");
+});
 const go = h => { haptic(); location.hash = h; };
 
 function emptyBlock(title, text, action = "") {
@@ -993,12 +998,15 @@ function creditsSheet(need, have) {
   const close = () => { bg.remove(); sh.remove(); };
   bg.onclick = close; sh.querySelector("[data-x]").onclick = close;
   sh.querySelector("[data-go]").onclick = () => { close(); go("me"); };
+  overlays.push(close);
   document.body.append(bg, sh);
 }
 
 let timers = [];
-const cleanups = [];
+const cleanups = [];   // датчики и таймеры текущего экрана
+const overlays = [];   // камера и нижние листы: закрываются при переходе на другой экран
 function clearScreen() { timers.forEach(clearInterval); timers = []; while (cleanups.length) cleanups.pop()(); }
+function closeOverlays() { while (overlays.length) overlays.pop()(); }
 
 function drafting(msgs) {
   return `<section class="panel drafting" aria-live="polite">
@@ -1105,7 +1113,9 @@ async function openCamera(hint = "Держите телефон ровно: ли
       if (lvl && !wasLevel) haptic("light");
       wasLevel = lvl;
     });
-    const close = r => { stream.getTracks().forEach(t => t.stop()); stop?.(); el.remove(); done(r); };
+    let closed = false;
+    const close = r => { if (closed) return; closed = true; stream.getTracks().forEach(t => t.stop()); stop?.(); el.remove(); done(r); };
+    overlays.push(() => close(null));
     el.querySelector("[data-x]").onclick = () => close(null);
     el.querySelector("[data-g]").onclick = async () => { const [f] = await pickFile(); close(f || null); };
     el.querySelector(".shutter").onclick = () => {
@@ -1465,6 +1475,7 @@ window.pairIphone = async () => {
       <div class="pair"><button class="btn quiet" data-x>Закрыть</button><button class="btn" data-open>Открыть ссылку</button></div>`;
     const close = () => { bg.remove(); sh.remove(); };
     bg.onclick = close; sh.querySelector("[data-x]").onclick = close;
+    overlays.push(close);
     sh.querySelector("[data-open]").onclick = () => tg?.openLink ? tg.openLink(link) : open(link);
     document.body.append(bg, sh);
   } catch (e) { aiError(e); }
@@ -1634,7 +1645,7 @@ async function showMe() {
       haptic("medium");
       try {
         const { link } = await api("/invoice", { method: "POST", body: { pack: b.dataset.pack } });
-        if (tg?.openInvoice) tg.openInvoice(link, st => { if (st === "paid") { notify("success"); toast("Кредиты начислены"); setTimeout(showMe, 800); } });
+        if (tg?.openInvoice) tg.openInvoice(link, st => { if (st === "paid") { notify("success"); toast("Кредиты начислены"); setTimeout(() => location.hash === "#me" && showMe(), 800); } });
         else location.href = link;
       } catch (e) { aiError(e); }
     });

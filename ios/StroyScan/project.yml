@@ -9,6 +9,7 @@ targets:
     type: application
     platform: iOS
     sources: [Sources]
+    scheme: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ru.stroybot.stroyscan

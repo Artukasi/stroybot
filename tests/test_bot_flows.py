@@ -196,3 +196,86 @@ def test_unknown_command_and_photo_without_mode(env):
     s = run(env, msg("/start"), msg("/whatever"), photo())
     assert any("Не знаю такой команды" in t for t in s.texts())
     assert any("Что сделать с фото" in t for t in s.texts())
+
+
+def test_every_button_has_a_handler(env):
+    """Каждая кнопка бота кем-то обрабатывается: нет «вечных часиков» на нажатии."""
+    from aiogram.dispatcher.event.bases import UNHANDLED
+
+    from bot import keyboards as kb
+    bot, dp, session = env
+    run(env, msg("/start"), cb("role:foreman"), cb("obj:new"), msg("Дача"))
+    (obj,) = asyncio.run(db.list_objects(100))
+    oid = obj["id"]
+    run(env, cb(f"obj:stage:{oid}"), msg("Демонтаж"), cb(f"obj:exp:{oid}:material"), msg("плитка 500"))
+    stage = asyncio.run(db.list_stages(oid))[0]
+    exp = asyncio.run(db.list_expenses(oid))[0]
+    boards = [kb.roles_kb(), kb.main_menu("foreman"), kb.main_menu("private"), kb.styles_kb(), kb.calcs_kb(),
+              kb.packs_kb(), kb.home_kb(), kb.after_design_kb(), kb.use_text_kb(), kb.objects_kb([obj]),
+              kb.object_kb(obj), kb.stages_kb(oid, [stage]), kb.expenses_kb(oid, [exp]),
+              kb.back_to_list_kb(), kb.back_to_object_kb(oid), kb.report_kb(1), kb.report_objects_kb([obj]),
+              kb.confirm_delete_kb(oid)]
+    datas = []
+    for board in boards:
+        for row in board.inline_keyboard:
+            datas += [b.callback_data for b in row if b.callback_data]
+    assert len(datas) > 30
+    unhandled = []
+
+    async def go():
+        for d in dict.fromkeys(datas):
+            if "del!" in d:
+                continue      # удаление проверяем отдельно, иначе объект пропадёт раньше времени
+            if await dp.feed_update(bot, cb(d)) is UNHANDLED:
+                unhandled.append(d)
+    asyncio.run(go())
+    assert unhandled == []
+
+
+def test_all_commands_answer(env):
+    cmds = ["/start", "/menu", "/objects", "/report", "/scanner", "/paysupport", "/terms", "/help", "/stats"]
+    bot, dp, session = env
+    for c in cmds:
+        before = len(session.calls)
+        run(env, msg(c))
+        assert len(session.calls) > before, f"{c} ничего не ответил"
+    assert any("СтройСкан" in t and "<code>" in t for t in session.texts())
+    assert any("/scanner" in t for t in session.texts())
+
+
+def test_mini_app_with_real_bot_object(env, monkeypatch):
+    """Mini App вызывает настоящие методы aiogram (счёт, документ, фото, сообщение)."""
+    import aiohttp
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from bot.web import create_app
+    from .test_stage2 import TOKEN, sign
+    bot, dp, session = env
+    object.__setattr__(config, "bot_token", TOKEN)
+    orig = session.make_request
+
+    async def make_request(b, method, timeout=None):
+        if type(method).__name__ == "CreateInvoiceLink":
+            session.calls.append(method)
+            return "https://t.me/$abc"
+        return await orig(b, method, timeout)
+    monkeypatch.setattr(session, "make_request", make_request)
+
+    async def go():
+        async with TestClient(TestServer(create_app(bot))) as c:
+            h = {"X-Telegram-Init-Data": sign({"id": 100, "first_name": "Артём"})}
+            prof = await (await c.get("/api/profile", headers=h)).json()
+            assert prof["invite"]["link"] == "https://t.me/stroybot_test?start=ref_100"
+            assert (await (await c.post("/api/invoice", json={"pack": "m"}, headers=h)).json())["link"] == "https://t.me/$abc"
+            assert (await c.post("/api/send", json={"text": "<b>Смета</b>"}, headers=h)).status == 200
+            assert (await c.post("/api/send", json={"photo": "https://files/x.png", "text": "Лофт"}, headers=h)).status == 200
+            f = aiohttp.FormData()
+            f.add_field("photos", _png(), filename="p.png", content_type="image/png")
+            f.add_field("captions", "Стяжка")
+            assert (await c.post("/api/report", data=f, headers=h)).status == 200
+    asyncio.run(go())
+    names = [type(m).__name__ for m in session.calls]
+    for n in ("CreateInvoiceLink", "SendMessage", "SendPhoto", "SendDocument"):
+        assert n in names
+    inv = next(m for m in session.calls if type(m).__name__ == "CreateInvoiceLink")
+    assert inv.currency == "XTR" and inv.prices[0].amount == 250

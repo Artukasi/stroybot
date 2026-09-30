@@ -61,7 +61,7 @@ Telegram открывает Mini App только по адресу
 - Экраны Mini App — `bot/webapp/index.html`, его API — `bot/web.py` и `bot/web_tools.py`
 
 ## Проверка
-`python -m pytest -q` — 33 теста: калькуляторы, база, оплата и возвраты, рефералка, учёт объектов,
+`python -m pytest -q` — 36 тестов: калькуляторы, база, оплата и возвраты, рефералка, учёт объектов,
 PDF, защита Mini App и сквозные сценарии бота (без настоящего Telegram и kie.ai).
 
 ## Продолжить в Claude Code

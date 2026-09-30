@@ -101,7 +101,8 @@ struct PlanLabels: View {
                 let j = (i + 1) % points.count
                 let len = simd_distance(points[i], points[j])
                 if len > 0.4, pts.count == points.count {
-                    let mx = (pts[i].x + pts[j].x) / 2, my = (pts[i].y + pts[j].y) / 2
+                    let mx = (pts[i].x + pts[j].x) / 2
+                    let my = (pts[i].y + pts[j].y) / 2
                     let d = max(hypot(mx - cx, my - cy), 1)
                     Text(fmt(len))
                         .font(.caption.bold())

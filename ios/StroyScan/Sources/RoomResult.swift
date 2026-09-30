@@ -39,7 +39,7 @@ struct RoomResult {
             "sizes": ["length": r(length), "width": r(width), "height": r(height), "perimeter": r(perimeter),
                       "floor_area": r(floorArea), "wall_area": r(wallArea), "openings_area": r(openingsArea)],
             "walls": walls.map { ["length": r($0.length), "height": r($0.height)] },
-            "openings": openings.map { ["kind": $0.kind, "width": r($0.width), "height": r($0.height)] },
+            "openings": openings.map { ["kind": $0.kind, "width": r($0.width), "height": r($0.height)] as [String: Any] },
             "plan": plan.map { [r($0.x), r($0.y)] },
         ]
     }

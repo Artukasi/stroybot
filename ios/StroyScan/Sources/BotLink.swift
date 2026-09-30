@@ -8,6 +8,8 @@ final class BotLink: ObservableObject {
     @Published private(set) var connected: Bool = UserDefaults.standard.string(forKey: "token") != nil
     @Published var message: String?
     @Published var busy = false
+    /// Номер последнего отправленного скана на сервере (нужен для ИИ-ремонта)
+    @Published var lastScanId: Int?
 
     private var token: String? { UserDefaults.standard.string(forKey: "token") }
 
@@ -42,7 +44,13 @@ final class BotLink: ObservableObject {
         busy = true
         defer { busy = false }
         do {
-            _ = try await post(server + "/scan/rooms", body: result.payload, auth: true)
+            let data = try await post(server + "/scan/rooms", body: result.payload, auth: true)
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            if let n = json?["id"] as? NSNumber {
+                lastScanId = n.intValue
+            } else if let s = json?["id"] as? String {
+                lastScanId = Int(s)
+            }
             message = "Скан отправлен в бот."
             return true
         } catch {
@@ -51,9 +59,22 @@ final class BotLink: ObservableObject {
         }
     }
 
-    private func post(_ url: String, body: Any, auth: Bool) async throws -> Data {
+    /// ИИ перерисовывает фото комнаты в выбранном стиле. Возвращает ссылку на картинку.
+    func design(scanId: Int, style: String) async throws -> (image: URL, credits: Int?) {
+        let body: [String: Any] = ["id": scanId, "style": style]
+        let data = try await post(server + "/scan/design", body: body, auth: true, timeout: 240, design: true)
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard let link = json?["image"] as? String, let url = URL(string: link) else {
+            throw LinkError.message("Сервер ответил странно. Попробуйте ещё раз.")
+        }
+        let credits = (json?["credits"] as? NSNumber)?.intValue
+        return (url, credits)
+    }
+
+    private func post(_ url: String, body: Any, auth: Bool,
+                      timeout: TimeInterval = 30, design: Bool = false) async throws -> Data {
         guard let u = URL(string: url) else { throw LinkError.message("Неверный адрес сервера.") }
-        var req = URLRequest(url: u, timeoutInterval: 30)
+        var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if auth, let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -64,7 +85,10 @@ final class BotLink: ObservableObject {
         case 200...299: return data
         case 401: disconnect(); throw LinkError.message("Подключение сброшено. Получите новый код командой /scanner в боте.")
         case 403: throw LinkError.message("Код не подошёл или устарел. Получите новый командой /scanner в боте.")
+        case 402: throw LinkError.message("Не хватает кредитов. Пополните в боте.")
+        case 409: throw LinkError.message("Нужно фото комнаты")
         case 429: throw LinkError.message("Слишком много попыток. Подождите 10 минут.")
+        case 502 where design: throw LinkError.message("ИИ не ответил, кредиты вернули. Попробуйте ещё раз.")
         default: throw LinkError.message("Ошибка сервера (\(status)).")
         }
     }

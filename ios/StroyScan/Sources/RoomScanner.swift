@@ -1,3 +1,4 @@
+import ARKit
 import RoomPlan
 import SwiftUI
 
@@ -21,6 +22,8 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     @Published var result: RoomResult?
     @Published var failed: String?
     @Published var finishing = false
+    /// Кадр камеры в момент «Готово» — фото комнаты для ИИ-ремонта
+    private var photo: Data?
 
     override init() { super.init() }
     // RoomCaptureViewDelegate требует NSCoding
@@ -29,6 +32,9 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
 
     func finish() {
         finishing = true
+        if let buffer = view?.captureSession.arSession.currentFrame?.capturedImage {
+            photo = RoomResult.jpeg(from: buffer)
+        }
         view?.captureSession.stop()
     }
 
@@ -41,6 +47,7 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
 
     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
         var result = RoomResult(processedResult)
+        result.photo = photo
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Комната.usdz")
         try? FileManager.default.removeItem(at: url)
         if (try? processedResult.export(to: url)) != nil { result.usdz = url }

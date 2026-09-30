@@ -1,5 +1,22 @@
+import PhotosUI
 import SwiftUI
 import simd
+
+/// Стили ИИ-ремонта на фото. Ключи совпадают с bot/prompts.py → DESIGN_STYLES.
+struct DesignStyle: Identifiable {
+    let key: String
+    let title: String
+    var id: String { key }
+}
+
+let designStyles: [DesignStyle] = [
+    DesignStyle(key: "scandi", title: "Скандинавский"),
+    DesignStyle(key: "loft", title: "Лофт"),
+    DesignStyle(key: "modern", title: "Современный"),
+    DesignStyle(key: "classic", title: "Неоклассика"),
+    DesignStyle(key: "japandi", title: "Джапанди"),
+    DesignStyle(key: "budget", title: "Бюджетный ремонт"),
+]
 
 /// Результат скана: план сверху с длинами стен, площади и отправка в бот.
 struct ResultView: View {
@@ -7,50 +24,41 @@ struct ResultView: View {
     @State var result: RoomResult
     @State private var drawn: CGFloat = 0
     @State private var sent = false
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var designStyle = "scandi"
+    @State private var designing = false
+    @State private var designURL: URL?
+    @State private var designError: String?
+    @State private var credits: Int?
     private let rooms = ["Комната", "Кухня", "Ванная", "Санузел", "Спальня", "Гостиная", "Детская", "Коридор", "Балкон"]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                PlanShape(points: result.plan)
-                    .trim(from: 0, to: drawn)
-                    .stroke(Palette.ink, style: StrokeStyle(lineWidth: 4, lineJoin: .round))
-                    .background(PlanShape(points: result.plan).fill(Palette.draft.opacity(0.1)))
-                    .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
-                    .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
-                    .padding(28)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-                    .onAppear { withAnimation(.easeOut(duration: 1.4)) { drawn = 1 } }
+                planView
 
                 Picker("Помещение", selection: $result.room) {
                     ForEach(rooms, id: \.self) { Text($0) }
                 }
                 .pickerStyle(.menu)
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    stat("Пол", fmt(result.floorArea), "м²")
-                    stat("Стены без проёмов", fmt(result.wallArea), "м²")
-                    stat("Периметр", fmt(result.perimeter), "м")
-                    stat("Высота", fmt(result.height), "м")
-                    stat("Длина × ширина", "\(fmt(result.length)) × \(fmt(result.width))", "м")
-                    stat("Окна и двери", "\(result.windows) и \(result.doors)", "шт")
+                statsGrid
+                if !result.items.isEmpty { furnitureList }
+                photoSection
+
+                if !result.world.isEmpty {
+                    NavigationLink {
+                        Renovation3DView(world: result.world, room: result.room)
+                    } label: {
+                        Label("Ремонт в 3D", systemImage: "cube.transparent")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
+                            .background(Palette.draft, in: RoundedRectangle(cornerRadius: 16))
+                            .foregroundStyle(.white)
+                    }
                 }
 
-                Button {
-                    Task { sent = await link.send(result) }
-                } label: {
-                    Group {
-                        if link.busy { ProgressView() }
-                        else { Label(sent ? "Отправлено в СтройБот" : "Отправить в СтройБот", systemImage: sent ? "checkmark" : "paperplane.fill") }
-                    }
-                    .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
-                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 16))
-                    .foregroundStyle(Palette.ink)
-                }
-                .disabled(!link.connected || link.busy)
-                if !link.connected {
-                    Text("Сначала подключите бота на главном экране.").font(.footnote).foregroundStyle(.secondary)
-                }
+                sendButton
+                if sent, let scanId = link.lastScanId { designSection(scanId) }
                 if let usdz = result.usdz {
                     ShareLink(item: usdz) { Label("3D-модель комнаты (USDZ)", systemImage: "cube") }
                 }
@@ -59,6 +67,40 @@ struct ResultView: View {
         }
         .navigationTitle(result.room)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: pickerItem) { item in
+            guard let item else { return }
+            Task { await loadPhoto(item) }
+        }
+    }
+
+    // MARK: - План
+
+    private var planView: some View {
+        PlanShape(points: result.plan)
+            .trim(from: 0, to: drawn)
+            .stroke(Palette.ink, style: StrokeStyle(lineWidth: 4, lineJoin: .round))
+            .background(PlanShape(points: result.plan).fill(Palette.draft.opacity(0.1)))
+            .background(PlanFurniture(points: result.plan, items: result.items).opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
+            .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
+            .padding(28)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+            .onAppear { withAnimation(.easeOut(duration: 1.4)) { drawn = 1 } }
+    }
+
+    // MARK: - Цифры
+
+    private var statsGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+            stat("Пол", fmt(result.floorArea), "м²")
+            stat("Стены без проёмов", fmt(result.wallArea), "м²")
+            stat("Периметр", fmt(result.perimeter), "м")
+            stat("Высота", fmt(result.height), "м")
+            stat("Длина × ширина", "\(fmt(result.length)) × \(fmt(result.width))", "м")
+            stat("Окна и двери", "\(result.windows) и \(result.doors)", "шт")
+            stat("Плинтус", fmt(result.skirting), "м")
+            stat("Откосы окон", fmt(result.slopes), "м")
+        }
     }
 
     private func stat(_ title: String, _ value: String, _ unit: String) -> some View {
@@ -69,6 +111,167 @@ struct ResultView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var furnitureList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Мебель и техника").font(.headline)
+            ForEach(Array(result.items.enumerated()), id: \.offset) { _, item in
+                HStack {
+                    RoundedRectangle(cornerRadius: 3).fill(furnitureColor(item.kind)).frame(width: 14, height: 14)
+                    Text(item.title)
+                    Spacer()
+                    Text(sizeText(item)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            Text("Ширина × глубина × высота, см").font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func sizeText(_ item: RoomResult.Item) -> String {
+        let w = Int((item.width * 100).rounded())
+        let d = Int((item.depth * 100).rounded())
+        let h = Int((item.height * 100).rounded())
+        return "\(w) × \(d) × \(h)"
+    }
+
+    // MARK: - Фото
+
+    private var photoSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Фото комнаты").font(.headline)
+            if let data = result.photo, let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable().scaledToFill()
+                    .frame(maxWidth: .infinity).frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else {
+                Text("Фото нет. Выберите снимок комнаты, чтобы ИИ показал ремонт.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            PhotosPicker(selection: $pickerItem, matching: .images) {
+                Label("Выбрать другое фото комнаты", systemImage: "photo.on.rectangle")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func loadPhoto(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data),
+              let jpeg = RoomResult.jpeg(image) else { return }
+        result.photo = jpeg
+        // новое фото нужно заново отправить в бот
+        sent = false
+        designURL = nil
+    }
+
+    // MARK: - Отправка
+
+    private var sendButton: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                Task { sent = await link.send(result) }
+            } label: {
+                Group {
+                    if link.busy { ProgressView() }
+                    else { Label(sent ? "Отправлено в СтройБот" : "Отправить в СтройБот", systemImage: sent ? "checkmark" : "paperplane.fill") }
+                }
+                .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
+                .background(Palette.signal, in: RoundedRectangle(cornerRadius: 16))
+                .foregroundStyle(Palette.ink)
+            }
+            .disabled(!link.connected || link.busy)
+            if !link.connected {
+                Text("Сначала подключите бота на главном экране.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - ИИ-ремонт на фото
+
+    private func designSection(_ scanId: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Ремонт на фото").font(.headline)
+            Text("ИИ перерисует фото комнаты в выбранном стиле. Тратит кредиты в боте.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Picker("Стиль", selection: $designStyle) {
+                ForEach(designStyles) { Text($0.title).tag($0.key) }
+            }
+            .pickerStyle(.menu)
+            Button {
+                Task { await runDesign(scanId) }
+            } label: {
+                HStack {
+                    if designing { ProgressView() }
+                    Text(designing ? "ИИ рисует, это до 3 минут…" : "Показать ремонт на фото").bold()
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
+                .foregroundStyle(Palette.ink)
+            }
+            .disabled(designing || result.photo == nil)
+            if result.photo == nil {
+                Text("Нужно фото комнаты").font(.footnote).foregroundStyle(.secondary)
+            }
+            if let designError {
+                Text(designError).font(.footnote).foregroundStyle(.red)
+            }
+            if let designURL { designResult(designURL) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func designResult(_ url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFit()
+                } else if phase.error != nil {
+                    Text("Не удалось загрузить картинку.").foregroundStyle(.secondary)
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 200)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            HStack {
+                ShareLink(item: url) { Label("Поделиться", systemImage: "square.and.arrow.up") }
+                Spacer()
+                if let credits { Text("Кредитов: \(credits)").font(.footnote).foregroundStyle(.secondary) }
+            }
+        }
+    }
+
+    private func runDesign(_ scanId: Int) async {
+        designing = true
+        designError = nil
+        defer { designing = false }
+        do {
+            let answer = try await link.design(scanId: scanId, style: designStyle)
+            designURL = answer.image
+            credits = answer.credits
+        } catch {
+            designError = (error as? LinkError)?.text ?? "Не получилось: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Цвет мебели на плане
+func furnitureColor(_ kind: String) -> Color {
+    switch kind {
+    case "sofa", "bed", "chair": return Color(red: 0.36, green: 0.55, blue: 0.80)
+    case "table", "storage", "stairs": return Color(red: 0.72, green: 0.53, blue: 0.34)
+    case "sink", "toilet", "bathtub": return Color(red: 0.45, green: 0.75, blue: 0.80)
+    case "refrigerator", "stove", "oven", "dishwasher", "washerDryer": return Color(red: 0.55, green: 0.58, blue: 0.62)
+    case "television": return Color(red: 0.25, green: 0.25, blue: 0.3)
+    default: return Color(red: 0.6, green: 0.6, blue: 0.6)
     }
 }
 
@@ -84,6 +287,31 @@ struct PlanShape: Shape {
         pts.dropFirst().forEach { p.addLine(to: $0) }
         p.closeSubpath()
         return p
+    }
+}
+
+/// Мебель на плане: повёрнутые прямоугольники
+struct PlanFurniture: View {
+    let points: [SIMD2<Double>]
+    let items: [RoomResult.Item]
+
+    var body: some View {
+        Canvas { context, size in
+            guard let frame = planFrame(points, in: CGRect(origin: .zero, size: size)) else { return }
+            for item in items {
+                let w = CGFloat(item.width) * frame.k
+                let d = CGFloat(item.depth) * frame.k
+                let cx = frame.ox + CGFloat(item.x) * frame.k
+                let cy = frame.oy + CGFloat(item.y) * frame.k
+                var t = CGAffineTransform(translationX: cx, y: cy)
+                t = t.rotated(by: CGFloat(item.angle))
+                let rect = CGRect(x: -w / 2, y: -d / 2, width: w, height: d)
+                let path = Path(roundedRect: rect, cornerRadius: 2).applying(t)
+                let color = furnitureColor(item.kind)
+                context.fill(path, with: .color(color.opacity(0.55)))
+                context.stroke(path, with: .color(color), lineWidth: 1.5)
+            }
+        }
     }
 }
 
@@ -116,9 +344,16 @@ struct PlanLabels: View {
     }
 }
 
+/// Масштаб и сдвиг, которыми план вписывается в рамку
+func planFrame(_ points: [SIMD2<Double>], in rect: CGRect) -> (k: CGFloat, ox: CGFloat, oy: CGFloat)? {
+    guard let maxX = points.map(\.x).max(), let maxY = points.map(\.y).max(), maxX > 0, maxY > 0 else { return nil }
+    let k = min(rect.width / CGFloat(maxX), rect.height / CGFloat(maxY))
+    let ox = rect.minX + (rect.width - CGFloat(maxX) * k) / 2
+    let oy = rect.minY + (rect.height - CGFloat(maxY) * k) / 2
+    return (k, ox, oy)
+}
+
 func fit(_ points: [SIMD2<Double>], in rect: CGRect) -> [CGPoint] {
-    guard let maxX = points.map(\.x).max(), let maxY = points.map(\.y).max(), maxX > 0, maxY > 0 else { return [] }
-    let k = min(rect.width / maxX, rect.height / maxY)
-    let ox = rect.minX + (rect.width - maxX * k) / 2, oy = rect.minY + (rect.height - maxY * k) / 2
-    return points.map { CGPoint(x: ox + $0.x * k, y: oy + $0.y * k) }
+    guard let f = planFrame(points, in: rect) else { return [] }
+    return points.map { CGPoint(x: f.ox + CGFloat($0.x) * f.k, y: f.oy + CGFloat($0.y) * f.k) }
 }

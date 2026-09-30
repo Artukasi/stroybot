@@ -403,6 +403,13 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
   stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: drawplan 1.4s var(--ease) forwards; }
 .plan-svg .dim { stroke: var(--draft); stroke-width: 1.2; opacity: 0; animation: fadein .5s 1.1s forwards; }
 .plan-svg .furn { fill: color-mix(in srgb, var(--signal) 45%, transparent); stroke: var(--ink); stroke-width: 1.2; opacity: 0; animation: fadein .5s 1.5s forwards; }
+.pf-shots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.pf-shots .shot { margin: 0; }
+.pf-shots .shot .pair { grid-template-columns: 1fr; gap: 6px; }
+.pf-shots .shot .btn { padding: 10px 8px; }
+.pf-brand { flex-wrap: wrap; gap: 8px; }
+.pf-brand input { min-width: 0; flex: 1 1 180px; }
+@media (max-width: 360px) { .pf-shots { grid-template-columns: 1fr; } }
 .scan-img { width: 100%; border-radius: 14px; display: block; margin-top: 12px; }
 .plan-svg text { fill: var(--ink); font: 700 13px "Unbounded", sans-serif; opacity: 0; animation: fadein .5s 1.3s forwards; }
 @keyframes drawplan { to { stroke-dashoffset: 0; } }
@@ -613,6 +620,7 @@ async function route() {
     if (h === "t/check") return await showCheck();
     if (h === "t/measure") return await showMeasure();
     if (h === "t/level") return showLevel();
+    if (h === "t/portfolio") return await showPortfolio();
     if (h.startsWith("t/report")) return await showReport(+h.split("/")[2] || 0);
     if (h.startsWith("t/") && TEXT_TOOLS[h.slice(2)]) return await showTextTool(h.slice(2));
     return await showHome();
@@ -967,6 +975,7 @@ const TOOL_ICON = {
   report: `<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="8" width="26" height="19" rx="3"/><path d="M12 8l2-3h6l2 3"/><circle class="acc" cx="17" cy="17.5" r="5"/></svg>`,
   calc: `<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="7" y="4" width="20" height="26" rx="3"/><rect x="11" y="8" width="12" height="6" rx="1"/><path class="acc" d="M12 20h.1M17 20h.1M22 20h.1M12 25h.1M17 25h.1M22 25h.1" stroke-width="3"/></svg>`,
   level: `<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="28" height="10" rx="5"/><path d="M13 12v10M21 12v10"/><circle class="acc" cx="17" cy="17" r="2.6" fill="currentColor"/></svg>`,
+  post: `<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="6" width="26" height="22" rx="3"/><path d="M17 6v22"/><path class="acc" d="M20 20l3-4 4 5" stroke-linecap="round"/></svg>`,
   measure: `<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 9h24v18H5z"/><path class="acc" d="M5 4v3M29 4v3M5 5.5h24" stroke-linecap="round"/></svg>`,
 };
 const PRO = () => (state.profile?.pro_roles || []).includes(state.profile?.role);
@@ -1218,6 +1227,7 @@ async function showTools() {
       ${tile("calc", "calc", "Калькулятор", "Сколько купить материала")}
       ${tile("kp", "t/kp", "КП для заказчика", "Для прорабов и компаний")}
       ${tile("report", "t/report", "Фотоотчёт в PDF", "Отчёт заказчику в чат")}
+      ${tile("post", "t/portfolio", "Портфолио", "Посты и Reels «до/после»")}
     </div>`);
 }
 
@@ -1328,6 +1338,98 @@ async function showDesign() {
       } catch (err) { clearScreen(); out.innerHTML = ""; aiError(err); }
       btn.disabled = false;
     };
+  });
+}
+
+// ---------- портфолио «до/после»: пост и видео для Reels ----------
+function wireBA(ba) {
+  const move = x => { const b = ba.getBoundingClientRect(); ba.style.setProperty("--x", Math.max(0, Math.min(100, (x - b.left) / b.width * 100)) + "%"); };
+  ba.onpointerdown = ev => { ba.classList.remove("reveal"); ba.setPointerCapture(ev.pointerId); move(ev.clientX); ba.onpointermove = m => move(m.clientX); };
+  ba.onpointerup = () => { ba.onpointermove = null; };
+}
+async function showPortfolio() {
+  setBack(() => go("tools"));
+  await loadProfile();
+  let data = { items: [], brand: "" };
+  try { data = await api("/portfolio"); } catch (e) { return aiError(e); }
+  let before = null, after = null;
+  paint(`
+    <header class="top"><div class="grow"><h1 class="title">Портфолио</h1>
+      <div class="sub">Фото до и после ремонта → картинка, пост для Telegram и VK, видео для Reels</div></div></header>
+    <form class="panel pad" id="f-pf">
+      <div class="pf-shots">${photoBox("pf-b", "До", "Как было")}${photoBox("pf-a", "После", "С той же точки")}</div>
+      <label class="field"><span>Что за работа</span><input id="pf-title" maxlength="120" placeholder="Ванная под ключ за 12 дней, Казань"></label>
+      <button class="btn">Добавить в портфолио</button>
+    </form>
+    <section class="panel pad">
+      <label class="field" style="margin:0"><span>Подпись бригады на картинках и в видео</span>
+        <div class="row pf-brand"><input id="pf-brand" class="grow" maxlength="80" placeholder="Бригада Артура · +7 900 000-00-00" value="${esc(data.brand || "")}">
+        <button type="button" class="btn quiet" id="pf-bsave" style="width:auto">Сохранить</button></div></label>
+    </section>
+    <div id="pf-list">${data.items.length ? "" : emptyBlock("Здесь будут ваши работы", "Добавьте первую пару фото. Лучшие работы продают вас лучше любой рекламы.")}</div>`, () => {
+    wirePhotoBox("pf-b", b => { before = b; }, "Снимайте с той же точки, что и потом «после»");
+    wirePhotoBox("pf-a", b => { after = b; }, "Встаньте туда же, где снимали «до»");
+    document.getElementById("pf-bsave").onclick = async () => {
+      try { await api("/portfolio/brand", { method: "POST", body: { brand: document.getElementById("pf-brand").value } }); notify("success"); toast("Подпись сохранена"); }
+      catch (e) { aiError(e); }
+    };
+    document.getElementById("f-pf").onsubmit = async e => {
+      e.preventDefault();
+      if (!before || !after) { notify("error"); return toast("Нужны оба фото: до и после"); }
+      const fd = new FormData(); fd.append("before", before, "before.jpg"); fd.append("after", after, "after.jpg");
+      fd.append("title", document.getElementById("pf-title").value);
+      const btn = e.target.querySelector(".btn:last-child"); btn.disabled = true;
+      try { await api("/portfolio", { method: "POST", body: fd }); notify("success"); toast("Работа добавлена"); await showPortfolio(); }
+      catch (err) { aiError(err); btn.disabled = false; }
+    };
+    const list = document.getElementById("pf-list");
+    data.items.forEach(it => {
+      const card = document.createElement("section");
+      card.className = "panel pad";
+      card.innerHTML = `
+        <div class="ba reveal"><img alt="${esc(it.title || "Работа")}: после" src="${esc(it.after)}">
+          <div class="before"><img alt="До ремонта" src="${esc(it.before)}"></div>
+          <div class="handle"></div><span class="tag l">До</span><span class="tag r">После</span></div>
+        <strong>${esc(it.title || "Работа")}</strong><div class="muted">${fdate(it.created_at)}</div>
+        <div class="actions"><button class="btn" data-post>Пост${costWord("post")}</button><button class="btn quiet" data-reel>Видео для Reels</button></div>
+        <button class="btn quiet" data-del style="margin-top:6px">Удалить</button>
+        <div data-out></div>`;
+      list.append(card);
+      const ba = card.querySelector(".ba");
+      ba.addEventListener("animationend", () => { ba.classList.remove("reveal"); ba.style.setProperty("--x", "50%"); }, { once: true });
+      wireBA(ba);
+      const out = card.querySelector("[data-out]");
+      card.querySelector("[data-post]").onclick = async e => {
+        e.target.disabled = true; out.innerHTML = drafting(["Смотрю на фото…", "Пишу пост…", "Подбираю хэштеги…"]); rotateMsgs(out);
+        try {
+          const r = await api(`/portfolio/${it.id}/post`, { method: "POST" });
+          clearScreen(); notify("success"); state.profile.credits = r.credits;
+          out.innerHTML = `<img class="scan-img" alt="Картинка до и после" src="${esc(r.collage)}">
+            <section class="panel pad answer" style="margin-top:12px;white-space:pre-wrap">${r.html}</section>
+            <div class="actions"><button class="btn quiet" data-psend>Отправить в чат</button><button class="btn quiet" data-copy>Скопировать</button></div>`;
+          out.querySelector("[data-psend]").onclick = async () => {
+            try { await api(`/portfolio/${it.id}/send`, { method: "POST", body: { text: r.raw } }); toast("Картинка и пост в чате с ботом"); } catch (err) { aiError(err); }
+          };
+          out.querySelector("[data-copy]").onclick = async () => {
+            try { await navigator.clipboard.writeText(r.raw); toast("Скопировано"); } catch { toast("Не удалось скопировать"); }
+          };
+        } catch (err) { clearScreen(); out.innerHTML = ""; aiError(err); }
+        e.target.disabled = false;
+      };
+      card.querySelector("[data-reel]").onclick = async e => {
+        e.target.disabled = true; out.innerHTML = drafting(["Монтирую «до»…", "Открываю шторку…", "Кладу подпись…", "Отправляю в чат…"]); rotateMsgs(out);
+        try {
+          await api(`/portfolio/${it.id}/reel`, { method: "POST" });
+          clearScreen(); notify("success");
+          out.innerHTML = `<p class="muted" style="margin:12px 0 0">Видео пришло в чат с ботом: 8 секунд, вертикальное. Сохраните его и загрузите в Reels, Shorts или VK Клипы, музыку добавьте там.</p>`;
+        } catch (err) { clearScreen(); out.innerHTML = ""; aiError(err); }
+        e.target.disabled = false;
+      };
+      card.querySelector("[data-del]").onclick = async () => {
+        if (!confirm("Удалить работу из портфолио?")) return;
+        try { await api(`/portfolio/${it.id}`, { method: "DELETE" }); card.remove(); toast("Удалено"); } catch (err) { aiError(err); }
+      };
+    });
   });
 }
 

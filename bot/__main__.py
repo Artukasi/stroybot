@@ -61,7 +61,7 @@ async def main():
     runner = None
     if config.webapp_url.startswith("https://"):
         from .web import start_web
-        runner = await start_web()
+        runner = await start_web(bot)
         await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
             text="Приложение", web_app=WebAppInfo(url=f"{config.webapp_url}/app/")))
     else:

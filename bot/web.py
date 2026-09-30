@@ -1,4 +1,5 @@
-"""Mini App: веб-сервер (aiohttp) — отдаёт страницу приложения и JSON API для объектов и калькулятора.
+"""Mini App: веб-сервер (aiohttp) — отдаёт страницу приложения и JSON API для объектов и калькулятора
+(платные ИИ-функции — в web_tools.py).
 Каждый запрос к API подписан Telegram (initData), поэтому пользователь видит только свои объекты."""
 import hashlib
 import hmac
@@ -220,8 +221,12 @@ async def api_calc(request: web.Request):
     return web.json_response({"title": res.title, "lines": res.lines})
 
 
-def create_app() -> web.Application:
-    app = web.Application(middlewares=[auth_middleware], client_max_size=64 * 1024)
+def create_app(bot=None) -> web.Application:
+    from .web_tools import BOT, add_routes, credits_middleware
+    # фото для дизайна, проверки и фотоотчёта приходят в теле запроса — до 30 МБ за раз
+    app = web.Application(middlewares=[auth_middleware, credits_middleware], client_max_size=30 * 1024 * 1024)
+    if bot is not None:
+        app[BOT] = bot
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/app/", index)
@@ -238,11 +243,12 @@ def create_app() -> web.Application:
     app.router.add_patch("/api/stages/{sid:\\d+}", api_update_stage)
     app.router.add_delete("/api/stages/{sid:\\d+}", api_delete_stage)
     app.router.add_post("/api/calc", api_calc)
+    add_routes(app)
     return app
 
 
-async def start_web() -> web.AppRunner:
-    runner = web.AppRunner(create_app())
+async def start_web(bot=None) -> web.AppRunner:
+    runner = web.AppRunner(create_app(bot))
     await runner.setup()
     site = web.TCPSite(runner, config.web_host, config.web_port)
     await site.start()

@@ -246,6 +246,8 @@ def create_app(bot=None) -> web.Application:
     add_routes(app)
     from .web_scan import add_routes as add_scan_routes
     add_scan_routes(app)
+    from .web_folio import add_routes as add_folio_routes
+    add_folio_routes(app)
     return app
 
 

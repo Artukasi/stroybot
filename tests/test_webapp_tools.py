@@ -279,3 +279,44 @@ def test_scan_furniture_photo_design_and_estimate(fresh_db, ai):
             r = await c.post("/scan/design", json={"id": sid, "style": "loft"}, headers=auth)
             assert r.status == 402 and (await r.json())["error"] == "credits"
     asyncio.run(run())
+
+
+def test_portfolio_in_mini_app(fresh_db, ai):
+    object.__setattr__(config, "bot_token", TOKEN)
+    bot = FakeBot()
+    bot.videos = []
+
+    async def send_video(chat_id, video, **kw):
+        bot.videos.append((chat_id, video.data[:12]))
+    bot.send_video = send_video
+
+    async def run():
+        async with TestClient(TestServer(create_app(bot))) as c:
+            h = {"X-Telegram-Init-Data": sign({"id": 31})}
+            f = aiohttp.FormData()
+            f.add_field("before", _png(), filename="b.png", content_type="image/png")
+            f.add_field("after", _png(), filename="a.png", content_type="image/png")
+            f.add_field("title", "Кухня за неделю")
+            r = await c.post("/api/portfolio", data=f, headers=h)
+            item = await r.json()
+            assert r.status == 201 and item["ok"] and item["title"] == "Кухня за неделю"
+            # картинки открываются только по подписанной ссылке
+            img = await c.get(item["collage"])
+            assert img.status == 200 and (await img.read())[:2] == b"\xff\xd8"
+            assert (await c.get(item["before"].split("?")[0] + "?t=bad")).status == 403
+            # чужую работу не трогаем
+            h2 = {"X-Telegram-Init-Data": sign({"id": 32})}
+            assert (await c.post(f"/api/portfolio/{item['id']}/post", headers=h2)).status == 404
+
+            await c.post("/api/portfolio/brand", json={"brand": "Бригада Артура"}, headers=h)
+            r = await c.post(f"/api/portfolio/{item['id']}/post", headers=h)
+            data = await r.json()
+            assert r.status == 200 and data["credits"] == config.welcome_credits - 1 and "Бригада Артура" in ai[-1][1]
+            assert (await c.post(f"/api/portfolio/{item['id']}/reel", headers=h)).status == 200
+            assert bot.videos[0][0] == 31 and b"ftyp" in bot.videos[0][1]
+            assert (await c.post(f"/api/portfolio/{item['id']}/send", json={"text": "Пост"}, headers=h)).status == 200
+            lst = await (await c.get("/api/portfolio", headers=h)).json()
+            assert lst["brand"] == "Бригада Артура" and len(lst["items"]) == 1
+            assert (await c.delete(f"/api/portfolio/{item['id']}", headers=h)).status == 200
+            assert (await (await c.get("/api/portfolio", headers=h)).json())["items"] == []
+    asyncio.run(run())

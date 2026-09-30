@@ -20,3 +20,10 @@ class Obj(StatesGroup):
 
 class Report(StatesGroup):
     collecting = State()     # собираем фото и подписи
+
+
+class Folio(StatesGroup):
+    before = State()         # ждём фото «до»
+    after = State()          # ждём фото «после»
+    title = State()          # подпись к работе
+    brand = State()          # подпись бригады на всех работах

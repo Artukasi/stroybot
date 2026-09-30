@@ -36,6 +36,7 @@ def main_menu(role: str | None) -> M:
     if role in PRO_ROLES:
         rows.append([B(text="📄 Коммерческое предложение", callback_data="menu:kp")])
         rows.append([B(text="📸 Фотоотчёт в PDF", callback_data="rep:start")])
+        rows.append([B(text="🖼 Портфолио: посты и Reels", callback_data="pf:list")])
     app = webapp_button()
     if app:
         rows.append([app])

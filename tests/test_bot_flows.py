@@ -203,6 +203,7 @@ def test_every_button_has_a_handler(env):
     from aiogram.dispatcher.event.bases import UNHANDLED
 
     from bot import keyboards as kb
+    from bot.handlers import folio
     from bot.handlers.scans import scan_styles_kb
     from bot.web_scan import scan_kb
     bot, dp, session = env
@@ -216,7 +217,8 @@ def test_every_button_has_a_handler(env):
               kb.packs_kb(), kb.home_kb(), kb.after_design_kb(), kb.use_text_kb(), kb.objects_kb([obj]),
               kb.object_kb(obj), kb.stages_kb(oid, [stage]), kb.expenses_kb(oid, [exp]),
               kb.back_to_list_kb(), kb.back_to_object_kb(oid), kb.report_kb(1), kb.report_objects_kb([obj]),
-              kb.confirm_delete_kb(oid), scan_kb(1), scan_styles_kb(1)]
+              kb.confirm_delete_kb(oid), scan_kb(1), scan_styles_kb(1),
+              folio.list_kb([{"id": 1, "title": "x"}]), folio.item_kb(1), folio.skip_kb()]
     datas = []
     for board in boards:
         for row in board.inline_keyboard:
@@ -288,3 +290,32 @@ def test_admin_gives_credits_to_self(env):
     before = asyncio.run(db.get_user(100))["credits"]
     run(env, msg("/give 1000"))
     assert asyncio.run(db.get_user(100))["credits"] == before + 1000
+
+
+def test_portfolio_before_after_post_and_reel(env):
+    """Портфолио: фото до и после → подпись → картинка, пост за кредит, видео для Reels, удаление."""
+    from aiogram.types import PhotoSize
+
+    from bot import portfolio
+    bot, dp, session = env
+    ph = lambda fid: [PhotoSize(file_id=fid, file_unique_id=fid, width=2, height=1)]  # noqa: E731
+    run(env, msg("/start"), cb("role:foreman"), msg("/portfolio"), cb("pf:new"),
+        msg(photo=ph("b1")), msg(photo=ph("a1")), msg("Ванная под ключ за 12 дней"))
+    (item,) = asyncio.run(db.list_portfolio(100))
+    assert item["title"] == "Ванная под ключ за 12 дней" and portfolio.has_photos(item["id"])
+    names = [type(c).__name__ for c in session.calls]
+    assert "SendPhoto" in names
+
+    credits = asyncio.run(db.get_user(100))["credits"]
+    run(env, cb(f"pf:post:{item['id']}"))
+    assert asyncio.run(db.get_user(100))["credits"] == credits - 1
+    assert any("Ответ" in t for t in session.texts())
+
+    run(env, cb(f"pf:reel:{item['id']}"))
+    video = [c for c in session.calls if type(c).__name__ == "SendVideo"]
+    assert video and video[0].width == 720 and video[0].height == 1280
+
+    run(env, cb("pf:brand"), msg("Бригада Артура"))
+    assert asyncio.run(db.get_user(100))["brand"] == "Бригада Артура"
+    run(env, cb(f"pf:del:{item['id']}"))
+    assert asyncio.run(db.list_portfolio(100)) == [] and not portfolio.has_photos(item["id"])

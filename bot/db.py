@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS scans (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_scans_user ON scans(user_id);
+CREATE TABLE IF NOT EXISTS portfolio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id);
 CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_object ON expenses(object_id);
 CREATE INDEX IF NOT EXISTS idx_stages_object ON stages(object_id);
@@ -95,6 +102,7 @@ MIGRATIONS = [
     ("users", "referrer_id", "INTEGER"),
     ("users", "ref_rewarded", "INTEGER NOT NULL DEFAULT 0"),
     ("payments", "refunded", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "brand", "TEXT"),   # подпись на работах в портфолио: «Бригада Артура · +7 …»
 ]
 
 EXPENSE_KINDS = {
@@ -558,3 +566,46 @@ async def list_scans(user_id: int, limit: int = 20) -> list[dict]:
             "SELECT id, room, data, created_at FROM scans WHERE user_id=? ORDER BY id DESC LIMIT ?",
             (user_id, limit))).fetchall()
     return [{"id": r[0], "room": r[1], "created_at": r[3], **json.loads(r[2])} for r in rows]
+
+
+# ---------- портфолио «до/после» ----------
+
+async def add_portfolio(user_id: int, title: str = "") -> int:
+    async with _conn() as db:
+        cur = await db.execute("INSERT INTO portfolio (user_id, title) VALUES (?, ?)", (user_id, title[:120]))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def set_portfolio_title(user_id: int, item_id: int, title: str) -> None:
+    async with _conn() as db:
+        await db.execute("UPDATE portfolio SET title=? WHERE id=? AND user_id=?", (title[:120], item_id, user_id))
+        await db.commit()
+
+
+async def get_portfolio(user_id: int, item_id: int) -> dict | None:
+    async with _conn() as db:
+        r = await (await db.execute("SELECT id, title, created_at FROM portfolio WHERE id=? AND user_id=?",
+                                    (item_id, user_id))).fetchone()
+    return {"id": r[0], "title": r[1], "created_at": r[2]} if r else None
+
+
+async def list_portfolio(user_id: int, limit: int = 50) -> list[dict]:
+    async with _conn() as db:
+        rows = await (await db.execute(
+            "SELECT id, title, created_at FROM portfolio WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (user_id, limit))).fetchall()
+    return [{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows]
+
+
+async def delete_portfolio(user_id: int, item_id: int) -> bool:
+    async with _conn() as db:
+        cur = await db.execute("DELETE FROM portfolio WHERE id=? AND user_id=?", (item_id, user_id))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def set_brand(user_id: int, brand: str) -> None:
+    async with _conn() as db:
+        await db.execute("UPDATE users SET brand=? WHERE id=?", (brand.strip()[:80] or None, user_id))
+        await db.commit()

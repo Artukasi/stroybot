@@ -339,7 +339,7 @@ async def cmd_scanner(message: Message):
 async def cmd_help(message: Message):
     await message.answer(
         "Команды: /start — начало, /menu — меню, /objects — мои объекты, "
-        "/report — фотоотчёт, /scanner — LiDAR-сканер на iPhone, /paysupport — помощь с оплатой, /terms — условия.\n"
+        "/report — фотоотчёт, /portfolio — портфолио для соцсетей, /scanner — LiDAR-сканер на iPhone, /paysupport — помощь с оплатой, /terms — условия.\n"
         "Можно отправлять голосовые 🎙 — я их распознаю.",
         reply_markup=home_kb(),
     )

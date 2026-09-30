@@ -279,3 +279,10 @@ def test_mini_app_with_real_bot_object(env, monkeypatch):
         assert n in names
     inv = next(m for m in session.calls if type(m).__name__ == "CreateInvoiceLink")
     assert inv.currency == "XTR" and inv.prices[0].amount == 250
+
+
+def test_admin_gives_credits_to_self(env):
+    run(env, msg("/start"))
+    before = asyncio.run(db.get_user(100))["credits"]
+    run(env, msg("/give 1000"))
+    assert asyncio.run(db.get_user(100))["credits"] == before + 1000

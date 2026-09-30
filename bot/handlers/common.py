@@ -255,13 +255,18 @@ async def cmd_stats(message: Message):
 
 @router.message(Command("give"))
 async def cmd_give(message: Message, command: CommandObject, bot: Bot):
-    """/give <user_id> <кредиты> — начислить кредиты (можно отрицательное число)."""
+    """/give <user_id> <кредиты> — начислить кредиты (можно отрицательное число).
+    /give <кредиты> — начислить себе."""
     if not is_admin(message):
         return
+    parts = (command.args or "").split()
     try:
-        uid, amount = (int(x) for x in (command.args or "").split())
+        if len(parts) == 1:
+            uid, amount = message.from_user.id, int(parts[0])
+        else:
+            uid, amount = (int(x) for x in parts)
     except ValueError:
-        return await message.answer("Формат: /give user_id количество")
+        return await message.answer("Формат: /give количество (себе) или /give user_id количество")
     if not await db.get_user(uid):
         return await message.answer("Пользователь не найден (он должен сначала нажать /start)")
     new = await db.add_credits(uid, amount)

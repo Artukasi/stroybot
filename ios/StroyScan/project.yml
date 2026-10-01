@@ -20,6 +20,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: СтройСкан
         INFOPLIST_KEY_NSCameraUsageDescription: Камера и лидар нужны, чтобы измерить комнату.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Чтобы сохранить картинку ремонта в «Фото».
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_FILE: Sources/Info.plist

@@ -22,6 +22,8 @@ let designStyles: [DesignStyle] = [
 struct ResultView: View {
     @EnvironmentObject var link: BotLink
     @State var result: RoomResult
+    /// «Доснять / Переснять»: новый скан вместо этого
+    var onRescan: (() -> Void)? = nil
     @State private var drawn: CGFloat = 0
     @State private var sent = false
     @State private var pickerItem: PhotosPickerItem?
@@ -30,12 +32,18 @@ struct ResultView: View {
     @State private var designURL: URL?
     @State private var designError: String?
     @State private var credits: Int?
+    /// Ремонт, собранный в 3D (стиль, отделка, мебель)
+    @State private var look = RenoStyle.scandi.finishes
+    @State private var camera = false
+    @State private var share: ShareFile?
+    @State private var note: String?
     private let rooms = ["Комната", "Кухня", "Ванная", "Санузел", "Спальня", "Гостиная", "Детская", "Коридор", "Балкон"]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 planView
+                qualityCard
 
                 Picker("Помещение", selection: $result.room) {
                     ForEach(rooms, id: \.self) { Text($0) }
@@ -46,19 +54,35 @@ struct ResultView: View {
                 if !result.items.isEmpty { furnitureList }
                 photoSection
 
-                if !result.world.isEmpty {
+                if !result.wallLines.isEmpty {
                     NavigationLink {
-                        Renovation3DView(world: result.world, room: result.room)
+                        Renovation3DView(result: result, look: $look, scanId: sent ? link.lastScanId : nil) { fresh in
+                            try await ensureScanId(fresh: fresh)
+                        }
                     } label: {
-                        Label("Ремонт в 3D", systemImage: "cube.transparent")
+                        Label("Ремонт в 3D: крутить и менять", systemImage: "cube.transparent")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
                             .background(Palette.draft, in: RoundedRectangle(cornerRadius: 16))
                             .foregroundStyle(.white)
                     }
                 }
 
+                NavigationLink {
+                    FurnitureSizesView { fresh in try await ensureScanId(fresh: fresh) }
+                } label: {
+                    Label("Мебель по размерам", systemImage: "sofa")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(Palette.ink)
+                }
+
                 sendButton
                 if sent, let scanId = link.lastScanId { designSection(scanId) }
+                Button { shareScanFile() } label: {
+                    Label("Файл скана для бота", systemImage: "doc.badge.arrow.up")
+                }
+                Text("Пришлите этот файл в чат СтройБота — ремонт и смета посчитаются прямо по размерам скана.")
+                    .font(.footnote).foregroundStyle(.secondary)
                 if let usdz = result.usdz {
                     ShareLink(item: usdz) { Label("3D-модель комнаты (USDZ)", systemImage: "cube") }
                 }
@@ -71,6 +95,57 @@ struct ResultView: View {
             guard let item else { return }
             Task { await loadPhoto(item) }
         }
+        .fullScreenCover(isPresented: $camera) {
+            PhotoCameraView { data in usePhoto(data) }
+        }
+        .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
+        .alert(note ?? "", isPresented: Binding(get: { note != nil }, set: { if !$0 { note = nil } })) {
+            Button("OK", role: .cancel) {}
+        }
+    }
+
+    // MARK: - Качество скана
+
+    @ViewBuilder private var qualityCard: some View {
+        let q = result.quality
+        if q.issues.isEmpty {
+            Label("Скан без замечаний · \(q.score) из 100", systemImage: "checkmark.seal.fill")
+                .font(.subheadline.bold())
+                .foregroundStyle(.green)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("Нужно доснять").font(.headline)
+                    Spacer()
+                    Text("\(q.score) из 100").font(.subheadline.bold()).foregroundStyle(.secondary)
+                }
+                ForEach(Array(q.issues.enumerated()), id: \.offset) { _, issue in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("•")
+                        Text(issue).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.subheadline)
+                }
+                if !q.weakWalls.isEmpty || !q.gaps.isEmpty {
+                    Text("Красным на плане — стены и углы, снятые плохо.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let onRescan {
+                    Button { onRescan() } label: {
+                        Label("Доснять / Переснять", systemImage: "arrow.clockwise")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
+                            .foregroundStyle(Palette.ink)
+                    }
+                    Text("Скан начнётся заново: снимите комнату целиком, задержитесь на местах из списка.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
+        }
     }
 
     // MARK: - План
@@ -82,6 +157,8 @@ struct ResultView: View {
             .background(PlanShape(points: result.plan).fill(Palette.draft.opacity(0.1)))
             .background(PlanFurniture(points: result.plan, items: result.items).opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls,
+                               gaps: result.quality.gaps).opacity(drawn >= 1 ? 1 : 0))
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
@@ -152,8 +229,11 @@ struct ResultView: View {
                 Text("Фото нет. Выберите снимок комнаты, чтобы ИИ показал ремонт.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
+            Button { camera = true } label: {
+                Label("Снять фото камерой", systemImage: "camera")
+            }
             PhotosPicker(selection: $pickerItem, matching: .images) {
-                Label("Выбрать другое фото комнаты", systemImage: "photo.on.rectangle")
+                Label("Выбрать фото из галереи", systemImage: "photo.on.rectangle")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -165,10 +245,39 @@ struct ResultView: View {
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data),
               let jpeg = RoomResult.jpeg(image) else { return }
+        usePhoto(jpeg)
+    }
+
+    private func usePhoto(_ jpeg: Data) {
         result.photo = jpeg
         // новое фото нужно заново отправить в бот
         sent = false
         designURL = nil
+    }
+
+    private func shareScanFile() {
+        if let url = result.exportFile(look: look) {
+            share = ShareFile(url: url)
+        } else {
+            note = "Не получилось сохранить файл."
+        }
+    }
+
+    /// Ремонт в 3D меняли — его стоит сохранить в боте вместе со сканом
+    private var lookChanged: Bool {
+        look != (RenoStyle(rawValue: look.style) ?? .scandi).finishes
+    }
+
+    /// Номер скана в боте; если скан ещё не отправлен (или fresh) — отправляет молча
+    private func ensureScanId(fresh: Bool) async throws -> Int {
+        if !fresh, sent, let id = link.lastScanId { return id }
+        guard link.connected else { throw LinkError.message("Подключите бота на главном экране.") }
+        guard let id = try await link.sendScan(result) else {
+            throw LinkError.message("Сервер ответил странно. Попробуйте ещё раз.")
+        }
+        sent = true
+        if lookChanged { try? await link.saveLook(scanId: id, look: look.json) }
+        return id
     }
 
     // MARK: - Отправка
@@ -176,7 +285,10 @@ struct ResultView: View {
     private var sendButton: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                Task { sent = await link.send(result) }
+                Task {
+                    sent = await link.send(result)
+                    if sent, lookChanged, let id = link.lastScanId { try? await link.saveLook(scanId: id, look: look.json) }
+                }
             } label: {
                 Group {
                     if link.busy { ProgressView() }
@@ -254,7 +366,7 @@ struct ResultView: View {
         designError = nil
         defer { designing = false }
         do {
-            let answer = try await link.design(scanId: scanId, style: designStyle)
+            let answer = try await link.design(scanId: scanId, style: designStyle, look: lookChanged ? look.json : nil)
             designURL = answer.image
             credits = answer.credits
         } catch {
@@ -338,6 +450,46 @@ struct PlanLabels: View {
                         .background(Palette.signal, in: Capsule())
                         .foregroundStyle(Palette.ink)
                         .position(x: mx + (mx - cx) / d * 16, y: my + (my - cy) / d * 16)
+                }
+            }
+        }
+    }
+}
+
+/// Номера стен на плане; плохо снятые стены и несомкнутые углы — красным
+struct PlanWalls: View {
+    let points: [SIMD2<Double>]
+    let lines: [SIMD4<Double>]
+    let weak: Set<Int>
+    let gaps: [SIMD2<Double>]
+
+    var body: some View {
+        GeometryReader { geo in
+            if let f = planFrame(points, in: CGRect(origin: .zero, size: geo.size)) {
+                let map = { (x: Double, y: Double) in CGPoint(x: f.ox + CGFloat(x) * f.k, y: f.oy + CGFloat(y) * f.k) }
+                let center = map(points.map(\.x).reduce(0, +) / Double(max(points.count, 1)),
+                                 points.map(\.y).reduce(0, +) / Double(max(points.count, 1)))
+                Path { path in
+                    for i in weak.sorted() where i < lines.count {
+                        path.move(to: map(lines[i].x, lines[i].y))
+                        path.addLine(to: map(lines[i].z, lines[i].w))
+                    }
+                }
+                .stroke(Color.red, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                ForEach(Array(gaps.indices), id: \.self) { i in
+                    Circle().stroke(Color.red, lineWidth: 3)
+                        .frame(width: 22, height: 22)
+                        .position(map(gaps[i].x, gaps[i].y))
+                }
+                ForEach(Array(lines.indices), id: \.self) { i in
+                    let m = map((lines[i].x + lines[i].z) / 2, (lines[i].y + lines[i].w) / 2)
+                    let d = max(hypot(center.x - m.x, center.y - m.y), 1)
+                    Text("\(i + 1)")
+                        .font(.caption2.bold())
+                        .frame(width: 18, height: 18)
+                        .background(weak.contains(i) ? Color.red : Color(.systemGray3), in: Circle())
+                        .foregroundStyle(.white)
+                        .position(x: m.x + (center.x - m.x) / d * 16, y: m.y + (center.y - m.y) / d * 16)
                 }
             }
         }

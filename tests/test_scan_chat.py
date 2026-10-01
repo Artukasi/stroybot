@@ -65,6 +65,32 @@ def test_scan_file_in_chat(env):
     assert len(asyncio.run(db.list_scans(100))) == 2
 
 
+def test_scan_file_keeps_look_from_3d(env, monkeypatch):
+    """Ремонт, собранный в приложении, лежит в файле скана — бот его сохраняет, смета и картинка его видят."""
+    bot, dp, session = env
+    asked = []
+
+    async def chat(system, text, image_url=None, max_tokens=2000):
+        asked.append(text)
+        return "<b>Смета</b>"
+    monkeypatch.setattr(kie, "chat", chat)
+    look = {"style": "loft", "curtains": "roman", "floor": {"finish": "parquet", "color": "#b58a5a"}, "junk": 1}
+    run(env, msg("/start"), cb("menu:design"), _file(session, json.dumps({**v2(), "look": look}).encode()))
+    (scan,) = asyncio.run(db.list_scans(100))
+    assert scan["look"] == {"style": "loft", "curtains": "roman", "floor": {"finish": "parquet", "color": "#b58a5a"}}
+    texts = session.texts()
+    assert any("ремонт из 3D сохранён" in t for t in texts)
+    assert any("Учту ваш ремонт из 3D" in t for t in texts)          # сразу выбор стиля в «Дизайне по фото»
+    run(env, cb(f"se:{scan['id']}"))
+    assert "Окна: римские шторы" in asked[-1] and "Пол: паркет, натуральный дуб" in asked[-1]
+
+    # ремонт битый или огромный — скан всё равно сохраняем, без ремонта
+    for bad in ("loft", {"junk": "x" * 40_000}):
+        run(env, _file(session, json.dumps({**v2(room="Кухня"), "look": bad}).encode()))
+        new = asyncio.run(db.list_scans(100))[0]
+        assert new["room"] == "Кухня" and new["look"] is None
+
+
 def test_scan_furniture_button(env):
     bot, dp, session = env
     sid = _scan()

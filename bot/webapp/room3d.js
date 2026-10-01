@@ -3,6 +3,7 @@
    Координаты — как в скане: план (x, y) в метрах, в 3D это (x, высота, y).
    Ключи ремонта (look) те же, что у бота и приложения СтройСкан (bot/look.py, Look.swift). */
 import * as T from "./vendor/three-r186.min.js";
+import { inPoly, outlineOf } from "./plan.js";
 
 const PI = Math.PI;
 const WALL_T = 0.12;     // стена наружу от внутренней поверхности
@@ -177,14 +178,6 @@ export function toContract(look) {
 }
 
 // ---------- плоская геометрия ----------
-function inPoly(poly, x, y) {
-  let res = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [x1, y1] = poly[i], [x2, y2] = poly[j];
-    if ((y1 > y) !== (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1) res = !res;
-  }
-  return res;
-}
 function corners(x, y, w, d, a) {
   const ux = Math.cos(a), uy = Math.sin(a), vx = -uy, vy = ux;
   return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([p, q]) => [x + ux * p * w / 2 + vx * q * d / 2, y + uy * p * w / 2 + vy * q * d / 2]);
@@ -210,38 +203,22 @@ function cast(px, py, dx, dy, segs) {   // расстояние по лучу д
 
 // комната по скану: контур пола, стены (нормаль внутрь), окна и двери на стенах
 function roomOf(scan) {
-  const s = scan.sizes || {};
-  let poly = (scan.plan || []).filter(p => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])).map(p => [+p[0], +p[1]]);
-  const lines = scan.wall_lines || [], wallsIn = scan.walls || [];
-  const exact = lines.length > 0 && lines.length === wallsIn.length;
-  if (poly.length < 3) {
-    if (exact && lines.length > 2) poly = lines.map(l => [l[0], l[1]]);
-    else {
-      const L = s.length || Math.sqrt(s.floor_area || 12), W = s.width || (s.floor_area || L * L) / L;
-      poly = [[0, 0], [L, 0], [L, W], [0, W]];
-    }
-  }
-  const segs = exact ? lines.map(l => l.map(Number)) : poly.map((p, i) => [...p, ...poly[(i + 1) % poly.length]]);
-  const xs = poly.map(p => p[0]).concat(segs.flatMap(l => [l[0], l[2]])), ys = poly.map(p => p[1]).concat(segs.flatMap(l => [l[1], l[3]]));
-  const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-  // центр тяжести контура
-  let A = 0, cx = 0, cy = 0;
-  poly.forEach(([x1, y1], i) => { const [x2, y2] = poly[(i + 1) % poly.length], c = x1 * y2 - x2 * y1; A += c; cx += (x1 + x2) * c; cy += (y1 + y2) * c; });
-  const center = Math.abs(A) > 1e-6 ? [cx / (3 * A), cy / (3 * A)] : [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2];
+  const s = scan.sizes || {}, wallsIn = scan.walls || [];
+  // контур — обходом стен (plan.js): план из скана бывает выпуклой оболочкой и накрывает выемку Г-образной комнаты
+  const { poly, segs, fill, exact, left, center, box } = outlineOf(scan);
   const H = clamp(s.height || Math.max(0, ...wallsIn.map(w => w.height || 0)) || 2.7, 2.1, 5);
-  const walls = segs.map((l, i) => {
+  const walls = segs.concat(fill).map((l, n) => {
+    const i = n < segs.length ? n : -1;
     let [x1, y1, x2, y2] = l;
     const len = Math.hypot(x2 - x1, y2 - y1);
     if (!(len > 0.05)) return null;
     let dx = (x2 - x1) / len, dy = (y2 - y1) / len, flip = false;
-    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
     // стену разворачиваем так, чтобы (−dy, dx) смотрело наружу: тогда сборка в 3D без зеркал
-    if (inPoly(poly, mx - dy * 0.1, my + dx * 0.1) || (!inPoly(poly, mx + dy * 0.1, my - dx * 0.1) && (center[0] - mx) * -dy + (center[1] - my) * dx > 0)) {
-      flip = true; [x1, y1, x2, y2] = [x2, y2, x1, y1]; dx = -dx; dy = -dy;
-    }
+    if (left[n]) { flip = true; [x1, y1, x2, y2] = [x2, y2, x1, y1]; dx = -dx; dy = -dy; }
     return { i, a: [x1, y1], b: [x2, y2], len, dx, dy, nx: dy, ny: -dx, flip, holes: [] };
   });
   const live = walls.filter(Boolean);
+  walls.length = segs.length;   // номера стен — как в скане, заплатки только в live
   // окна и двери
   const ops = (scan.openings || []).map((o, k) => {
     const kind = ["window", "door", "opening"].includes(o.kind) ? o.kind : "opening";
@@ -805,7 +782,7 @@ const BUILD = {
       const rows = 3, rh = (hh - legH) / rows;
       for (let k = 1; k < rows; k++) box(g, w - 0.03, 0.004, 0.004, gap, 0, legH + rh * k, d / 2);
       for (let k = 0; k < rows; k++) for (const s of w > 0.8 ? [-1, 1] : [0]) ball(g, 0.014, C.metalM, s * w / 4, legH + rh * (k + 0.5), d / 2 + 0.01);
-      cyl(g, 0.06, 0.05, 0.22, ceramic("#eceae4"), w * 0.3, hh, 0, 20);
+      if (!C.underWindow) cyl(g, 0.06, 0.05, 0.22, ceramic("#eceae4"), w * 0.3, hh, 0, 20);   // под окном ваза упёрлась бы в подоконник
     }
   },
   television(g, w, d, h, v, C) {
@@ -894,9 +871,15 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
   renderer.setClearColor(0x000000, 0);
 
   const scene = new T.Scene();
-  const pmrem = new T.PMREMGenerator(renderer);
-  const envTex = pmrem.fromScene(new T.RoomEnvironment(), 0.04).texture;
-  scene.environment = envTex;
+  let pmrem, envTex;
+  const makeEnv = () => {   // отражения комнаты в лаке, металле и стекле
+    const env = new T.RoomEnvironment();
+    pmrem = new T.PMREMGenerator(renderer);
+    envTex = pmrem.fromScene(env, 0.04).texture;
+    env.dispose();
+    scene.environment = envTex;
+  };
+  makeEnv();
   const camera = new T.PerspectiveCamera(50, 1, 0.05, 120);
   const [bx0, by0, bx1, by1] = room.box, H = room.H, [cx, cy] = room.center;
   const span = Math.hypot(bx1 - bx0, by1 - by0);
@@ -1012,8 +995,9 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
           const gl = mesh(wg, new T.PlaneGeometry(w - 0.1, hh - 0.1), glassM(), mid, h.v0 + hh / 2, zf + 0.01);
           gl.castShadow = false; gl.rotation.y = PI;
           box(wg, w + 0.12, 0.03, zf + 0.09, std("#f5f4f1", 0.35), mid, h.v0 - 0.03, (zf - 0.09) / 2, 0.006);   // подоконник
+          h.rad = null;
           if (h.v0 > 0.6) {   // батарея под окном
-            const rw = Math.min(w * 0.8, 1.2), rad = new T.Group(); rad.position.set(mid, 0.14, -0.06); decor.add(rad);
+            const rw = Math.min(w * 0.8, 1.2), rad = h.rad = new T.Group(); rad.position.set(mid, 0.14, -0.06); decor.add(rad);
             for (let k = 0, n2 = Math.round(rw / 0.08); k < n2; k++) box(rad, 0.06, Math.min(0.5, h.v0 - 0.3), 0.07, std("#f2f2f0", 0.35), -rw / 2 + (k + 0.5) * rw / n2, 0, 0, 0.01);
           }
           const s = new T.Mesh(new T.PlaneGeometry(w + 1.6, hh + 1.2), mat("sky", () => new T.MeshBasicMaterial({ map: TX.sky(), color: new T.Color(1.6, 1.6, 1.6) })));
@@ -1225,6 +1209,7 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
       b.position.y = s.height / 2; g.add(b);
       const e = new T.LineSegments(new T.EdgesGeometry(b.geometry), mat("ghostE", () => new T.LineDashedMaterial({ color: 0x3d6fae, dashSize: 0.06, gapSize: 0.05, transparent: true, opacity: 0.8 })));
       e.position.y = s.height / 2; e.computeLineDistances(); g.add(e);
+      e.raycast = () => {};   // нажимают на сам прозрачный короб; у линий зона касания — целый метр
       g.userData.ghost = true;
       need();
       return it;
@@ -1238,7 +1223,7 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
       metalM: metal(L.style === "classic" ? "#c79e54" : pal.metal === "#b8babf" ? "#9ea1a6" : pal.metal),
       dark: std(hexOf(tone(s.color, -0.55)), 0.7), accent: fabric(pal.accent), accentM: fabric(pal.accent),
       bedding: fabric(pal.bedding), duvet: fabric(hexOf(tone(pal.bedding, -0.04))), pad: fabric(pal.fabric),
-      cab: wood(pal.wood), onFurniture: false,
+      cab: wood(pal.wood), onFurniture: false, underWindow: windowsBehind(s).length > 0,
     };
     if (s.kind === "television") {
       const sup = supportOf(s);
@@ -1269,6 +1254,34 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
   }
   function placeTVs() {
     for (const [k, it] of items) if (it.spec.kind === "television" && !it.spec.hidden) buildItem(k);
+  }
+  // окна, под которыми вещь стоит спиной к стене (до 25 см от неё)
+  function windowsBehind(s) {
+    const out = [];
+    for (const W of room.live) {
+      const ux = s.x - W.a[0], uy = s.y - W.a[1], along = ux * W.dx + uy * W.dy, off = ux * W.nx + uy * W.ny;
+      const turn = Math.abs(Math.sin(s.angle - Math.atan2(W.dy, W.dx)));   // 0 — ширина вдоль стены
+      if (turn > 0.3 && turn < 0.95) continue;
+      const half = turn < 0.3 ? s.depth / 2 : s.width / 2, side = turn < 0.3 ? s.width / 2 : s.depth / 2;
+      if (off < 0 || off - half > 0.25) continue;
+      for (const h of W.holes) if (h.kind === "window" && along - side < h.u1 - 0.05 && along + side > h.u0 + 0.05) out.push(h);
+    }
+    return out;
+  }
+  function radiators() {   // батарея под окном пропадает за мебелью, поставленной туда
+    const behind = new Set();
+    for (const [, it] of items) if (!it.spec.hidden) windowsBehind(it.spec).forEach(h => behind.add(h));
+    for (const W of room.live) for (const h of W.holes) if (h.rad) h.rad.visible = !behind.has(h);
+  }
+  // примерки не копим: текстуры и материалы, которых в комнате больше нет, отдаём (холст 1024² — 4 МБ)
+  const SHARED = new Set(["weave", "grain", "shadow", "ao", "sky"]);
+  const drop = t => { t.dispose(); if (t.image) t.image.width = t.image.height = 0; };
+  function sweep() {
+    const used = new Set(), maps = new Set();
+    scene.traverse(o => { for (const m of [].concat(o.material || [])) if (m) used.add(m); });
+    for (const m of used) for (const k of ["map", "bumpMap", "alphaMap"]) if (m[k]) maps.add(m[k]);
+    for (const [k, m] of MAT) if (!used.has(m)) { m.dispose(); MAT.delete(k); }
+    for (const [k, t] of TEX) if (!SHARED.has(k) && !maps.has(t)) { drop(t); TEX.delete(k); }
   }
 
   // ---------- выделение ----------
@@ -1323,10 +1336,12 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
   const controls = new T.OrbitControls(camera, canvas);
   controls.enableDamping = !reduced; controls.dampingFactor = 0.09;
   controls.maxPolarAngle = 1.32; controls.minPolarAngle = 0.08;
-  controls.minDistance = 1.5; controls.maxDistance = span * 2.6;
+  controls.minDistance = 1.5; controls.maxDistance = span * 3;
   controls.rotateSpeed = 0.75; controls.zoomSpeed = 0.9;
   controls.target.set(cx, 0.7, cy);
   controls.addEventListener("change", need);
+  let touched = false;   // пока человек не крутил — при смене размера экрана снова вписываем комнату
+  controls.addEventListener("start", () => { touched = true; });
   // точки съёмки: из двери и из углов, смотрим в центр комнаты
   function viewpoints() {
     const out = [], busy = (x, y) => [...items.values()].some(it => !it.spec.hidden && inPoly(corners(it.spec.x, it.spec.y, it.spec.width + 0.2, it.spec.depth + 0.2, it.spec.angle), x, y));
@@ -1410,14 +1425,29 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
     }
     if (changed) { if (sel?.type === "wall") drawSel(); shadows(); }
   }
-  function frameOrbit() {
+  function frameOrbit() {   // смотрим со стороны входа, вся комната в кадре и на узком экране
     const [x, y] = views[0] || viewpoints()[0] || [cx + 1, cy + 1];
     let dx = x - cx, dy = y - cy; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
-    const dist = clamp(span * 1.25, 4, 16);
-    camera.position.set(cx + dx * dist * 0.72, dist * 0.78, cy + dy * dist * 0.72);
-    controls.target.set(cx, 0.6, cy);
-    camera.fov = 50;
+    camera.fov = 50; camera.updateProjectionMatrix();
+    // подбираем расстояние и центр по углам комнаты на экране: пара проходов сходится
+    const el = clamp(0.8 + (0.9 - (camera.aspect || 1)) * 0.5, 0.78, 1);   // на высоком экране смотрим круче — комната крупнее
+    const dir = new T.Vector3(dx * Math.cos(el), Math.sin(el), dy * Math.cos(el)), tgt = new T.Vector3(cx, 0.5, cy);
+    const pts = room.poly.flatMap(([px, py]) => [new T.Vector3(px, 0, py), new T.Vector3(px, H, py)]);
+    const hh = Math.tan(camera.fov * PI / 360), q = new T.Vector3(), rt = new T.Vector3(), up = new T.Vector3();
+    const top = 1 - Math.min(0.3, 116 / (canvas.clientHeight || 400)) - 0.04, my = (top - 0.94) / 2, ry = (top + 0.94) / 2;   // сверху кнопки
+    let dist = span * 1.3;
+    for (let k = 0; k < 5; k++) {
+      camera.position.copy(tgt).addScaledVector(dir, dist); camera.lookAt(tgt); camera.updateMatrixWorld();
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      for (const p of pts) { q.copy(p).project(camera); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+      rt.setFromMatrixColumn(camera.matrixWorld, 0); up.setFromMatrixColumn(camera.matrixWorld, 1);
+      tgt.addScaledVector(rt, (x0 + x1) / 2 * dist * hh * camera.aspect).addScaledVector(up, ((y0 + y1) / 2 - my) * dist * hh);
+      dist = clamp(dist * Math.max((x1 - x0) / 2 / 0.94, (y1 - y0) / 2 / ry), 3, span * 3);
+    }
+    camera.position.copy(tgt).addScaledVector(dir, dist);
+    controls.target.copy(tgt);
     controls.update();
+    need();
   }
 
   // ---------- размер холста ----------
@@ -1429,18 +1459,48 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
     if (mode === "room") { look3.fov = fovFor(camera.aspect); camera.fov = look3.fov; }
     setInsetView();
     camera.updateProjectionMatrix();
+    if (mode === "orbit" && !touched && views.length) frameOrbit();
     need();
   }
-  function setInsetView() {   // открыт нижний лист — сдвигаем картинку вверх, чтобы выбранное было видно
+  let offNow = 0, offTo = 0;   // сдвиг картинки по высоте, едет плавно
+  function setInsetView() {   // открыт нижний лист — сдвигаем картинку, чтобы выбранное было посередине над ним
     const w = canvas.clientWidth, h = canvas.clientHeight;
-    if (inset > 0 && w && h) camera.setViewOffset(w, h, 0, inset / 2, w, h);
+    offTo = 0;
+    if (inset > 0 && w && h) {
+      offTo = inset / 2;
+      const c = selFocus();
+      if (c) {
+        camera.clearViewOffset(); camera.updateMatrixWorld();
+        const q = c.project(camera);
+        if (q.z < 1 && Math.abs(q.x) < 1.5) offTo = clamp((1 - q.y) / 2 * h - (h - inset) / 2, -h / 3, inset);
+      }
+    }
+    if (reduced) offNow = offTo;
+    applyOffset();
+  }
+  function applyOffset() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (offNow && w && h) camera.setViewOffset(w, h, 0, offNow, w, h);
     else camera.clearViewOffset();
+  }
+  function selFocus() {   // середина выбранной вещи, стены или окна
+    if (!sel || sel.type === "floor" || sel.type === "ceiling") return null;
+    const box = new T.Box3(), take = parent => parent.children.forEach(o => { if (o.userData.outline && o.isMesh) box.expandByObject(o); });
+    take(helpers); for (const [, it] of items) take(it.group); for (const P of wallParts) take(P.g);
+    return box.isEmpty() ? null : box.getCenter(new T.Vector3());
   }
   const ro = new ResizeObserver(resize);
   ro.observe(canvas);
+  // телефон может отобрать 3D у страницы (Telegram ушёл в фон, открыли магазин): вернули — заново отражения, тени и кадр
+  let lost = false;
+  const onLost = e => { e.preventDefault(); lost = true; };
+  const onRestored = () => { lost = false; makeEnv(); shadows(); };
+  canvas.addEventListener("webglcontextlost", onLost);
+  canvas.addEventListener("webglcontextrestored", onRestored);
 
   // ---------- касания: выбор, перетаскивание, взгляд из комнаты ----------
   const ray = new T.Raycaster(), ndc = new T.Vector2(), plane = new T.Plane(new T.Vector3(0, 1, 0), 0);
+  ray.params.Line.threshold = 0.03;   // линии ловят касание в 3 см, а не в метре (по умолчанию)
   function aim(e) {
     const r = canvas.getBoundingClientRect();
     ndc.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -1515,7 +1575,7 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
     if (drag) {
       const moved = drag.moved;
       drag = null; controls.enabled = mode === "orbit" && !anim;
-      if (moved) { placeTVs(); drawSel(); shadows(); onChange?.(clone(L)); down = null; return; }
+      if (moved) { placeTVs(); radiators(); drawSel(); shadows(); onChange?.(clone(L)); down = null; return; }
     }
     if (!down) return;
     const tap = Math.hypot(e.clientX - down.x, e.clientY - down.y) < 8 && performance.now() - down.t < 450;
@@ -1558,7 +1618,9 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
       if (tv) placeTVs();
     }
     if (styled || prev.ceiling.light !== L.ceiling.light || S(prev.added) !== S(L.added) || S(prev.objects) !== S(L.objects)) buildLights();
+    radiators();
     if (sel) drawSel();
+    sweep();
     shadows();
   }
 
@@ -1618,8 +1680,10 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
 
   // ---------- цикл отрисовки: рисуем, только когда что-то поменялось ----------
   const t0 = performance.now();
+  let lastT = 0;
   function loop(t) {
     raf = requestAnimationFrame(loop);
+    const dt = Math.min(100, t - (lastT || t)); lastT = t;
     if (document.hidden) return;
     if (grow < 1) {   // стены «вырастают» из плана, потом появляется мебель
       grow = Math.min(1, (t - t0) / 900);
@@ -1629,6 +1693,11 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
       dirty = true;
     }
     if (anim && anim(t)) dirty = true;
+    if (offNow !== offTo) {
+      offNow += (offTo - offNow) * (1 - Math.exp(-dt / 70));   // по времени, а не по кадрам
+      if (Math.abs(offTo - offNow) < 0.5) offNow = offTo;
+      applyOffset(); dirty = true;
+    }
     if (mode === "orbit" && controls.enabled && controls.update()) dirty = true;
     if (!dirty) return;
     dirty = false;
@@ -1650,6 +1719,7 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
     get mode() { return mode; },
     get selected() { return sel; },
     get views() { return views.length; },
+    get lost() { return lost; },
     update(fn) {
       const n = clone(L), r = fn(n);
       apply(r || n);
@@ -1673,8 +1743,13 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
     add(kind, variant, place) {
       if (L.added.length >= MAX_ADDED) return null;
       const [w0, d0, h0] = sizeOf(kind, variant);
-      const w = place?.width || w0, d = place?.depth || d0, h = place?.height || h0;
-      let spot = place ? { x: place.x, y: place.y, angle: orient(place.x, place.y, w, d, place.angle || 0) } : spotFor(kind, variant, w, d, h);
+      const w = place?.width || w0, d = place?.depth || d0;
+      let h = place?.height || h0;
+      const spot = place ? { x: place.x, y: place.y, angle: orient(place.x, place.y, w, d, place.angle || 0) } : spotFor(kind, variant, w, d, h);
+      if (place) {   // совет под окном: на 5 см ниже подоконника, как в подборе мебели
+        const sill = Math.min(...windowsBehind({ ...spot, width: w, depth: d }).map(o => o.v0));
+        if (isFinite(sill)) h = Math.min(h, Math.max(0.3, Math.round((sill - 0.05) * 100) / 100));
+      }
       const item = { kind, variant, color: defaultColor(kind, variant, pal), width: w, depth: d, height: h, x: spot.x, y: spot.y, angle: spot.angle };
       this.update(l => { l.added.push(item); });
       return { j: L.added.length - 1, tight: !!spot.tight };
@@ -1690,10 +1765,11 @@ export function createRoom3D({ canvas, scan, look, reduced = false, onPick, onCh
       ro.disconnect();
       controls.dispose();
       canvas.removeEventListener("pointerdown", onDown, { capture: true });
+      canvas.removeEventListener("webglcontextlost", onLost); canvas.removeEventListener("webglcontextrestored", onRestored);
       removeEventListener("pointermove", onMove); removeEventListener("pointerup", onUp); removeEventListener("pointercancel", onUp);
       scene.traverse(o => { o.geometry?.dispose(); });
       MAT.forEach(m => m.dispose()); MAT.clear();
-      TEX.forEach(t => t.dispose()); TEX.clear();
+      TEX.forEach(drop); TEX.clear();
       selMat.dispose(); selFill.dispose();
       envTex.dispose(); pmrem.dispose();
       renderer.dispose(); renderer.forceContextLoss();

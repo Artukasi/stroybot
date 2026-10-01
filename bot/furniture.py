@@ -8,8 +8,11 @@ from .look import FURNITURE, color_name, variants
 from .room import TOUCH, Rect, Room, cast, overlaps
 
 PASSAGE = 0.7          # проход перед мебелью
+RAY_START = 0.02       # свободную глубину меряем от точки чуть отступя от стены
 MIN_STRETCH = 0.6      # свободный кусок стены, куда есть смысл что-то советовать
 MAX_SUGGEST = 3
+MAX_TIP_WALLS = 24     # советы ищем у самых длинных стен и на самых длинных свободных кусках:
+MAX_TIP_PARTS = 6      # этого хватает любой комнате, а присланный «скан-ловушка» не повесит бота
 SKIP = {"stairs", "fireplace", "object"}                  # это в магазине мебели не купить
 FURNITURE_ONLY = {"sofa", "bed", "chair", "table", "storage"}
 SHOPS = (
@@ -65,6 +68,26 @@ def _free(a: float, b: float, blocked: list[tuple[float, float]]) -> list[tuple[
     if cur < b:
         out.append((cur, b))
     return out
+
+
+def _depth(segs, x1: float, y1: float, dx: float, dy: float, nx: float, ny: float, a: float, b: float) -> float:
+    """Свободная глубина перед куском стены [a, b]: до ближайшего препятствия прямо напротив него.
+    То же, что лучи от стены в комнату через каждый сантиметр, но считается сразу."""
+    best = 50.0
+    for sx1, sy1, sx2, sy2 in segs:
+        # концы отрезка в координатах стены: вдоль неё (s) и вглубь комнаты (t)
+        s1, t1 = (sx1 - x1) * dx + (sy1 - y1) * dy, (sx1 - x1) * nx + (sy1 - y1) * ny
+        s2, t2 = (sx2 - x1) * dx + (sy2 - y1) * dy, (sx2 - x1) * nx + (sy2 - y1) * ny
+        if abs(s2 - s1) < 1e-9:      # идёт прямо от стены — луч вдоль него не упрётся
+            continue
+        u0, u1 = sorted(((a - s1) / (s2 - s1), (b - s1) / (s2 - s1)))
+        u0, u1 = max(u0, 0.0), min(u1, 1.0)
+        if u0 > u1:                  # не напротив этого куска
+            continue
+        ta, tb = t1 + (t2 - t1) * u0, t1 + (t2 - t1) * u1
+        if max(ta, tb) > RAY_START:  # что у самой стены или за ней — не мешает
+            best = min(best, max(min(ta, tb), RAY_START))
+    return best - RAY_START
 
 
 def _obstacles(room: Room, r: Rect, skip: int) -> list:
@@ -138,8 +161,10 @@ def _suggest(room: Room, scan: dict) -> list[dict]:
     wet = any(w in (scan.get("room") or "").lower() for w in WET_ROOMS)
     zones = room.zones(0)
     segs = list(room.walls) + room.box_segs + [s for r in room.objects + zones for s in r.segs()]
+    corners = [r.corners() for r in room.objects + zones]
+    longest = sorted(range(len(room.walls)), key=room.wall_len, reverse=True)[:MAX_TIP_WALLS]
     found = []
-    for i in range(len(room.walls)):
+    for i in sorted(longest):
         length = room.wall_len(i)
         if length < MIN_STRETCH:
             continue
@@ -147,53 +172,52 @@ def _suggest(room: Room, scan: dict) -> list[dict]:
         dx, dy = room.wall_dir(i)
         nx, ny = room.inward(i)
         blocked = []
-        for r in room.objects + zones:
+        for c in corners:
             # вдоль стены и вглубь комнаты; что стоит ближе 60 см к стене — занимает её
-            along = [(p[0] - x1) * dx + (p[1] - y1) * dy for p in r.corners()]
-            inward = [(p[0] - x1) * nx + (p[1] - y1) * ny for p in r.corners()]
+            along = [(p[0] - x1) * dx + (p[1] - y1) * dy for p in c]
+            inward = [(p[0] - x1) * nx + (p[1] - y1) * ny for p in c]
             if min(inward) < 0.6 and max(inward) > -0.2:
                 blocked.append((min(along) - 0.05, max(along) + 0.05))
         windows = [(o["offset"] - o["width"] / 2 - 0.05, o["offset"] + o["width"] / 2 + 0.05, o["bottom"])
                    for o in room.openings if o["wall"] == i and o["kind"] == "window"]
+        parts = []
         for a, b in _free(0.0, length, blocked):
-            parts = [(p0, p1, None) for p0, p1 in _free(a, b, [(w0, w1) for w0, w1, _ in windows])]
+            parts += [(p0, p1, None) for p0, p1 in _free(a, b, [(w0, w1) for w0, w1, _ in windows])]
             parts += [(max(a, w0), min(b, w1), 0.8 if bottom is None else bottom)
                       for w0, w1, bottom in windows if min(b, w1) - max(a, w0) > 0]
-            for s0, s1, low in parts:
-                if s1 - s0 < MIN_STRETCH:
-                    continue
-                # свободная глубина: лучи от стены в комнату через каждые ~30 см, минус проход
-                steps = max(2, math.ceil((s1 - s0) / 0.3) + 1)
-                marks = (s0 + 0.05 + (s1 - s0 - 0.1) * k / (steps - 1) for k in range(steps))
-                depth = min(cast((x1 + dx * s + nx * 0.02, y1 + dy * s + ny * 0.02), (nx, ny), segs)
-                            for s in marks) - PASSAGE
-                if wet:
-                    pick = ("wardrobe", "Пенал для ванной", "пенал для ванной", 0.6, 0.35) \
-                        if low is None and depth >= 0.25 else None
-                elif low is not None:
-                    pick = ("dresser", "Комод", "комод", 2.0, 0.45) if depth >= 0.35 and low >= 0.5 else None
-                else:
-                    pick = (("wardrobe", "Шкаф", "шкаф", 3.0, 0.6) if depth >= 0.55 else
-                            ("dresser", "Комод", "комод", 2.0, 0.45) if depth >= 0.35 else
-                            ("shelving", "Стеллаж", "стеллаж", 2.0, 0.35) if depth >= 0.25 else None)
-                if not pick:
-                    continue
-                variant, title, noun, cap_w, cap_d = pick
-                w_m, d_m = min(s1 - s0, cap_w), min(depth, cap_d)
-                width = _ten(_down(w_m))
-                query = f"{noun} шириной до {width} см" + (f" высотой до {_ten(_down(low))} см" if low else "")
-                note = f"{room.wall_ru(i)}: свободно {_m(s1 - s0)} м, спереди проход 70 см" + (
-                    f", под окном — высота до {_down(low)} см" if low else "")
-                mid = (s0 + s1) / 2
-                place = Rect(x1 + dx * mid + nx * (d_m / 2 + 0.02), y1 + dy * mid + ny * (d_m / 2 + 0.02),
-                             width / 100, d_m, math.atan2(dy, dx))
-                found.append({"kind": "storage", "title": title, "variant": variant, "wall": i,
-                              "size": {"width": None, "depth": None, "height": None},
-                              "max": {"width": width, "depth": _down(d_m)},
-                              "note": note[:1].upper() + note[1:], "query": query, "links": links(query, "storage"),
-                              "place": {"x": round(place.x, 3), "y": round(place.y, 3),
-                                        "angle": round(place.angle, 4), "width": width / 100,
-                                        "depth": round(d_m, 2)}, "_rect": place})
+        parts = [p for p in parts if p[1] - p[0] >= MIN_STRETCH]
+        for s0, s1, low in sorted(parts, key=lambda p: p[0] - p[1])[:MAX_TIP_PARTS]:
+            # свободная глубина напротив куска (без 5 см по краям), минус проход
+            depth = _depth(segs, x1, y1, dx, dy, nx, ny, s0 + 0.05, s1 - 0.05) - PASSAGE
+            if wet:
+                pick = ("wardrobe", "Пенал для ванной", "пенал для ванной", 0.6, 0.35) \
+                    if low is None and depth >= 0.25 else None
+            elif low is not None:
+                pick = ("dresser", "Комод", "комод", 2.0, 0.45) if depth >= 0.35 and low >= 0.5 else None
+            else:
+                pick = (("wardrobe", "Шкаф", "шкаф", 3.0, 0.6) if depth >= 0.55 else
+                        ("dresser", "Комод", "комод", 2.0, 0.45) if depth >= 0.35 else
+                        ("shelving", "Стеллаж", "стеллаж", 2.0, 0.35) if depth >= 0.25 else None)
+            if not pick:
+                continue
+            variant, title, noun, cap_w, cap_d = pick
+            w_m, d_m = min(s1 - s0, cap_w), min(depth, cap_d)
+            width = _ten(_down(w_m))
+            query = f"{noun} шириной до {width} см" + (f" высотой до {_ten(_down(low))} см" if low else "")
+            note = f"{room.wall_ru(i)}: свободно {_m(s1 - s0)} м, спереди проход 70 см" + (
+                f", под окном — высота до {_down(low)} см" if low else "")
+            mid = (s0 + s1) / 2
+            place = Rect(x1 + dx * mid + nx * (d_m / 2 + 0.02), y1 + dy * mid + ny * (d_m / 2 + 0.02),
+                         width / 100, d_m, math.atan2(dy, dx))
+            found.append({"kind": "storage", "title": title, "variant": variant, "wall": i,
+                          "size": {"width": None, "depth": None, "height": None},
+                          "max": {"width": width, "depth": _down(d_m)},
+                          "note": note[:1].upper() + note[1:], "query": query, "links": links(query, "storage"),
+                          "place": {"x": round(place.x, 3), "y": round(place.y, 3),
+                                    "angle": round(place.angle, 4), "width": width / 100,
+                                    "depth": round(d_m, 2),
+                                    # под окном — ниже подоконника на 5 см, иначе высоту выберет 3D
+                                    **({"height": round(low - 0.05, 2)} if low else {})}, "_rect": place})
     chosen = []
     for s in sorted(found, key=lambda s: (-s["max"]["width"], -s["max"]["depth"])):
         if len(chosen) < MAX_SUGGEST and not any(overlaps(s["_rect"], c["_rect"]) for c in chosen):

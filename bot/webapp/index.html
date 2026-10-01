@@ -217,6 +217,7 @@ input.money { font: 800 28px/1.1 "Unbounded", sans-serif; letter-spacing: -.03em
   transition: all .35s var(--spring); }
 .toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--signal); }
 .toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+body:has(.cam) .toast { bottom: calc(132px + env(safe-area-inset-bottom)); }   /* над кнопкой съёмки */
 .balance { margin-top: 20px; color: var(--ink-2); font-size: 14px; text-align: center; text-wrap: balance; }
 
 /* дом (SVG) */
@@ -493,17 +494,18 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 .iso .lamp circle { fill: var(--signal); }
 .iso .turn { fill: none; stroke: var(--signal); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 3 5; }
 .fitem { padding: 14px 0; }
-.fitem + .fitem { border-top: 1px solid var(--line); }
+.fitem + .fitem, [data-k] + [data-k] .fitem { border-top: 1px solid var(--line); }
 .fitem .fit { margin: 4px 0 2px; font-size: 15px; }
 .fitem .fit b { font: 700 16px/1.2 "Unbounded", sans-serif; letter-spacing: -.02em; white-space: nowrap; }
-.shops { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.shops button { flex: 1 1 auto; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 12px; padding: 10px 12px;
-  font-weight: 600; font-size: 14px; cursor: pointer; transition: transform .15s var(--ease); }
+.shops { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.shops button:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.shops button { border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 12px; padding: 10px 8px; min-height: 44px;
+  font-weight: 600; font-size: 13px; cursor: pointer; transition: transform .15s var(--ease); }
 .shops button:active { transform: scale(.96); }
 .tag-s { flex: none; font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--signal) 28%, transparent); }
 
 /* ремонт в 3D: комната на весь экран, снизу — лист с выбором */
-.r3d { position: fixed; inset: 0; z-index: 12; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background-color: var(--paper);
+.r3d { position: fixed; inset: 0; z-index: 12; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); background-color: var(--paper);
   background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 24px 24px; }
 .r3d-top { width: 100%; max-width: 560px; margin: 0 auto; padding: calc(10px + env(safe-area-inset-top)) 16px 6px; }
 .r3d-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
@@ -524,17 +526,21 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
   background: rgba(20,32,46,.74); color: #fff; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
 .r3d-pill.l { left: 12px; } .r3d-pill.r { right: 12px; }
 .r3d-pill.warn { background: var(--alarm); }
+.r3d-stage:has(.r3d-sheet) .r3d-pill { opacity: 0; pointer-events: none; }   /* открыт лист — кнопки не закрывают выбранное */
 .r3d-hint { position: absolute; left: 50%; bottom: 12px; z-index: 2; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); text-align: center;
   padding: 9px 14px; border-radius: 16px; font-size: 14px; background: rgba(20,32,46,.74); color: #fff; pointer-events: none; transition: opacity .4s; }
 .r3d-hint.gone { opacity: 0; }
+:root[data-theme="dark"] .r3d-pill:not(.warn), :root[data-theme="dark"] .r3d-hint { background: rgba(38,58,84,.82); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .r3d-bar { width: 100%; max-width: 560px; margin: 0 auto; padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; }
 .r3d-bar .btn { display: grid; place-items: center; align-content: center; line-height: 1.15; padding: 10px; min-height: 58px; }
 .r3d-bar .btn small { display: block; font-size: 12px; font-weight: 600; opacity: .72; margin-top: 2px; }
 .r3d-bar .btn:disabled { opacity: .6; }
+@media (max-width: 359px) { .r3d-bar .wide { display: none; } }
 .r3d-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; max-width: 560px; margin: 0 auto; max-height: min(56%, 470px); overflow-y: auto;
   overscroll-behavior: contain; padding: 4px 16px calc(18px + env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--surface);
   box-shadow: 0 -14px 34px -16px rgba(0,0,0,.5); animation: sheetUp .4s var(--spring); }
 .r3d-sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 6px auto 10px; }
+.r3d-sheet .grab, .r3d-sheet .sh-head { touch-action: none; }   /* шапку тянут вниз, браузер её не прокручивает */
 .sh-head { display: flex; align-items: flex-start; gap: 8px; }
 .sh-head strong { display: block; font: 700 18px/1.25 "Unbounded", "Onest", sans-serif; letter-spacing: -.02em; }
 .sh-head .x { margin: -6px -8px 0 0; font-size: 26px; min-width: 44px; min-height: 44px; }
@@ -553,12 +559,15 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 .add-grid button:active { transform: scale(.96); }
 .add-grid b { font-size: 15px; line-height: 1.2; }
 .add-grid span { font-size: 12px; color: var(--ink-2); }
+.dot { width: 28px; height: 28px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
 .r3d-wait { position: absolute; inset: 0; z-index: 4; }
 .r3d-wait .scanning { position: absolute; inset: 0; margin: 0; border-radius: 0; }
 .r3d-wait .scanning img { height: 100%; max-height: none; }
 .r3d-res { position: absolute; inset: 0; z-index: 6; overflow-y: auto; background: var(--paper); padding: calc(14px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); animation: slideIn .35s var(--ease); }
 .r3d-res > * { max-width: 528px; margin-left: auto; margin-right: auto; }
 .r3d-res .ba img { max-height: 62vh; }
+.r3d-res .actions .btn { display: grid; place-items: center; align-content: center; line-height: 1.15; min-height: 58px; padding: 10px; }
+.r3d-res .actions small { font-size: 12px; font-weight: 600; opacity: .72; margin-top: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -579,6 +588,9 @@ textarea:focus { border-color: var(--draft); box-shadow: 0 0 0 4px color-mix(in 
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 const initData = tg?.initData || "";
+// Telegram дописывает свои параметры после пути: #scan/3?tgWebAppData=… — они уже прочитаны, в адресе оставляем только путь
+const hashPath = () => { const h = location.hash.slice(1).split(/[?&]/)[0]; return h.includes("=") ? "" : h; };
+if (location.hash.slice(1) !== hashPath()) try { history.replaceState(history.state, "", location.pathname + location.search + (hashPath() ? "#" + hashPath() : "")); } catch {}
 const state = { me: null, obj: null, tab: "sum", kind: "material", lastId: null };
 const $app = document.getElementById("app");
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -604,10 +616,10 @@ const ICON = {
   check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
 };
 
-function toast(text) {
+function toast(text, ms = 1900) {
   const t = document.getElementById("toast");
   t.textContent = text; t.classList.add("show");
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1900);
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), ms);
 }
 
 async function api(path, opts = {}) {
@@ -715,10 +727,11 @@ function unroll(root = document) {
 
 // ---------- маршруты ----------
 async function route() {
-  const h = location.hash.slice(1);
+  const h = hashPath();
   clearScreen(); closeOverlays(); dock(h);
   try {
     if (h.startsWith("obj/")) return await showObject(+h.split("/")[1]);
+    if (h.startsWith("scan/")) return await showScanPage(+h.split("/")[1]);
     if (h === "new") return showNew();
     if (h === "calc") return await showCalc();
     if (h === "archive") return await showArchive();
@@ -1127,8 +1140,8 @@ const overlays = [];   // камера и нижние листы: закрыв�
 function clearScreen() { timers.forEach(clearInterval); timers = []; while (cleanups.length) cleanups.pop()(); }
 function closeOverlays() { while (overlays.length) overlays.pop()(); }
 
-function drafting(msgs) {
-  return `<section class="panel drafting" aria-live="polite">
+function drafting(msgs, cls = "panel") {
+  return `<section class="${cls} drafting" aria-live="polite">
     <svg viewBox="0 0 150 96" aria-hidden="true"><path class="d-line" d="M20 80 H130 V16 H20 Z M20 48 H70 V80"/>
       <path class="d-dim" d="M20 90 H130 M20 86 v8 M130 86 v8"/><circle class="pencil" r="5"/></svg>
     <div class="msg" data-msgs='${esc(JSON.stringify(msgs))}'>${esc(msgs[0])}</div></section>`;
@@ -1209,20 +1222,88 @@ const deg = r => r * 180 / Math.PI;
 const edgeTilt = g => { let a = deg(Math.atan2(g.x, g.y)); a = ((a % 90) + 135) % 90 - 45; return a; };
 const mmPer2m = a => Math.round(Math.tan(Math.abs(a) * Math.PI / 180) * 2000);
 
-// ---------- камера в приложении: сетка и горизонт ----------
+// ---------- камера в приложении: сетка, горизонт, зум и фонарик ----------
+const TORCH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2h10v4l-3 4v11a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V10L7 6z"/><path d="M7 6h10M12 13v2"/></svg>`;
 async function openCamera(hint = "Держите телефон ровно: линия горизонта станет жёлтой") {
   if (!navigator.mediaDevices?.getUserMedia) return null;
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } }, audio: false }); }
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }); }
   catch { return null; }
+  const track = stream.getVideoTracks()[0];
   return new Promise(async done => {
     const el = document.createElement("div");
     el.className = "cam";
-    el.innerHTML = `<div class="view"><video playsinline autoplay muted></video><div class="thirds"></div>
-      <div class="horizon"></div><div class="deg"></div><div class="hint">${esc(hint)}</div><div class="flash"></div></div>
+    el.innerHTML = `<div class="view"><div class="frame"><video playsinline autoplay muted></video><div class="thirds"></div></div>
+      <div class="horizon"></div><div class="deg"></div><div class="hint">${esc(hint)}</div>
+      <button type="button" class="torch" aria-pressed="false" aria-label="Фонарик">${TORCH}</button>
+      <div class="zoom"><div class="zpills" role="group" aria-label="Приближение"></div>
+        <input type="range" min="1" max="4" step="0.05" value="1" aria-label="Приближение"></div><div class="flash"></div></div>
       <div class="bar"><button data-x>Отмена</button><button class="shutter" aria-label="Снять"></button><button data-g>Галерея</button></div>`;
     document.body.append(el);
-    const v = el.querySelector("video"); v.srcObject = stream;
+    const v = el.querySelector("video"), view = el.querySelector(".view"), frame = el.querySelector(".frame");
+    const range = el.querySelector("input"), pills = el.querySelector(".zpills"), torch = el.querySelector(".torch");
+    v.srcObject = stream;
+    // кадр по пропорциям камеры: на фото попадёт ровно то, что видно
+    const fit = () => {
+      const a = v.videoWidth / v.videoHeight, W = view.clientWidth, H = view.clientHeight;   // без учёта анимации появления
+      if (!a || !W) return;
+      let w = W, h = w / a;
+      if (h > H) { h = H; w = h * a; }
+      frame.style.width = w + "px"; frame.style.height = h + "px";
+    };
+    addEventListener("resize", fit);
+    await new Promise(ok => v.readyState >= 1 ? ok() : v.addEventListener("loadedmetadata", ok, { once: true }));
+    fit();
+    // зум: оптика камеры, если телефон даёт; иначе — цифровой (увеличиваем картинку и так же обрезаем фото)
+    const caps = track?.getCapabilities?.() || {};
+    let hw = caps.zoom && caps.zoom.max > caps.zoom.min ? caps.zoom : null;
+    let zMin, zMax, marks, zoom = hw ? track.getSettings?.().zoom || 1 : 1, digital = 1, pending = false;
+    const scale = () => {   // пределы зума и кнопки 1×, 2×, 3×
+      zMin = hw ? Math.max(hw.min, .5) : 1; zMax = hw ? Math.min(hw.max, 10) : 4;
+      zoom = Math.max(zMin, Math.min(zMax, zoom));
+      range.min = zMin; range.max = zMax;
+      marks = [zMin < 1 ? zMin : null, 1, 2, zMax >= 5 ? 5 : zMax >= 3 ? 3 : null].filter(z => z && z <= zMax);
+      pills.innerHTML = marks.map(z => `<button type="button" data-z="${z}">${String(+z.toFixed(1)).replace(".", ",")}×</button>`).join("");
+    };
+    scale();
+    const showZoom = () => {
+      range.value = zoom;
+      const near = marks.reduce((a, b) => Math.abs(b - zoom) < Math.abs(a - zoom) ? b : a);
+      pills.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.z === near && Math.abs(near - zoom) < .15));
+    };
+    const setZoom = z => {
+      zoom = Math.max(zMin, Math.min(zMax, z)); showZoom();
+      if (!hw) { digital = zoom; v.style.transform = zoom > 1 ? `scale(${zoom})` : ""; return; }
+      if (pending) return;   // не чаще кадра: камера не успевает за пальцем
+      pending = true;
+      requestAnimationFrame(async () => {
+        try { await track.applyConstraints({ advanced: [{ zoom }] }); }
+        catch { hw = null; scale(); setZoom(zoom); }
+        pending = false;
+      });
+    };
+    showZoom();
+    range.oninput = () => setZoom(+range.value);
+    pills.onclick = e => { const b = e.target.closest("[data-z]"); if (b) { haptic(); setZoom(+b.dataset.z); } };
+    // щипок двумя пальцами
+    const pts = new Map(); let pinch = null;
+    view.addEventListener("pointerdown", e => { pts.set(e.pointerId, e); if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z: zoom }; } });
+    view.addEventListener("pointermove", e => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, e);
+      if (pinch && pts.size === 2) { const [a, b] = [...pts.values()]; setZoom(pinch.z * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / Math.max(20, pinch.d)); }
+    });
+    const lift = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+    view.addEventListener("pointerup", lift); view.addEventListener("pointercancel", lift);
+    // фонарик: только если камера умеет; иначе подсказка, где его включить
+    const torchOk = !!caps.torch;
+    torch.setAttribute("aria-disabled", !torchOk);
+    torch.onclick = async () => {
+      if (!torchOk) return toast("Фонарик недоступен в этом телефоне — включите его в пункте управления", 3600);
+      const on = torch.getAttribute("aria-pressed") !== "true";
+      try { await track.applyConstraints({ advanced: [{ torch: on }] }); torch.setAttribute("aria-pressed", on); haptic(); }
+      catch { toast("Не получилось включить фонарик", 2600); }
+    };
     const hz = el.querySelector(".horizon"), dg = el.querySelector(".deg");
     let wasLevel = false;
     const stop = await startMotion(g => {
@@ -1233,16 +1314,18 @@ async function openCamera(hint = "Держите телефон ровно: ли
       wasLevel = lvl;
     });
     let closed = false;
-    const close = r => { if (closed) return; closed = true; stream.getTracks().forEach(t => t.stop()); stop?.(); el.remove(); done(r); };
+    const close = r => { if (closed) return; closed = true; stream.getTracks().forEach(t => t.stop()); stop?.(); removeEventListener("resize", fit); el.remove(); done(r); };
     overlays.push(() => close(null));
     el.querySelector("[data-x]").onclick = () => close(null);
     el.querySelector("[data-g]").onclick = async () => { const [f] = await pickFile(); close(f || null); };
     el.querySelector(".shutter").onclick = () => {
       haptic("medium");
       el.querySelector(".flash").classList.add("go");
+      // при цифровом зуме берём середину кадра — ровно то, что было на экране
+      const W = v.videoWidth, H = v.videoHeight, k = hw ? 1 : digital, sw = W / k, sh = H / k;
       const c = document.createElement("canvas");
-      c.width = v.videoWidth; c.height = v.videoHeight;
-      c.getContext("2d").drawImage(v, 0, 0);
+      c.width = Math.round(sw); c.height = Math.round(sh);
+      c.getContext("2d").drawImage(v, (W - sw) / 2, (H - sh) / 2, sw, sh, 0, 0, c.width, c.height);
       c.toBlob(b => close(b), "image/jpeg", .9);
     };
   });
@@ -1587,39 +1670,49 @@ function planSvg(s) {
     ${s.height ? `<text x="${x + w / 2}" y="${y + h / 2 + 5}" text-anchor="middle" style="fill:var(--draft)">h ${m(s.height)}</text>` : ""}</svg>`;
 }
 // размеры комнаты: план, площади и переходы в калькулятор и смету (для скриншота и для LiDAR-скана)
-function showSizes(out, s, plan, objects) {
+function showSizes(out, s, plan, objects, scan = null) {
   state.sizes = s;
   const n = v => v ? String(v).replace(".", ",") : "—";
   const calc = (key, nums, name) => nums.every(Boolean) ? `<button type="button" data-calc="${key}" data-nums="${nums.join(" ")}">${name}</button>` : "";
   out.innerHTML = `<section class="panel pad">
     <div class="row"><strong class="grow">${esc(s.room || "Помещение")}</strong><span class="muted">${esc(s.notes || "")}</span></div>
-    ${plan?.length > 2 ? polySvg(plan, objects) : planSvg(s)}
+    ${plan?.length > 2 ? polySvg(plan, objects, scan) : planSvg(s)}
     <div class="stats3"><div><b>${n(s.floor_area)}</b><span>пол, м²</span></div><div><b>${n(s.wall_area)}</b><span>стены, м²</span></div><div><b>${n(s.perimeter)}</b><span>периметр, м</span></div></div>
     <p class="muted" style="margin:0 0 8px">Посчитать материалы</p>
     <div class="chips wrap">${calc("tile", [s.floor_area, 30, 60], "Плитка на пол")}${calc("laminate", [s.floor_area], "Ламинат")}
       ${calc("wallpaper", [s.perimeter, s.height], "Обои")}${calc("paint", [s.wall_area, 2], "Краска")}${calc("plaster", [s.wall_area, 10], "Штукатурка")}</div>
-    <button class="btn" data-est>Смета по этим размерам</button></section>`;
+    ${scan ? "" : `<button class="btn" data-est>Смета по этим размерам</button>`}</section>`;
   out.querySelectorAll("[data-calc]").forEach(b => b.onclick = () => { state.calcPrefill = { key: b.dataset.calc, nums: b.dataset.nums }; go("calc"); });
+  if (scan) return;   // у скана своя смета: по точным объёмам и выбранному ремонту
   out.querySelector("[data-est]").onclick = () => {
     const parts = [s.room || "Помещение", s.length && s.width ? `${n(s.length)} × ${n(s.width)} м` : "", s.height ? `высота ${n(s.height)} м` : "",
       s.floor_area ? `пол ${n(s.floor_area)} м²` : "", s.wall_area ? `стены ${n(s.wall_area)} м²` : ""].filter(Boolean);
     state.prefill = { kind: "estimate", text: parts.join(", ") + ". Работы: " }; go("t/estimate");
   };
 }
-// план по точкам из LiDAR-скана: стены с длинами
-function polySvg(pts, objects = []) {
-  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+// контур комнаты обходом стен (plan.js, общий с 3D): план из скана бывает выпуклой оболочкой и накрывает выемку Г-образной комнаты
+const PLAN_URL = location.pathname.replace(/\/?$/, "/") + "plan.js";
+let PLAN = null;
+const loadPlan = () => PLAN ? Promise.resolve(PLAN) : import(PLAN_URL).then(m => (PLAN = m)).catch(() => null);
+// план по точкам из LiDAR-скана: стены с длинами; у сканов v2 — окна, двери и то, что нужно доснять
+function polySvg(pts, objects = [], scan = null) {
+  const lines = scan?.wall_lines || [], ol = scan && PLAN ? PLAN.outlineOf(scan) : null;
+  if (ol) pts = ol.poly;
+  const all = pts.concat(lines.flatMap(l => [[l[0], l[1]], [l[2], l[3]]]));
+  const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
   const minX = Math.min(...xs), minY = Math.min(...ys), w = Math.max(...xs) - minX || 1, h = Math.max(...ys) - minY || 1;
   const W = 320, H = 220, pad = 40, k = Math.min((W - pad * 2) / w, (H - pad * 2) / h);
   const ox = (W - w * k) / 2, oy = (H - h * k) / 2;
-  const P = pts.map(([x, y]) => [ox + (x - minX) * k, oy + (y - minY) * k]);
-  const cx = P.reduce((a, p) => a + p[0], 0) / P.length, cy = P.reduce((a, p) => a + p[1], 0) / P.length;
+  const T = ([x, y]) => [ox + (x - minX) * k, oy + (y - minY) * k], F = p => p.map(v => v.toFixed(1)).join(" ");
+  const P = pts.map(T);
+  let area = 0;   // знак — в какую сторону обход: подписи длин ставим снаружи стены
+  P.forEach(([x1, y1], i) => { const [x2, y2] = P[(i + 1) % P.length]; area += x1 * y2 - x2 * y1; });
   const labels = P.map((p, i) => {
     const q = P[(i + 1) % P.length], len = Math.hypot(pts[(i + 1) % pts.length][0] - pts[i][0], pts[(i + 1) % pts.length][1] - pts[i][1]);
     if (len < .4) return "";
     let mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
-    const dx = mx - cx, dy = my - cy, d = Math.hypot(dx, dy) || 1;
-    mx += dx / d * 16; my += dy / d * 16 + 4;
+    const ex = q[0] - p[0], ey = q[1] - p[1], d = Math.hypot(ex, ey) || 1, s = area > 0 ? 1 : -1;
+    mx += ey / d * 16 * s; my += -ex / d * 16 * s + 4;
     return `<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${len.toFixed(2).replace(".", ",")}</text>`;
   }).join("");
   // мебель из скана: повёрнутые прямоугольники в тех же координатах, что и стены
@@ -1628,8 +1721,58 @@ function polySvg(pts, objects = []) {
     return `<rect class="furn" x="${(-fw / 2).toFixed(1)}" y="${(-fd / 2).toFixed(1)}" width="${fw.toFixed(1)}" height="${fd.toFixed(1)}" rx="2"
       transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${((o.angle || 0) * 180 / Math.PI).toFixed(1)})"/>`;
   }).join("");
+  let extra = "";
+  if (lines.length) {
+    const inside = (x, y) => { let r = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [x1, y1] = pts[i], [x2, y2] = pts[j]; if ((y1 > y) !== (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1) r = !r; } return r; };
+    const wall = i => { const [x1, y1, x2, y2] = lines[i], len = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / len, uy = (y2 - y1) / len;
+      let nx = -uy, ny = ux;   // нормаль внутрь комнаты: по обходу стен, без него — по контуру
+      if (ol ? !ol.left[i] : !inside((x1 + x2) / 2 + nx * .1, (y1 + y2) / 2 + ny * .1)) { nx = -nx; ny = -ny; }
+      return { x1, y1, len, ux, uy, nx, ny, at: (s, n = 0) => T([x1 + ux * s + nx * n, y1 + uy * s + ny * n]) }; };
+    for (const o of scan.openings || []) {
+      if (!lines[o.wall] || o.offset == null || !o.width) continue;
+      const L = wall(o.wall), a = Math.max(0, o.offset - o.width / 2), b = Math.min(L.len, o.offset + o.width / 2);
+      const A = L.at(a), B = L.at(b);
+      if (o.kind === "window") { extra += `<path class="op-win" d="M${F(A)}L${F(B)}"/><path class="op-win-i" d="M${F(A)}L${F(B)}"/>`; continue; }
+      extra += `<path class="op-gap" d="M${F(A)}L${F(B)}"/>`;
+      if (o.kind === "door") {   // дверь открывается в комнату: полотно и дуга
+        const C = L.at(a, b - a), r = ((b - a) * k).toFixed(1), sweep = (C[0] - A[0]) * (B[1] - A[1]) - (C[1] - A[1]) * (B[0] - A[0]) > 0 ? 1 : 0;
+        extra += `<path class="op-door" d="M${F(A)}L${F(C)}A${r} ${r} 0 0 ${sweep} ${F(B)}"/>`;
+      }
+    }
+    const weak = weakWalls(scan);
+    for (const i of weak) {
+      const L = wall(i), A = L.at(0), B = L.at(L.len), M = L.at(L.len / 2, 16 / k);   // номер — внутри, снаружи подписи длин
+      extra += `<path class="weak" d="M${F(A)}L${F(B)}"/><g class="badge"><circle cx="${M[0].toFixed(1)}" cy="${M[1].toFixed(1)}" r="9"/>
+        <text x="${M[0].toFixed(1)}" y="${(M[1] + 4).toFixed(1)}" text-anchor="middle">${i + 1}</text></g>`;
+    }
+    for (const [g, d] of wallGaps(lines)) { const [x, y] = T(g); extra += `<circle class="gap" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.max(8, d * k / 2 + 5).toFixed(1)}"/>`; }
+  }
   return `<svg class="plan-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="План комнаты по скану">
-    <path class="wall" d="M${P.map(p => p.map(v => v.toFixed(1)).join(" ")).join("L")}Z"/>${furn}${labels}</svg>`;
+    <path class="wall" d="M${P.map(F).join("L")}Z"/>${furn}${extra}${labels}</svg>`;
+}
+// номера стен из подсказок приложения: «Стена 2 (справа на плане)…», «Угол между стенами 4 и 5…»
+function weakWalls(scan) {
+  const out = new Set(), n = (scan?.wall_lines || []).length;
+  for (const t of scan?.quality?.issues || []) for (const m of t.matchAll(/стен\S*\s+(\d+)(?:\s+и\s+(\d+))?/gi))
+    [m[1], m[2]].forEach(v => { if (v && +v >= 1 && +v <= n) out.add(+v - 1); });
+  return out;
+}
+// концы стен, которые ни во что не упёрлись: недоснятый угол → [середина щели, её ширина]
+function wallGaps(lines) {
+  const dist = ([px, py], [x1, y1, x2, y2]) => {
+    const dx = x2 - x1, dy = y2 - y1, t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(px - x1 - dx * t, py - y1 - dy * t);
+  };
+  const ends = [], out = [], used = new Set();
+  lines.forEach((l, i) => [[l[0], l[1]], [l[2], l[3]]].forEach(p => { if (lines.length > 1 && lines.every((m, j) => j === i || dist(p, m) > .3)) ends.push({ p, i }); }));
+  const d = (a, b) => Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]);
+  for (const a of ends) {   // два конца рядом — одна щель
+    if (used.has(a)) continue;
+    const b = ends.filter(e => e.i !== a.i && !used.has(e) && d(a, e) < 1.5).sort((e, f) => d(a, e) - d(a, f))[0];
+    used.add(a);
+    if (b) { used.add(b); out.push([[(a.p[0] + b.p[0]) / 2, (a.p[1] + b.p[1]) / 2], d(a, b)]); } else out.push([a.p, 0]);
+  }
+  return out;
 }
 async function showMeasure() {
   setBack(() => go("tools"));
@@ -1648,7 +1791,7 @@ async function showMeasure() {
     <button class="btn" id="m-go">Распознать размеры${costWord("measure")}</button>
     <div id="m-out" style="margin-top:12px"></div>`, () => {
     wirePhotoBox("m-shot", b => { photo = b; }, "Снимите план или стену с рулеткой");
-    loadScans(document.getElementById("m-scans"), document.getElementById("m-out"));
+    loadScans(document.getElementById("m-scans"));
     document.getElementById("m-go").onclick = async e => {
       if (!photo) { notify("error"); return toast("Загрузите скриншот скана"); }
       const fd = new FormData(); fd.append("photo", photo, "scan.jpg");
@@ -1665,71 +1808,474 @@ async function showMeasure() {
 }
 
 // сканы из приложения СтройСкан (LiDAR на iPhone)
-async function loadScans(box, out) {
+async function loadScans(box) {
   let scans = [];
   try { ({ scans } = await api("/scans")); } catch { return; }
   const n = v => v ? String(+v.toFixed(2)).replace(".", ",") : "—";
   box.innerHTML = `<h2 class="h2">Сканы с iPhone</h2>` + (scans.length
-    ? `<section class="panel">${scans.map((x, i) => `<div class="line" role="button" tabindex="0" data-scan="${i}" style="cursor:pointer">
+    ? `<section class="panel">${scans.map(x => `<div class="line" role="button" tabindex="0" data-scan="${x.id}" style="cursor:pointer">
         <span class="sw k-material"></span><div class="grow"><div>${esc(x.room)}</div><div class="muted">${fdate(x.created_at)}, пол ${n(x.sizes.floor_area)} м²</div></div>
-        <span class="amount">${n(x.sizes.wall_area)} м²</span></div>`).join("")}</section>`
+        ${x.quality?.issues?.length ? `<span class="tag-s">доснять</span>` : `<span class="amount">${n(x.sizes.wall_area)} м²</span>`}</div>`).join("")}</section>`
     : `<section class="panel pad"><div>Приложение СтройСкан меряет комнату лидаром iPhone Pro: стены, окна и двери. Сканы появятся здесь.</div>
        <button class="btn quiet" style="margin-top:12px" data-pair>Подключить iPhone</button></section>`);
-  box.querySelectorAll("[data-scan]").forEach(el => el.onclick = () => {
-    const x = scans[+el.dataset.scan]; haptic();
-    showScan(out, x);
-    out.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  box.querySelectorAll("[data-scan]").forEach(el => {
+    el.onclick = () => go("scan/" + el.dataset.scan);
+    el.onkeydown = e => e.key === "Enter" && go("scan/" + el.dataset.scan);
   });
   box.querySelector("[data-pair]")?.addEventListener("click", pairIphone);
 }
-// скан с iPhone: план с мебелью, точные материалы, ремонт на картинке и смета по размерам
-async function showScan(out, x) {
-  showSizes(out, { ...x.sizes, room: x.room, notes: "скан лидаром" }, x.plan, x.objects);
-  const p = await loadProfile(), keys = Object.keys(p.styles);
-  let style = keys[0];
-  const box = document.createElement("div");
-  box.innerHTML = `
-    ${x.furniture?.length ? `<section class="panel pad"><strong>Мебель в комнате</strong>
-      <p class="muted" style="margin:6px 0 0">${x.furniture.map(esc).join(", ")}</p></section>` : ""}
+
+// ---------- скан с iPhone: что доснять, план, мебель по размерам, ремонт в 3D и на картинке ----------
+const ISO = `<svg class="iso" viewBox="0 0 124 124" aria-hidden="true">
+  <path class="f" d="M62 106 L112 81 L62 56 L12 81 Z"/>
+  <path class="w" d="M12 81 V33 L62 8 V56 Z"/><path class="w" d="M62 56 V8 L112 33 V81 Z"/>
+  <path class="s" d="M76 51 L100 63 V71 L76 59 Z M76 59 L100 71 L90 76 L66 64 Z M66 64 L90 76 V82 L66 70 Z"/>
+  <g class="lamp"><path d="M42 26 V44"/><circle cx="42" cy="47" r="4"/></g>
+  <path class="turn" d="M14 100 Q62 128 110 100"/><path class="turn" style="stroke-dasharray:none" d="M103 97 L110 100 L104 106"/></svg>`;
+async function showScanPage(id) {
+  setBack(() => history.length > 1 ? history.back() : go("t/measure"));
+  const first = !$app.dataset.ready;   // открыли кнопкой «Ремонт в 3D» из чата — сразу в 3D
+  const [x, p] = await Promise.all([api("/scans/" + id), loadProfile(), loadPlan()]);
+  state.scan = x;
+  const issues = x.quality?.issues || [], marked = weakWalls(x).size || wallGaps(x.wall_lines || []).length;
+  const keys = Object.keys(p.styles);
+  let style = x.look?.style in p.styles ? x.look.style : keys[0];
+  paint(`
+    <header class="top"><div class="grow"><h1 class="title">${esc(x.room)}</h1>
+      <div class="sub">Скан лидаром iPhone, ${fdate(x.created_at)}</div></div></header>
+    ${issues.length ? `<section class="panel pad alert" role="note"><strong class="display">Нужно доснять</strong>
+      <ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+      <p class="muted" style="margin:0">Откройте СтройСкан и пересканируйте эти места${marked ? ", на плане они красные" : ""}. Размеры, смета и ремонт станут точнее</p></section>` : ""}
+    <button class="feature" data-3d>${ISO}<strong>Ремонт в 3D</strong>
+      <span>Крутите комнату, меняйте мебель, обои, пол и люстру. Потом — фото «как в жизни»</span></button>
+    <div id="sc-sizes"></div>
+    <section class="panel pad" id="sc-furn"><strong>Мебель по размерам</strong>
+      <p class="muted" style="margin:6px 0 12px">Сколько места у каждой вещи и что встанет на свободные стены. Магазин откроется с поиском нужного размера</p>
+      <button class="btn quiet" data-furn>🛋 Подобрать мебель</button><div data-fout></div></section>
     <section class="panel pad"><strong>Материалы по точным размерам</strong>
       <ul style="margin:8px 0 0;padding-left:18px">${(x.materials || []).map(m => `<li>${esc(m)}</li>`).join("")}</ul></section>
     <section class="panel pad"><strong>Ремонт на картинке</strong>
-      <p class="muted" style="margin:6px 0 10px">${x.has_photo ? "Перекрашу фото комнаты с iPhone" : "Нарисую комнату по размерам скана"}</p>
+      <p class="muted" style="margin:6px 0 10px">${x.has_photo ? "Перерисую фото комнаты с iPhone" : "Нарисую комнату по размерам скана"}${x.look?.style ? ", с отделкой и мебелью из 3D" : ""}</p>
       <div class="styles" role="group" aria-label="Стиль">${keys.map(k => `<button type="button" data-k="${k}" aria-pressed="${k === style}">${esc(p.styles[k])}</button>`).join("")}</div>
       <button class="btn" data-sdesign>Показать ремонт${costWord("design")}</button>
       <div data-sres></div></section>
     <button class="btn quiet" data-sest>Смета по скану${costWord("estimate")}</button>
-    <div data-seout style="margin-top:12px"></div>`;
-  out.append(box);
-  const est = out.querySelector("[data-est]"); if (est) est.remove();   // смета по скану точнее, чем по тексту
-  box.querySelectorAll(".styles button").forEach(b => b.onclick = () => {
-    style = b.dataset.k; haptic();
-    box.querySelectorAll(".styles button").forEach(y => y.setAttribute("aria-pressed", y === b));
+    <div data-seout style="margin-top:12px"></div>`, () => {
+    const box = $app;
+    showSizes(document.getElementById("sc-sizes"), { ...x.sizes, room: "План", notes: x.quality?.score != null ? `точность скана ${x.quality.score} из 100` : "скан лидаром" }, x.plan, x.objects, x);
+    box.querySelector("[data-3d]").onclick = () => { haptic(); open3D(x); };
+    box.querySelector("[data-furn]").onclick = e => { e.target.hidden = true; furnitureList(x, box.querySelector("[data-fout]")); };
+    box.querySelectorAll(".styles button").forEach(b => b.onclick = () => {
+      style = b.dataset.k; haptic();
+      box.querySelectorAll(".styles button").forEach(y => y.setAttribute("aria-pressed", y === b));
+    });
+    box.querySelector("[data-sdesign]").onclick = async e => {
+      const res = box.querySelector("[data-sres]"); e.target.disabled = true;
+      res.innerHTML = drafting(["Беру размеры из скана…", "Расставляю мебель…", `Подбираю «${p.styles[style]}»…`, "Ставлю свет…", "Почти готово…"]); rotateMsgs(res);
+      try {
+        const r = await api(`/scans/${x.id}/design`, { method: "POST", body: { style } });
+        clearScreen(); notify("success"); state.profile.credits = r.credits;
+        res.innerHTML = `<img class="scan-img" alt="${esc(x.room)} после ремонта, стиль ${esc(r.style)}" src="${esc(r.image)}">
+          <div class="actions"><button class="btn quiet" data-ssend>Отправить в чат</button></div>`;
+        res.querySelector("[data-ssend]").onclick = async () => {
+          try { await api("/send", { method: "POST", body: { photo: r.image, text: `${x.room}, стиль ${r.style}` } }); toast("Отправил в чат с ботом"); } catch (err) { aiError(err); }
+        };
+      } catch (err) { clearScreen(); res.innerHTML = ""; aiError(err); }
+      e.target.disabled = false;
+    };
+    box.querySelector("[data-sest]").onclick = async e => {
+      const res = box.querySelector("[data-seout]"); e.target.disabled = true;
+      res.innerHTML = drafting(["Считаю объёмы…", "Подбираю цены…", "Собираю смету…"]); rotateMsgs(res);
+      try {
+        const r = await api(`/scans/${x.id}/estimate`, { method: "POST" });
+        clearScreen(); notify("success"); state.profile.credits = r.credits;
+        res.innerHTML = answerBlock(r.html, r.raw); wireAnswer(res, r.raw);
+      } catch (err) { clearScreen(); res.innerHTML = ""; aiError(err); }
+      e.target.disabled = false;
+    };
+    if (first) open3D(x);
   });
-  box.querySelector("[data-sdesign]").onclick = async e => {
-    const res = box.querySelector("[data-sres]"); e.target.disabled = true;
-    res.innerHTML = drafting(["Беру размеры из скана…", "Расставляю мебель…", `Подбираю «${p.styles[style]}»…`, "Ставлю свет…", "Почти готово…"]); rotateMsgs(res);
-    try {
-      const r = await api(`/scans/${x.id}/design`, { method: "POST", body: { style } });
-      clearScreen(); notify("success"); state.profile.credits = r.credits;
-      res.innerHTML = `<img class="scan-img" alt="${esc(x.room)} после ремонта, стиль ${esc(r.style)}" src="${esc(r.image)}">
-        <div class="actions"><button class="btn quiet" data-ssend>Отправить в чат</button></div>`;
-      res.querySelector("[data-ssend]").onclick = async () => {
-        try { await api("/send", { method: "POST", body: { photo: r.image, text: `${x.room}, стиль ${r.style}` } }); toast("Отправил в чат с ботом"); } catch (err) { aiError(err); }
+}
+
+// ---------- мебель по размерам: что влезет и где купить ----------
+const openUrl = u => tg?.openLink ? tg.openLink(u) : open(u, "_blank");
+const cmPair = (a, b) => a && b ? `${a} × ${b} см` : a ? `${a} см` : "";
+function furnItem(f, { place = false, bare = false } = {}) {
+  const now = cmPair(f.size?.width, f.size?.depth), max = cmPair(f.max?.width, f.max?.depth);
+  return `<div class="fitem">
+    ${bare ? "" : `<div class="row"><b class="grow">${esc(f.title)}${f.n > 1 ? ` ×${f.n}` : ""}</b>${f.place ? `<span class="tag-s">совет</span>` : now ? `<span class="muted">сейчас ${now}</span>` : ""}</div>`}
+    ${max ? `<div class="fit">Влезет до <b>${max}</b></div>` : ""}
+    <div class="muted">${esc(f.note)}</div>
+    <div class="shops">${(f.links || []).map(l => `<button type="button" data-url="${esc(l.url)}" aria-label="Искать: ${esc(l.shop)}">${esc(l.shop.replace("Яндекс ", ""))}</button>`).join("")}</div>
+    ${place && f.place ? `<button type="button" class="btn quiet" style="margin-top:8px" data-place>Поставить в 3D</button>` : ""}</div>`;
+}
+function wireShops(root) {
+  root.querySelectorAll("[data-url]").forEach(b => b.onclick = () => { haptic(); openUrl(b.dataset.url); });
+}
+async function furnitureList(x, out) {
+  out.innerHTML = drafting(["Меряю свободные стены…", "Оставляю проходы 70 см…", "Ищу в магазинах…"], "");
+  rotateMsgs(out);
+  let items;
+  try { ({ items } = await api(`/scans/${x.id}/furniture`)); }
+  catch (e) { clearScreen(); out.innerHTML = ""; out.parentNode.querySelector("[data-furn]").hidden = false; return aiError(e); }
+  clearScreen();
+  // одинаковые вещи (стулья у стола) — одной строкой; «влезет» — по самой зажатой
+  const list = [];
+  for (const f of items) {
+    const same = !f.place && list.find(g => !g.place && g.kind === f.kind && g.title === f.title && g.query === f.query);
+    if (!same) { list.push({ ...f, max: { ...f.max }, n: 1 }); continue; }
+    same.n++;
+    for (const k of ["width", "depth"]) if (f.max?.[k] != null) same.max[k] = Math.min(same.max[k] ?? f.max[k], f.max[k]);
+  }
+  const SHOW = 5;
+  out.innerHTML = list.length
+    ? `<p class="muted" style="margin:0">Размеры: ширина × глубина. Больше не ставьте — не пройти или не открыть дверь</p>
+      ${list.map((f, k) => `<div data-k="${k}" ${k >= SHOW ? "hidden" : ""}>${furnItem(f, { place: true })}</div>`).join("")}
+      ${list.length > SHOW ? `<button type="button" class="btn quiet" data-all>Показать ещё ${list.length - SHOW}</button>` : ""}`
+    : `<p class="muted" style="margin:0">В скане нет мебели. Добавьте её в 3D, и я подскажу размеры</p>`;
+  wireShops(out);
+  out.querySelector("[data-all]")?.addEventListener("click", e => { haptic(); out.querySelectorAll("[data-k][hidden]").forEach(d => { d.hidden = false; }); e.target.remove(); });
+  out.querySelectorAll("[data-place]").forEach(b => b.onclick = () => { haptic(); open3D(x, { add: list[+b.closest("[data-k]").dataset.k] }); });
+}
+
+// ---------- ремонт в 3D: комната в точных размерах, правки, фото «как в жизни» ----------
+const R3D_URL = location.pathname.replace(/\/?$/, "/") + "room3d.js";
+let R3D = null;   // модуль 3D: грузим, только когда открыли
+async function open3D(x, { add = null } = {}) {
+  if (document.querySelector(".r3d")) return;
+  const p = await loadProfile(), issues = x.quality?.issues || [];
+  const price = p.prices.design, credits = n => `${n} ${plural(n, "кредит", "кредита", "кредитов")}`;
+  const el = document.createElement("div");
+  el.className = "r3d"; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Ремонт в 3D");
+  el.innerHTML = `
+    <div class="r3d-top">
+      <div class="r3d-head"><b class="grow ellipsis">${esc(x.room)} в 3D</b><span class="muted" data-save aria-live="polite"></span>
+        <button class="x" data-close aria-label="Закрыть 3D">×</button></div>
+      <nav class="seg two" role="tablist" aria-label="Вид"><span class="ind"></span>
+        <button role="tab" aria-selected="true" data-mode="orbit">Сверху</button><button role="tab" aria-selected="false" data-mode="room">Из комнаты</button></nav>
+      <div class="stylebar" role="group" aria-label="Стиль">${Object.entries(p.styles).map(([k, t]) => `<button type="button" data-k="${k}" aria-pressed="false">${esc(t)}</button>`).join("")}</div>
+    </div>
+    <div class="r3d-stage"><canvas tabindex="0" aria-label="3D-модель комнаты. Крутите пальцем, нажмите на предмет, чтобы поменять"></canvas>
+      ${drafting(["Строю комнату по скану…", "Кладу пол и обои…", "Ставлю мебель…", "Включаю свет…"], "")}
+      <button type="button" class="r3d-pill l" data-add hidden>＋ Мебель</button>
+      <button type="button" class="r3d-pill r" data-pr hidden></button>
+      <div class="r3d-hint gone"></div></div>
+    <div class="r3d-bar"><button class="btn quiet" data-finish disabled>Отделка</button>
+      <button class="btn" data-real disabled>Как в жизни<small><span class="wide">фото ремонта · </span>${credits(price)}</small></button></div>`;
+  document.body.append(el);
+  const $ = s => el.querySelector(s), stage = $(".r3d-stage"), status = $("[data-save]"), hint = $(".r3d-hint");
+  const prevBack = setBack._fn;
+  let E = null, saveT = 0, saving = null, closed = false, busy = false, shops = null, open = null, hintT = 0;
+  const close = () => {
+    if (closed) return;
+    closed = true; flush();
+    clearTimeout(hintT); E?.dispose(); el.remove();
+    const i = overlays.indexOf(close); if (i >= 0) overlays.splice(i, 1);
+    setBack(prevBack);
+    // список мебели на странице скана мог устареть: убранное и добавленное в 3D
+    const fout = document.querySelector("#sc-furn [data-fout]");
+    if (fout?.innerHTML && hashPath() === "scan/" + x.id) saving ? saving.then(() => furnitureList(x, fout)) : furnitureList(x, fout);
+  };
+  overlays.push(close);
+  const back = () => { const res = $(".r3d-res"); if (res) res.remove(); else if (open) closeSheet(); else close(); };
+  setBack(back);
+  $("[data-close]").onclick = close;
+
+  // загружаем three.js и строим комнату (на слабом телефоне — пара секунд)
+  rotateMsgs(stage);
+  try { R3D = R3D || await import(R3D_URL); }
+  catch { if (!closed) { toast("Не загрузилось 3D. Проверьте интернет"); close(); } return; }
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
+  if (closed) return;
+  try { E = R3D.createRoom3D({ canvas: $("canvas"), scan: x, look: x.look, reduced, onPick: picked, onChange: changed }); } catch { E = null; }
+  clearScreen(); $(".drafting")?.remove();
+  if (!E) { toast("Этот телефон не показывает 3D. Попробуйте «Ремонт на картинке»", 3200); return close(); }
+  const M = R3D;
+  el.querySelectorAll("[data-finish], [data-real]").forEach(b => { b.disabled = false; });
+  $("[data-add]").hidden = false;
+
+  // подсказка внизу: что можно делать; гаснет сама и от первого касания
+  const say = (t, ms = 6000) => { hint.textContent = t; hint.classList.remove("gone"); clearTimeout(hintT); hintT = setTimeout(() => hint.classList.add("gone"), ms); };
+  say("Крутите пальцем, двумя — приближайте. Нажмите на мебель, стену или пол, чтобы поменять", 7000);
+  $("canvas").addEventListener("pointerdown", () => { clearTimeout(hintT); hintT = setTimeout(() => hint.classList.add("gone"), 600); });
+
+  // стиль: отделка и свет из стиля, выбранная мебель остаётся
+  const syncStyle = () => el.querySelectorAll(".stylebar button").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === E.look.style));
+  syncStyle();
+  $(".stylebar").onclick = e => {
+    const b = e.target.closest("[data-k]");
+    if (!b || b.dataset.k === E.look.style) return;
+    haptic(); closeSheet();
+    E.update(l => M.withStyle(l, b.dataset.k)); syncStyle();
+    b.scrollIntoView({ inline: "nearest", block: "nearest", behavior: reduced ? "auto" : "smooth" });
+  };
+
+  // вид: сверху (кукольный домик) или из комнаты, на высоте глаз
+  const seg = $(".seg"), pr = $("[data-pr]");
+  const pills = m => {
+    pr.hidden = m !== "room" && !issues.length;
+    pr.className = "r3d-pill r" + (m === "room" ? "" : " warn");
+    pr.textContent = m === "room" ? "Другой угол ↻" : `⚠ Доснять: ${issues.length}`;
+  };
+  const setMode = async m => {
+    seg.querySelector(".ind").style.transform = `translateX(${m === "room" ? 100 : 0}%)`;
+    seg.querySelectorAll("button").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === m));
+    pills(m);
+    if (m === "room") say("Ведите пальцем, чтобы осмотреться. «Другой угол» — встать в другое место", 4500);
+    await E.setMode(m);
+  };
+  pills("orbit");
+  seg.onclick = e => { const b = e.target.closest("[data-mode]"); if (b && b.dataset.mode !== E.mode) { haptic(); setMode(b.dataset.mode); } };
+  pr.onclick = () => { haptic(); E.mode === "room" ? E.nextView() : sheet("issues"); };
+  $("[data-add]").onclick = () => { haptic(); sheet("add"); };
+  $("[data-finish]").onclick = () => { haptic(); sheet("finish"); };
+  $("[data-real]").onclick = real;
+
+  // ---------- сохранение: через секунду после последней правки ----------
+  function changed() {
+    status.textContent = "Сохраняю…"; status.classList.remove("ok");
+    shops = null;
+    clearTimeout(saveT); saveT = setTimeout(save, 900);
+  }
+  function save() {
+    saveT = 0;
+    const look = M.toContract(E.look);
+    saving = api(`/scans/${x.id}/look`, { method: "PUT", body: { look } })
+      .then(() => { x.look = look; if (!saveT && !closed) { status.textContent = "Сохранено"; status.classList.add("ok"); } })
+      .catch(() => { if (!closed) { status.textContent = "Не сохранилось"; toast("Не сохранилось, проверьте интернет"); } })
+      .finally(() => { saving = null; if (!saveT) while (waiters.length) waiters.pop()(); });
+    return saving;
+  }
+  function flush() { if (saveT) { clearTimeout(saveT); return save(); } return saving || Promise.resolve(); }
+  // дождаться, когда правки сохранятся (без спешки: сохраняем так же, через секунду)
+  const waiters = [];
+  function saved() { return !saveT && !saving ? Promise.resolve() : new Promise(r => waiters.push(r)); }
+
+  // ---------- нижний лист с выбором ----------
+  const chips = (f, list, val) => `<div class="chips" role="group" data-f="${f}">${list.map(([k, t]) => `<button type="button" data-v="${k}" aria-pressed="${k === val}">${esc(t)}</button>`).join("")}</div>`;
+  const swatches = (f, list, val) => `<div class="sw-row" role="group" data-f="${f}">${[...new Set([...list, val])].map(c =>
+    `<button type="button" class="swatch" data-v="${c}" style="background:${c}" aria-pressed="${c === val}" aria-label="Цвет ${c}"></button>`).join("")}</div>`;
+  const head = (title, sub = "") => `<div class="sh-head"><div class="grow"><strong>${esc(title)}</strong>${sub ? `<div class="muted">${esc(sub)}</div>` : ""}</div>
+    <button type="button" class="x" data-close aria-label="Закрыть">×</button></div>`;
+  const label = (list, k) => (list.find(v => v[0] === k) || [, ""])[1];
+  const cm = v => Math.round(v * 100);
+  function closeSheet() {
+    stage.querySelector(".r3d-sheet")?.remove();
+    open = null; E?.setInset(0); E?.select(null);
+  }
+  // kind: obj, wall, floor, ceiling, window, add, finish, issues; sel — что выбрано в 3D
+  function sheet(kind, sel = null, keep = false) {
+    const L = E.look, old = stage.querySelector(".r3d-sheet"), top = keep && old ? old.scrollTop : 0;
+    let html = "", act = {};
+    if (kind === "obj") {
+      const s = E.info(sel);
+      if (!s) return closeSheet();
+      const vs = M.VARIANTS[s.kind], title = M.ADDABLE.find(a => a[0] === s.kind && a[1] === s.variant)?.[2] || M.TITLES[s.kind] || "Мебель";
+      const size = `${cm(s.width)} × ${cm(s.depth)} × ${cm(s.height)} см`;
+      html = head(title, s.hidden ? "Убрано из комнаты" : s.added ? `${size}. Двигайте пальцем по полу` : `${size}, как в скане`)
+        + (s.hidden ? "" : (vs ? `<div class="sh-l">Какой</div>${chips("variant", vs, s.variant)}` : "")
+          + `<div class="sh-l">Цвет</div>${swatches("color", M.colorsFor(s.kind, s.variant), s.color)}`)
+        + `<div class="pair" style="margin-top:16px">${s.added
+          ? `<button type="button" class="btn quiet" data-act="rotate">Повернуть</button><button type="button" class="btn quiet danger" data-act="del">Удалить</button>`
+          : s.hidden ? `<button type="button" class="btn" data-act="show" style="grid-column:1/-1">Вернуть на место</button>`
+          : `<button type="button" class="btn quiet" data-act="hide" style="grid-column:1/-1">Убрать из комнаты</button>`}</div>`
+        + (s.hidden || ["stairs", "fireplace", "object"].includes(s.kind) ? "" : `<div class="sh-l">Где купить такой размер</div><div data-shops><p class="muted" style="margin:0">Ищу…</p></div>`);
+      const set = fn => E.update(l => {
+        if (s.added) fn(l.added[s.j]);
+        else { const o = l.objects[s.i] = { ...(l.objects[s.i] || {}) }; fn(o); if (!Object.keys(o).length) delete l.objects[s.i]; }
+      });
+      act = {
+        variant: v => set(o => {
+          o.variant = v;
+          const pal = M.STYLES[L.style].pal;
+          if (!M.colorsFor(s.kind, v).includes(o.color || s.color)) { if (s.added) o.color = M.defaultColor(s.kind, v, pal); else delete o.color; }
+          if (s.added) [o.width, o.depth, o.height] = M.sizeOf(s.kind, v);
+        }),
+        color: c => set(o => { o.color = c; }),
+        hide: () => set(o => { o.hidden = true; }),
+        show: () => set(o => { delete o.hidden; }),
+        rotate: () => E.rotate(s.j),
+        del: () => { E.update(l => { l.added.splice(s.j, 1); }); closeSheet(); return true; },
       };
-    } catch (err) { clearScreen(); res.innerHTML = ""; aiError(err); }
-    e.target.disabled = false;
-  };
-  box.querySelector("[data-sest]").onclick = async e => {
-    const res = box.querySelector("[data-seout]"); e.target.disabled = true;
-    res.innerHTML = drafting(["Считаю объёмы…", "Подбираю цены…", "Собираю смету…"]); rotateMsgs(res);
+      if (!s.hidden) loadShops(s);
+    } else if (kind === "wall") {
+      const one = Number.isInteger(sel?.i) && sel.i >= 0 && L.accent?.wall === sel.i, can = Number.isInteger(sel?.i) && sel.i >= 0;
+      const w = one ? L.accent : L.wall;
+      html = head("Стены", one ? `Только стена ${sel.i + 1}` : "Все стены комнаты")
+        + (can ? chips("scope", [["all", "Все стены"], ["one", "Только эта"]], one ? "one" : "all") : "")
+        + `<div class="sh-l">Отделка</div>${chips("finish", M.WALL_FINISHES, w.finish)}`
+        + (w.finish === "wallpaper" ? `<div class="sh-l">Узор</div>${chips("pattern", M.PATTERNS, w.pattern)}` : "")
+        + `<div class="sh-l">Цвет</div>${swatches("color", M.COLORS.wall, w.color)}`;
+      const set = (k, v) => E.update(l => { (one ? l.accent : l.wall)[k] = v; });
+      act = {
+        scope: v => E.update(l => { l.accent = v === "one" ? { wall: sel.i, ...l.wall } : null; }),
+        finish: v => set("finish", v), pattern: v => set("pattern", v), color: v => set("color", v),
+      };
+    } else if (kind === "floor") {
+      html = head("Пол", "Вся комната") + `<div class="sh-l">Покрытие</div>${chips("finish", M.FLOORS, L.floor.finish)}`
+        + `<div class="sh-l">Цвет</div>${swatches("color", L.floor.finish === "carpet" ? M.COLORS.fabric : M.COLORS.floor, L.floor.color)}`;
+      act = { finish: v => E.update(l => { l.floor.finish = v; }), color: v => E.update(l => { l.floor.color = v; }) };
+    } else if (kind === "ceiling") {
+      html = head("Потолок и свет", "Светильник светит по-настоящему") + `<div class="sh-l">Свет</div>${chips("light", M.LIGHTS, L.ceiling.light)}`
+        + `<div class="sh-l">Цвет потолка</div>${swatches("color", M.COLORS.ceiling, L.ceiling.color)}`;
+      act = { light: v => E.update(l => { l.ceiling.light = v; }), color: v => E.update(l => { l.ceiling.color = v; }) };
+    } else if (kind === "window") {
+      html = head("Окна", "Для всех окон комнаты") + `<div class="sh-l">Шторы</div>${chips("curtains", M.CURTAINS, L.curtains)}`;
+      act = { curtains: v => E.update(l => { l.curtains = v; }) };
+    } else if (kind === "add") {
+      html = head("Добавить мебель", "В обычном размере, на свободное место")
+        + `<div class="add-grid">${M.ADDABLE.map(([k, v, t], n) => { const [w, d] = M.sizeOf(k, v); return `<button type="button" data-n="${n}"><b>${esc(t)}</b><span>${cm(w)} × ${cm(d)} см</span></button>`; }).join("")}</div>`;
+    } else if (kind === "finish") {
+      const row = (go, color, title, sub) => `<div class="line" role="button" tabindex="0" data-go="${go}" style="cursor:pointer">
+        <span class="dot" style="background:${color || "transparent"}"></span><div class="grow"><b>${title}</b><div class="muted">${esc(sub)}</div></div><span class="muted" aria-hidden="true">›</span></div>`;
+      html = head("Отделка", "Или нажмите на стену, пол или люстру в 3D")
+        + row("wall", L.wall.color, "Стены", label(M.WALL_FINISHES, L.wall.finish) + (L.accent ? ", одна стена другая" : ""))
+        + row("floor", L.floor.color, "Пол", label(M.FLOORS, L.floor.finish))
+        + row("ceiling", L.ceiling.color, "Потолок и свет", label(M.LIGHTS, L.ceiling.light))
+        + row("window", L.curtains === "none" ? "" : M.STYLES[L.style].pal.curtain, "Окна", label(M.CURTAINS, L.curtains))
+        + `<button type="button" class="btn quiet" style="margin-top:12px" data-go="add">＋ Добавить мебель</button>`;
+    } else if (kind === "issues") {
+      html = head("Нужно доснять", "Так пишет СтройСкан") + `<ul>${issues.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+        <p class="muted" style="margin:0">Пересканируйте эти места в приложении. Ремонт можно собирать уже сейчас — новый скан уточнит размеры</p>`;
+    }
+    old?.remove();
+    const sh = document.createElement("div");
+    sh.className = "r3d-sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-label", "Выбор");
+    if (keep) sh.style.animation = "none";
+    sh.innerHTML = `<div class="grab"></div>${html}`;
+    stage.append(sh);
+    sh.scrollTop = top;
+    open = { kind, sel };
+    hint.classList.add("gone");
+    if (!keep) {
+      if (["floor", "ceiling"].includes(kind)) E.select({ type: kind });
+      else if (!["obj", "wall", "window"].includes(kind)) E.select(null);
+    }
+    E.setInset(Math.min(sh.offsetHeight, stage.clientHeight * .56));
+    sh.querySelector("[data-close]").onclick = closeSheet;
+    sh.onclick = e => {
+      const b = e.target.closest("button, [data-go]");
+      if (!b || b.matches("[data-close]")) return;
+      const f = b.closest("[data-f]")?.dataset.f;
+      if (f && act[f]) { haptic(); if (!act[f](b.dataset.v)) sheet(kind, sel, true); return; }
+      if (b.dataset.act && act[b.dataset.act]) { haptic(); if (!act[b.dataset.act]()) sheet(kind, sel, true); return; }
+      if (b.dataset.go) { haptic(); sheet(b.dataset.go, b.dataset.go === "wall" ? { type: "wall", i: null } : b.dataset.go === "window" ? { type: "window" } : null); return; }
+      if (b.dataset.n) {   // добавить мебель
+        const [k, v, t] = M.ADDABLE[+b.dataset.n], r = E.add(k, v);
+        if (!r) return toast(`Больше ${M.MAX_ADDED} вещей добавить нельзя`);
+        notify("success");
+        const s2 = { type: "added", j: r.j };
+        E.select(s2); sheet("obj", s2);
+        toast(r.tight ? "Места мало — поставил в центр, передвиньте пальцем" : `${t}: двигайте пальцем по полу`, 2600);
+      }
+    };
+    // смахнуть лист вниз за шапку — закрыть; лист едет за пальцем. Считаем только палец, которым начали
+    let swipe = null;
+    const settle = () => { if (!swipe) return; swipe = null; sh.style.transition = "transform .25s var(--ease)"; sh.style.transform = ""; };
+    sh.addEventListener("pointerdown", e => {
+      settle();
+      if (e.target.closest(".grab, .sh-head") && !e.target.closest("button") && sh.scrollTop <= 0) swipe = { id: e.pointerId, y: e.clientY };
+    });
+    sh.addEventListener("pointermove", e => {
+      if (swipe?.id !== e.pointerId) return;
+      const dy = Math.max(0, e.clientY - swipe.y);
+      if (dy > 4) Object.assign(sh.style, { animation: "none", transition: "none", transform: `translateY(${dy}px)` });
+    });
+    sh.addEventListener("pointerup", e => {
+      if (swipe?.id !== e.pointerId) return;
+      if (e.clientY - swipe.y > 60) { swipe = null; return closeSheet(); }
+      settle();
+    });
+    sh.addEventListener("pointercancel", settle);
+  }
+  // «где купить» для выбранной вещи: тот же подбор, что в «Мебели по размерам».
+  // Пишем только последний запрос и только в лист той же вещи: ответы приходят вразнобой
+  let shopsN = 0;
+  async function loadShops(s) {
+    const n = ++shopsN, box = () => stage.querySelector(".r3d-sheet [data-shops]");
+    const mine = () => n === shopsN && open?.kind === "obj" && box() && (s.added ? open.sel?.type === "added" && open.sel.j === s.j : open.sel?.type === "obj" && open.sel.i === s.i);
     try {
-      const r = await api(`/scans/${x.id}/estimate`, { method: "POST" });
-      clearScreen(); notify("success"); state.profile.credits = r.credits;
-      res.innerHTML = answerBlock(r.html, r.raw); wireAnswer(res, r.raw);
-    } catch (err) { clearScreen(); res.innerHTML = ""; aiError(err); }
-    e.target.disabled = false;
-  };
+      if (!shops) { await saved(); shops ||= api(`/scans/${x.id}/furniture`).then(r => r.items); }   // один запрос на всех ждущих
+      const items = await shops, f = items.find(f => s.added ? f.added === s.j : f.index === s.i);
+      if (!mine()) return;
+      box().innerHTML = f ? furnItem(f, { bare: true }) : `<p class="muted" style="margin:0">Для этой вещи магазинов нет</p>`;
+      wireShops(box());
+      E.setInset(Math.min(stage.querySelector(".r3d-sheet").offsetHeight, stage.clientHeight * .56));
+    } catch { shops = null; if (mine()) box().innerHTML = `<p class="muted" style="margin:0">Не загрузилось, проверьте интернет</p>`; }
+  }
+  function picked(s) {
+    if (!s) return closeSheet();
+    haptic();
+    if (s.type === "obj" || s.type === "added") sheet("obj", s);
+    else sheet(s.type, s);
+  }
+
+  // ---------- фото «как в жизни»: снимок 3D из комнаты → ИИ делает из него фотографию ----------
+  async function real() {
+    if (busy) return;
+    if (E.lost) return toast("3D перезапускается, нажмите через пару секунд");   // иначе в фото уйдёт пустой кадр
+    busy = true; closeSheet();
+    const btn = $("[data-real]"); btn.disabled = true;
+    if (E.mode !== "room") { await setMode("room"); await new Promise(r => setTimeout(r, 120)); }
+    const shot = E.snapshot(1280), style = E.look.style, look = M.toContract(E.look);
+    clearTimeout(saveT); saveT = 0;   // ремонт сохранится вместе с фото
+    const wait = document.createElement("div");
+    wait.className = "r3d-wait";
+    const msgs = ["Беру точные размеры…", "Кладу настоящие материалы…", "Ставлю дневной свет…", `Стиль «${p.styles[style]}»…`, "Почти готово…"];
+    wait.innerHTML = `<div class="scanning"><img alt="" src="${shot}"><div class="msg" data-msgs='${esc(JSON.stringify(msgs))}'>${msgs[0]}</div></div>`;
+    stage.append(wait); rotateMsgs(wait);
+    try {
+      const r = await api(`/scans/${x.id}/render`, { method: "POST", body: { image: shot, style, look } });
+      clearScreen(); notify("success");
+      x.look = look; status.textContent = "Сохранено"; status.classList.add("ok");
+      state.profile.credits = r.credits;
+      if (!closed) result(r, shot);
+    } catch (e) { clearScreen(); if (!closed) { save(); aiError(e); } }
+    wait.remove(); btn.disabled = false; busy = false;
+  }
+  function result(r, shot) {
+    const res = document.createElement("div");
+    res.className = "r3d-res";
+    res.innerHTML = `
+      <header class="top"><div class="grow"><h1 class="title">Как в жизни</h1><div class="sub">${esc(r.style)}, по точным размерам комнаты</div></div>
+        <button type="button" class="x" data-back aria-label="Назад к 3D">×</button></header>
+      <div class="ba reveal"><img alt="Ремонт как в жизни, стиль ${esc(r.style)}" src="${esc(r.image)}">
+        <div class="before"><img alt="3D-модель ремонта" src="${shot}"></div>
+        <div class="handle"></div><span class="tag l">3D</span><span class="tag r">Как в жизни</span></div>
+      <p class="muted" style="text-align:center;margin:0 0 12px">Двигайте жёлтую ручку, чтобы сравнить с 3D</p>
+      <div class="actions"><button type="button" class="btn quiet" data-send>Отправить<small>в чат с ботом</small></button>
+        <button type="button" class="btn quiet" data-est>Смета<small>${p.prices.estimate ? credits(p.prices.estimate) : "бесплатно"}</small></button></div>
+      <button type="button" class="btn" data-back>Вернуться к 3D</button>
+      <p class="balance">На балансе ${credits(r.credits)}</p>
+      <div data-eout style="margin-top:12px"></div>`;
+    el.append(res);
+    const ba = res.querySelector(".ba");
+    ba.addEventListener("animationend", () => { ba.classList.remove("reveal"); ba.style.setProperty("--x", "50%"); }, { once: true });
+    wireBA(ba);
+    res.querySelectorAll("[data-back]").forEach(b => b.onclick = () => res.remove());
+    res.querySelector("[data-send]").onclick = async () => {
+      try { await api("/send", { method: "POST", body: { photo: r.image, text: `${x.room}: ремонт «${r.style}» по 3D-скану` } }); notify("success"); toast("Отправил в чат с ботом"); }
+      catch (err) { aiError(err); }
+    };
+    res.querySelector("[data-est]").onclick = async e => {
+      const out = res.querySelector("[data-eout]"); e.target.disabled = true;
+      out.innerHTML = drafting(["Считаю объёмы по скану…", "Беру отделку из 3D…", "Собираю смету…"]); rotateMsgs(out);
+      out.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+      try {
+        const q = await api(`/scans/${x.id}/estimate`, { method: "POST" });
+        clearScreen(); notify("success"); state.profile.credits = q.credits;
+        out.innerHTML = answerBlock(q.html, q.raw); wireAnswer(out, q.raw);
+      } catch (err) { clearScreen(); out.innerHTML = ""; aiError(err); }
+      e.target.disabled = false;
+    };
+  }
+
+  // совет из «Мебели по размерам»: ставим сразу в нужное место
+  if (add?.place) {
+    const v = add.variant || "dresser", [, , h0] = M.sizeOf(add.kind, v);
+    const r = E.add(add.kind, v, { ...add.place, height: Math.min(h0, add.place.height || h0) });
+    if (r) { const s = { type: "added", j: r.j }; E.select(s); sheet("obj", s); toast(`${add.title} до ${add.max?.width || ""} см: двигайте пальцем`, 2600); }
+  }
 }
 window.pairIphone = async () => {
   try {
@@ -1912,7 +2458,7 @@ async function showMe() {
       haptic("medium");
       try {
         const { link } = await api("/invoice", { method: "POST", body: { pack: b.dataset.pack } });
-        if (tg?.openInvoice) tg.openInvoice(link, st => { if (st === "paid") { notify("success"); toast("Кредиты начислены"); setTimeout(() => location.hash === "#me" && showMe(), 800); } });
+        if (tg?.openInvoice) tg.openInvoice(link, st => { if (st === "paid") { notify("success"); toast("Кредиты начислены"); setTimeout(() => hashPath() === "me" && showMe(), 800); } });
         else location.href = link;
       } catch (e) { aiError(e); }
     });

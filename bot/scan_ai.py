@@ -6,7 +6,7 @@ from pathlib import Path
 from . import kie
 from .calc import scan_materials
 from .config import config
-from .look import FURNITURE, look_en, look_ru
+from .look import FURNITURE, edited_objects, item_en, look_en, look_ru
 from .prompts import DESIGN_STYLES, ESTIMATE_SYSTEM, SCAN_DESIGN_PROMPT, SCAN_RENDER_PROMPT, SCAN_T2I_PROMPT
 from .room import Rect, Room
 
@@ -34,8 +34,9 @@ def furniture_ru(scan: dict) -> list[str]:
     return out
 
 
-def facts_en(scan: dict) -> str:
-    """Размеры, окна, двери и где стоит мебель — для картинки. Модель видит комнату «как есть»."""
+def facts_en(scan: dict, look: dict | None = None) -> str:
+    """Размеры, окна, двери и где стоит мебель — для картинки. Без look — комната «как есть» (для фото комнаты),
+    с look — как её собрали в 3D: без убранной мебели, с заменами и добавленным, всё уже на месте."""
     s = scan.get("sizes") or {}
     op = scan.get("openings") or []
     room = Room(scan)
@@ -52,33 +53,39 @@ def facts_en(scan: dict) -> str:
     if placed:
         parts.append("; ".join(placed))
     items = []
-    for o in (scan.get("objects") or [])[:15]:
-        name = FURNITURE.get(o.get("kind"), FURNITURE["object"])[1]
+    objects = [(o, {}) for o in scan.get("objects") or []] if look is None else edited_objects(scan, look)
+    for o, ch in objects[:15]:
         cm = "×".join(str(round(o[k] * 100)) for k in ("width", "depth", "height") if o.get(k))
-        items.append(" ".join(x for x in (name, f"{cm} cm" if cm else "", room.place_en(Rect.of(o))) if x))
+        items.append(" ".join(x for x in (item_en(o.get("kind"), ch.get("variant"), ch.get("color")),
+                                          f"{cm} cm" if cm else "", room.place_en(Rect.of(o))) if x))
     if items:
         parts.append("furniture: " + ", ".join(items))
     return "; ".join(parts)
 
 
-def look_text(look: dict | None, scan: dict) -> str:
-    desc = look_en(look, scan)
-    return (f"The client chose these finishes and furniture, show exactly them: {desc}." if desc
-            else "Pick finishes, furniture and lighting that suit the style.")
+def look_text(look: dict | None, scan: dict, edited: bool = False) -> str:
+    """edited — мебель в facts уже как в 3D: тут только отделка, иначе модель уберёт или добавит лишнее."""
+    desc = look_en(look, scan, edited)
+    if desc:
+        return f"The client chose these finishes{'' if edited else ' and furniture'}, show exactly them: {desc}."
+    return "Pick finishes and lighting that suit the style." if edited \
+        else "Pick finishes, furniture and lighting that suit the style."
 
 
 async def design_image(scan: dict, style: str, look: dict | None = None, photo_url: str | None = None) -> str:
     """URL картинки ремонта. Есть фото комнаты (своё из чата или с iPhone) — ремонт на нём,
     нет — рисуем по размерам. Ремонт, собранный в 3D, тоже учитываем."""
     look = scan.get("look") if look is None else look
-    fmt = {"style": DESIGN_STYLES[style][1], "facts": facts_en(scan), "look": look_text(look, scan)}
     photo = photo_path(scan["id"])
     if not photo_url and photo.exists():
         photo_url = await kie.upload_image(photo.read_bytes(), f"scan{scan['id']}_{int(time.time())}.jpg")
-    if photo_url:
-        urls = await kie.edit_image(photo_url, SCAN_DESIGN_PROMPT.format(**fmt))
-    else:
-        urls = await kie.generate_image(SCAN_T2I_PROMPT.format(**fmt))
+    style = DESIGN_STYLES[style][1]
+    if photo_url:       # на фото комната «как есть»: что убрать, заменить и добавить — словами
+        urls = await kie.edit_image(photo_url, SCAN_DESIGN_PROMPT.format(
+            style=style, facts=facts_en(scan), look=look_text(look, scan)))
+    else:               # рисуем с нуля — сразу комнату, как её собрали в 3D
+        urls = await kie.generate_image(SCAN_T2I_PROMPT.format(
+            style=style, facts=facts_en(scan, look or {}), look=look_text(look, scan, edited=True)))
     return urls[0]
 
 
@@ -87,8 +94,9 @@ async def render_image(scan: dict, image: bytes, style: str, look: dict | None =
     look = scan.get("look") if look is None else look
     ext = "png" if image.startswith(b"\x89PNG") else "jpg"
     url = await kie.upload_image(image, f"render{scan['id']}_{int(time.time())}.{ext}")
+    # на снимке мебель уже как в 3D (убранного нет, добавленное стоит): описываем её такой же
     urls = await kie.edit_image(url, SCAN_RENDER_PROMPT.format(
-        style=DESIGN_STYLES[style][1], facts=facts_en(scan), look=look_text(look, scan)))
+        style=DESIGN_STYLES[style][1], facts=facts_en(scan, look or {}), look=look_text(look, scan, edited=True)))
     return urls[0]
 
 

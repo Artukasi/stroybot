@@ -1,5 +1,6 @@
 """Кнопки под сканом с iPhone: ремонт на картинке, мебель по размерам и смета по точным размерам.
 Сюда же приходит файл скана (.stroyscan.json), если его прислать в чат."""
+import asyncio
 import html
 import json
 import logging
@@ -162,7 +163,7 @@ async def scan_furniture(cb: CallbackQuery):
     if not scan:
         return
     await cb.answer()
-    groups = furniture_groups(furniture.pick(scan, scan.get("look")))
+    groups = furniture_groups(await asyncio.to_thread(furniture.pick, scan, scan.get("look")))
     if not groups:
         return await cb.message.answer("🛋 На скане нет мебели, а свободные стены не нашлись. "
                                        "Отсканируйте комнату вместе с мебелью — подберу по размерам.",

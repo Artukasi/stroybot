@@ -5,6 +5,7 @@
    показываем в «Замере по скану».
 4. Ремонт в 3D: приложение и Mini App хранят выбор отделки и мебели (look), по снимку 3D-модели
    делают фото «как в жизни» (render) и подбирают мебель по размерам (furniture)."""
+import asyncio
 import base64
 import binascii
 import html
@@ -31,6 +32,10 @@ log = logging.getLogger(__name__)
 _attempts: dict[str, list[float]] = defaultdict(list)
 MAX_ATTEMPTS = 20          # попыток ввести код с одного адреса за 10 минут
 MAX_ITEMS = 80
+MAX_WALLS = 40             # точных стен; больше — комнату строим по контуру пола
+MAX_WALL_LEN = 30          # м, одна стена
+MAX_COORD = 100            # м, координаты на плане
+MAX_PLAN = 200             # точек контура пола
 MAX_SCAN_PHOTO = 6 * 1024 * 1024
 MAX_RENDER = 8 * 1024 * 1024       # снимок 3D-модели для фото «как в жизни»
 MAX_LOOK_BODY = 64 * 1024
@@ -70,15 +75,24 @@ def _list(v) -> list:
     return v if isinstance(v, list) else []
 
 
-def _wall_lines(raw, count: int) -> list:
-    """Концы стен на плане. Хоть одна битая или их не столько, сколько стен, — не берём ничего."""
+def _wall_lines(raw, count: int, plan: list) -> list:
+    """Концы стен на плане. Хоть одна битая, длиннее 30 м или дальше 1 м от контура пола,
+    или их не столько, сколько стен, — не берём ничего: комнату построим по контуру пола."""
+    raw = _list(raw)
+    if not 0 < len(raw) == count <= MAX_WALLS:
+        return []
+    xs, ys = [p[0] for p in plan], [p[1] for p in plan]
+    box = (min(xs) - 1, min(ys) - 1, max(xs) + 1, max(ys) + 1) if len(plan) > 2 else None
     lines = []
-    for ln in _list(raw)[:MAX_ITEMS]:
-        pts = [_coord(v) for v in ln] if isinstance(ln, (list, tuple)) and len(ln) == 4 else [None]
-        if None in pts:
+    for ln in raw:
+        pts = [_coord(v, -MAX_COORD, MAX_COORD) for v in ln] if isinstance(ln, (list, tuple)) and len(ln) == 4 \
+            else [None]
+        if None in pts or math.hypot(pts[2] - pts[0], pts[3] - pts[1]) > MAX_WALL_LEN:
+            return []
+        if box and not all(box[0] <= x <= box[2] and box[1] <= y <= box[3] for x, y in (pts[:2], pts[2:])):
             return []
         lines.append(pts)
-    return lines if len(lines) == count else []
+    return lines
 
 
 def _opening(o: dict, walls: int) -> dict:
@@ -116,14 +130,11 @@ def clean_scan(data: dict) -> dict:
              for w in _list(data.get("walls"))[:MAX_ITEMS] if isinstance(w, dict)]
     openings = [_opening(o, len(walls)) for o in _list(data.get("openings"))[:MAX_ITEMS] if isinstance(o, dict)]
     plan = []
-    for p in _list(data.get("plan"))[:200]:
+    for p in _list(data.get("plan"))[:MAX_PLAN]:
         if isinstance(p, (list, tuple)) and len(p) == 2:
-            try:
-                x, y = float(p[0]), float(p[1])
-            except (TypeError, ValueError):
-                continue
-            if abs(x) < 1000 and abs(y) < 1000:
-                plan.append([round(x, 3), round(y, 3)])
+            x, y = _coord(p[0], -MAX_COORD, MAX_COORD), _coord(p[1], -MAX_COORD, MAX_COORD)
+            if x is not None and y is not None:
+                plan.append([x, y])
     objects = []
     for o in _list(data.get("objects"))[:MAX_ITEMS]:
         if not isinstance(o, dict):
@@ -131,16 +142,13 @@ def clean_scan(data: dict) -> dict:
         kind = str(o.get("kind") or "object")[:20]
         item = {"kind": kind if kind in scan_ai.FURNITURE else "object",
                 **{k: _num(o.get(k), 20) for k in ("width", "depth", "height")}}
-        for k in ("x", "y", "angle"):
-            try:
-                v = float(o.get(k))
-                item[k] = round(v, 3) if abs(v) < 1000 else 0.0
-            except (TypeError, ValueError):
-                item[k] = 0.0
+        for k, hi in (("x", MAX_COORD), ("y", MAX_COORD), ("angle", 1000)):
+            item[k] = _coord(o.get(k), -hi, hi) or 0.0
         objects.append(item)
     return {"room": str(data.get("room") or "Комната").strip()[:60] or "Комната", "sizes": sizes,
-            "walls": walls, "wall_lines": _wall_lines(data.get("wall_lines"), len(walls)), "openings": openings,
-            "plan": plan, "objects": objects, "quality": _quality(data.get("quality")), "source": "lidar"}
+            "walls": walls, "wall_lines": _wall_lines(data.get("wall_lines"), len(walls), plan),
+            "openings": openings, "plan": plan, "objects": objects, "quality": _quality(data.get("quality")),
+            "source": "lidar"}
 
 
 def decode_image(raw, limit: int, png: bool = False) -> bytes | None:
@@ -162,13 +170,21 @@ def decode_photo(data: dict) -> bytes | None:
 
 
 async def save_scan(user_id: int, data: dict) -> dict:
-    """Проверяет и сохраняет скан вместе с фото. Один путь для приложения (/scan/rooms) и файла в чате."""
+    """Проверяет и сохраняет скан вместе с фото и ремонтом из 3D, если приложение положило его в файл.
+    Один путь для приложения (/scan/rooms) и файла в чате."""
     scan = clean_scan(data)
     photo = decode_photo(data)
     scan["has_photo"] = photo is not None
     scan["id"] = await db.add_scan(user_id, scan["room"], {k: v for k, v in scan.items() if k != "room"})
     if photo:
         scan_ai.photo_path(scan["id"]).write_bytes(photo)
+    try:
+        look = clean_look(data.get("look"), scan) if isinstance(data.get("look"), dict) else {}
+    except ValueError:          # слишком большой — скан всё равно берём, без ремонта
+        look = {}
+    if look:
+        await db.set_scan_look(user_id, scan["id"], look)
+    scan["look"] = look or None
     return scan
 
 
@@ -185,6 +201,7 @@ def scan_text(scan: dict) -> str:
             + (f"Мебель: {html.escape(', '.join(items))}\n" if items else "")
             + ("\n⚠️ <b>Нужно доснять:</b>\n" + "\n".join(f"• {html.escape(i)}" for i in issues)
                + "\nПересканируйте эти места в СтройСкане — размеры и ремонт будут точнее.\n" if issues else "")
+            + ("\n🧊 Ваш ремонт из 3D сохранён: картинка, мебель и смета учтут его.\n" if scan.get("look") else "")
             + "\n" + scan_materials(scan).text()
             + "\n\nНиже можно посмотреть ремонт на картинке, подобрать мебель по размерам или получить смету.")
 
@@ -269,7 +286,8 @@ async def _render(request: web.Request, user_id: int, scan_id, data: dict) -> we
 
 async def _furniture(user_id: int, scan_id) -> web.Response:
     scan = await _owned_scan(user_id, scan_id)
-    return web.json_response({"items": furniture.pick(scan, scan.get("look"))})
+    # геометрия считается в отдельном потоке: бот и Mini App тем временем отвечают другим
+    return web.json_response({"items": await asyncio.to_thread(furniture.pick, scan, scan.get("look"))})
 
 
 async def _get_look(user_id: int, scan_id) -> web.Response:

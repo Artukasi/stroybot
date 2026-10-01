@@ -179,7 +179,8 @@ def clean_look(raw, scan: dict | None = None) -> dict:
         raise ValueError("look")
     if len(json.dumps(raw, ensure_ascii=False).encode()) > MAX_LOOK:
         raise ValueError("look too large")
-    walls = len(scan.get("walls") or []) if scan else 200
+    # стены нумеруем как приложение и Mini App: точные стены, иначе стороны контура пола, иначе 4
+    walls = len(Room(scan).walls) if scan else 200
     kinds = [o.get("kind") for o in scan.get("objects") or []] if scan else None
     out: dict = {}
     if raw.get("style") in DESIGN_STYLES:
@@ -257,16 +258,31 @@ def _surface_ru(part: dict, finishes: dict, wood: bool = False) -> str:
 
 
 def _wall_known(room: Room | None, accent: dict) -> bool:
-    """Номер стены совпадает со стенами на плане только у сканов с точными стенами."""
-    return bool(room and room.exact and accent.get("wall") is not None and accent["wall"] < len(room.walls))
+    """Номер стены — как в 3D: точная стена или сторона контура пола у старых сканов."""
+    return bool(room and accent.get("wall") is not None and accent["wall"] < len(room.walls))
 
 
 def _cm(o: dict) -> str:
     return "×".join(str(round(o[k] * 100)) for k in ("width", "depth", "height") if o.get(k))
 
 
-def look_en(look: dict | None, scan: dict | None = None) -> str:
-    """Выбор клиента из 3D → короткое описание по-английски для картинки."""
+def item_en(kind: str | None, variant: str | None = None, color: str | None = None) -> str:
+    """Вещь по-английски для картинки: 'sofa', 'corner', '#808080' → 'grey (#808080) L-shaped corner sofa'."""
+    name = variants(kind).get(variant or "", ("", ""))[1] or FURNITURE.get(kind or "", FURNITURE["object"])[1]
+    return " ".join(x for x in (_paint({"color": color}, 1), name) if x)
+
+
+def edited_objects(scan: dict, look: dict | None) -> list[tuple[dict, dict]]:
+    """Мебель, как её собрали в 3D: (вещь, выбор) — без убранного, с добавленным."""
+    look = look or {}
+    changed = look.get("objects") or {}
+    out = [(o, changed.get(str(i)) or {}) for i, o in enumerate(scan.get("objects") or [])]
+    return [(o, ch) for o, ch in out if not ch.get("hidden")] + [(o, o) for o in look.get("added") or []]
+
+
+def look_en(look: dict | None, scan: dict | None = None, edited: bool = False) -> str:
+    """Выбор клиента из 3D → короткое описание по-английски для картинки.
+    edited — мебель уже описана такой, как в 3D (снимок 3D-модели): здесь только отделка, без «убрать/добавить»."""
     if not look:
         return ""
     room = Room(scan) if scan else None
@@ -285,6 +301,8 @@ def look_en(look: dict | None, scan: dict | None = None) -> str:
         parts.append("ceiling: " + ", ".join(x for x in (_paint(c, 1), light) if x))
     if look.get("curtains"):
         parts.append("windows: " + CURTAINS[look["curtains"]][1])
+    if edited:
+        return "; ".join(parts)
     objects = (scan or {}).get("objects") or []
     removed, swapped = [], []
     for key, ch in (look.get("objects") or {}).items():
@@ -297,17 +315,16 @@ def look_en(look: dict | None, scan: dict | None = None) -> str:
         if ch.get("hidden"):
             removed.append(what)
             continue
-        new = variants(o.get("kind")).get(ch.get("variant"), ("", ""))[1] or name
-        swapped.append(" ".join(x for x in (what, "becomes a", _paint(ch, 1), new) if x))
+        swapped.append(f"{what} becomes a {item_en(o.get('kind'), ch.get('variant'), ch.get('color'))}")
     if swapped:
         parts.append("furniture: " + ", ".join(swapped))
     if removed:
         parts.append("remove " + ", ".join(removed))
     added = []
     for o in look.get("added") or []:
-        name = variants(o["kind"]).get(o.get("variant"), ("", ""))[1] or FURNITURE[o["kind"]][1]
         place = room.place_en(Rect.of(o)) if room else ""
-        added.append(" ".join(x for x in ("a", _paint(o, 1), name, _cm(o) + " cm", place) if x))
+        added.append(" ".join(x for x in ("a", item_en(o["kind"], o.get("variant"), o.get("color")),
+                                          _cm(o) + " cm", place) if x))
     if added:
         parts.append("add " + ", ".join(added))
     return "; ".join(parts)

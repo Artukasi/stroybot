@@ -6,6 +6,7 @@ DOOR_ZONE = 0.9      # перед дверью место, чтобы она о�
 OPENING_ZONE = 0.6   # перед проёмом без двери
 WINDOW_ZONE = 0.3    # высокая мебель не должна закрывать окно
 TOUCH = 0.35         # ближе этого к стене — мебель стоит «у стены»
+RAYS = (0.3, 1.557, 2.813, 4.07, 5.326)   # лучи «внутри ли точка»: пять сторон вразброс, не вдоль стен
 # как назвать стену: (по-русски, «у …», по-английски)
 WALL_NAMES = {
     "window": ("стена с окном", "у стены с окном", "the window wall"),
@@ -32,6 +33,9 @@ class Rect:
         self.kind, self.height = kind, height
         self.u = (math.cos(angle), math.sin(angle))
         self.v = (-math.sin(angle), math.cos(angle))
+        # углы и стороны считаем один раз: их спрашивают сотни раз на комнату
+        c = [self.point(a, b) for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        self._corners, self._segs = c, [(*c[i], *c[(i + 1) % 4]) for i in range(4)]
 
     @classmethod
     def of(cls, o: dict) -> "Rect":
@@ -46,18 +50,18 @@ class Rect:
         return self.x + self.u[0] * a + self.v[0] * b, self.y + self.u[1] * a + self.v[1] * b
 
     def corners(self) -> list[tuple[float, float]]:
-        return [self.point(a, b) for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        return self._corners
 
     def segs(self) -> list[tuple[float, float, float, float]]:
-        c = self.corners()
-        return [(*c[i], *c[(i + 1) % 4]) for i in range(4)]
+        return self._segs
 
 
 def overlaps(a: Rect, b: Rect, shrink: float = 0.02) -> bool:
     """Пересекаются ли прямоугольники (касание не считаем)."""
+    ca, cb = a.corners(), b.corners()
     for axis in (a.u, a.v, b.u, b.v):
-        pa = [p[0] * axis[0] + p[1] * axis[1] for p in a.corners()]
-        pb = [p[0] * axis[0] + p[1] * axis[1] for p in b.corners()]
+        pa = [p[0] * axis[0] + p[1] * axis[1] for p in ca]
+        pb = [p[0] * axis[0] + p[1] * axis[1] for p in cb]
         if max(pa) - shrink <= min(pb) or max(pb) - shrink <= min(pa):
             return False
     return True
@@ -65,7 +69,22 @@ def overlaps(a: Rect, b: Rect, shrink: float = 0.02) -> bool:
 
 def cast(p: tuple[float, float], d: tuple[float, float], segs, far: float = 50.0) -> float:
     """Расстояние от точки p по направлению d до ближайшего отрезка."""
-    best = far
+    (px, py), (dx, dy), best = p, d, far
+    for x1, y1, x2, y2 in segs:
+        ex, ey = x2 - x1, y2 - y1
+        den = dx * ey - dy * ex
+        if -1e-9 < den < 1e-9:
+            continue
+        wx, wy = x1 - px, y1 - py
+        t = (wx * ey - wy * ex) / den
+        if 1e-6 < t < best and -1e-9 <= (wx * dy - wy * dx) / den <= 1 + 1e-9:
+            best = t
+    return best
+
+
+def crossings(p: tuple[float, float], d: tuple[float, float], segs) -> int:
+    """Сколько отрезков пересекает луч из p по направлению d."""
+    n = 0
     for x1, y1, x2, y2 in segs:
         ex, ey = x2 - x1, y2 - y1
         den = d[0] * ey - d[1] * ex
@@ -74,9 +93,8 @@ def cast(p: tuple[float, float], d: tuple[float, float], segs, far: float = 50.0
         wx, wy = x1 - p[0], y1 - p[1]
         t = (wx * ey - wy * ex) / den
         s = (wx * d[1] - wy * d[0]) / den
-        if t > 1e-6 and -1e-9 <= s <= 1 + 1e-9:
-            best = min(best, t)
-    return best
+        n += t > 1e-9 and 0 <= s <= 1
+    return n
 
 
 def inside(poly: list[tuple[float, float]], p: tuple[float, float]) -> bool:
@@ -136,9 +154,10 @@ class Room:
             self.openings.append({"kind": o.get("kind"), "wall": i, "offset": off,
                                   "width": _f(o.get("width")) or 0.8, "height": _f(o.get("height")) or 0.0,
                                   "bottom": _f(o.get("bottom"))})
-        # все двери известно где — можно советовать мебель на свободные стены, не закрывая проход
-        self.located = (self.exact and len(self.openings) == len(scan.get("openings") or [])) or \
-            (not self.exact and not any(o.get("kind") in ("door", "opening") for o in scan.get("openings") or []))
+        # все окна и двери известно где — можно советовать мебель на свободные стены, не закрывая их
+        # (у старых сканов без точных стен — только если окон и дверей нет вовсе)
+        self.located = len(self.openings) == len(scan.get("openings") or [])
+        self._inward: dict[int, tuple[float, float]] = {}
 
     # ---------- стены ----------
 
@@ -151,17 +170,30 @@ class Room:
         ll = self.wall_len(i) or 1
         return (x2 - x1) / ll, (y2 - y1) / ll
 
+    def enclosed(self, p) -> bool:
+        """Внутри ли точка по самим стенам (чёт-нечет). Лучи в пять сторон и большинство голосов:
+        один луч может проскочить в щель недоснятого угла."""
+        votes = sum(crossings(p, (math.cos(a), math.sin(a)), self.walls) % 2 for a in RAYS)
+        return votes * 2 > len(RAYS)
+
     def inward(self, i: int) -> tuple[float, float]:
-        """Нормаль стены внутрь комнаты."""
+        """Нормаль стены внутрь комнаты. Сначала по контуру пола; но на iOS 16 контур — выпуклая оболочка
+        концов стен, и у стен «внутреннего угла» (Г-образная комната) обе стороны внутри — тогда по стенам."""
+        if i in self._inward:
+            return self._inward[i]
         x1, y1, x2, y2 = self.walls[i]
         dx, dy = self.wall_dir(i)
         n = (-dy, dx)
         mid = ((x1 + x2) / 2, (y1 + y2) / 2)
-        if self.plan:
-            ok = inside(self.plan, (mid[0] + n[0] * 0.1, mid[1] + n[1] * 0.1))
-        else:
+        a, b = (mid[0] + n[0] * 0.1, mid[1] + n[1] * 0.1), (mid[0] - n[0] * 0.1, mid[1] - n[1] * 0.1)
+        tests = ([lambda p: inside(self.plan, p)] if self.plan else []) + ([self.enclosed] if self.exact else [])
+        for test in tests:
+            if (ok := test(a)) != test(b):
+                break
+        else:       # не поняли — к центру комнаты
             ok = (self.center[0] - mid[0]) * n[0] + (self.center[1] - mid[1]) * n[1] > 0
-        return n if ok else (-n[0], -n[1])
+        self._inward[i] = n if ok else (-n[0], -n[1])
+        return self._inward[i]
 
     def is_inside(self, p) -> bool:
         return inside(self.plan, p) if self.plan else True

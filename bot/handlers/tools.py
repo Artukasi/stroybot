@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import db, kie
 from ..calc import CALCS, parse_numbers
 from ..config import FREE_CONSULT_PER_DAY, PRICES
-from ..keyboards import after_design_kb, calcs_kb, home_kb, styles_kb
+from ..keyboards import after_design_kb, calcs_kb, design_kb, home_kb, styles_kb
 from ..prompts import (CHECK_SYSTEM, CONSULT_SYSTEM, DESIGN_PROMPT, DESIGN_STYLES,
                        ESTIMATE_SYSTEM, KP_SYSTEM)
 from ..states import Flow
@@ -25,13 +25,16 @@ router = Router()
 @router.callback_query(F.data == "menu:design")
 async def design_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Flow.design_photo)
+    scans = await db.list_scans(cb.from_user.id, limit=5)
     text = ("📸 Пришлите фото комнаты — покажу, как она будет выглядеть после ремонта.\n\n"
-            "Совет: снимайте из угла, горизонтально, при дневном свете.\n"
+            "Совет: снимайте из угла, горизонтально, при дневном свете.\n\n"
+            + ("📐 Или выберите скан с iPhone ниже — сделаю ремонт по точным размерам.\n" if scans else "")
+            + "📎 Файл скана из приложения СтройСкан (.stroyscan.json) можно прислать прямо сюда.\n\n"
             f"Стоимость: {PRICES['design']} кр. за вариант.")
     try:
-        await cb.message.edit_text(text, reply_markup=home_kb())
+        await cb.message.edit_text(text, reply_markup=design_kb(scans))
     except Exception:
-        await cb.message.answer(text, reply_markup=home_kb())
+        await cb.message.answer(text, reply_markup=design_kb(scans))
     await cb.answer()
 
 

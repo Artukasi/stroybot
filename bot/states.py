@@ -9,6 +9,7 @@ class Flow(StatesGroup):
     check_photo = State()    # ждём фото работы
     consult = State()        # диалог с консультантом
     kp = State()             # ждём описание объекта для КП
+    scan_photo = State()     # ремонт по скану: можно прислать своё фото комнаты
 
 
 class Obj(StatesGroup):

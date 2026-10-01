@@ -103,6 +103,7 @@ MIGRATIONS = [
     ("users", "ref_rewarded", "INTEGER NOT NULL DEFAULT 0"),
     ("payments", "refunded", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "brand", "TEXT"),   # подпись на работах в портфолио: «Бригада Артура · +7 …»
+    ("scans", "look", "TEXT"),    # ремонт, собранный в 3D: обои, пол, свет, мебель (JSON)
 ]
 
 EXPENSE_KINDS = {
@@ -553,19 +554,34 @@ async def add_scan(user_id: int, room: str, data: dict) -> int:
         return cur.lastrowid
 
 
+def _scan_row(r) -> dict:
+    return {"id": r[0], "room": r[1], "created_at": r[3], **json.loads(r[2]),
+            "look": json.loads(r[4]) if r[4] else None}
+
+
 async def get_scan(user_id: int, scan_id: int) -> dict | None:
     async with _conn() as db:
         r = await (await db.execute(
-            "SELECT id, room, data, created_at FROM scans WHERE id=? AND user_id=?", (scan_id, user_id))).fetchone()
-    return {"id": r[0], "room": r[1], "created_at": r[3], **json.loads(r[2])} if r else None
+            "SELECT id, room, data, created_at, look FROM scans WHERE id=? AND user_id=?",
+            (scan_id, user_id))).fetchone()
+    return _scan_row(r) if r else None
 
 
 async def list_scans(user_id: int, limit: int = 20) -> list[dict]:
     async with _conn() as db:
         rows = await (await db.execute(
-            "SELECT id, room, data, created_at FROM scans WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            "SELECT id, room, data, created_at, look FROM scans WHERE user_id=? ORDER BY id DESC LIMIT ?",
             (user_id, limit))).fetchall()
-    return [{"id": r[0], "room": r[1], "created_at": r[3], **json.loads(r[2])} for r in rows]
+    return [_scan_row(r) for r in rows]
+
+
+async def set_scan_look(user_id: int, scan_id: int, look: dict | None) -> bool:
+    """Сохраняет ремонт, собранный в 3D. Пустой — стирает. False — скан чужой или его нет."""
+    async with _conn() as db:
+        cur = await db.execute("UPDATE scans SET look=? WHERE id=? AND user_id=?",
+                               (json.dumps(look, ensure_ascii=False) if look else None, scan_id, user_id))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 # ---------- портфолио «до/после» ----------

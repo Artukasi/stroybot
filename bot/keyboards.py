@@ -18,10 +18,10 @@ def roles_kb() -> M:
     return M(inline_keyboard=[[B(text=t, callback_data=f"role:{k}")] for k, t in ROLES.items()])
 
 
-def webapp_button(path: str = "") -> B | None:
+def webapp_button(path: str = "", text: str = "📱 Открыть приложение") -> B | None:
     if not config.webapp_url.startswith("https://"):
         return None
-    return B(text="📱 Открыть приложение", web_app=WebAppInfo(url=f"{config.webapp_url}/app/{path}"))
+    return B(text=text, web_app=WebAppInfo(url=f"{config.webapp_url}/app/{path}"))
 
 
 def main_menu(role: str | None) -> M:
@@ -54,6 +54,14 @@ def styles_kb() -> M:
     if len(items) % 2:
         rows.append([B(text=items[-1][1][0], callback_data=f"style:{items[-1][0]}")])
     rows.append([B(text="✖️ Отмена", callback_data="menu:home")])
+    return M(inline_keyboard=rows)
+
+
+def design_kb(scans: list[dict]) -> M:
+    """Дизайн по фото: последние сканы с iPhone — ремонт по точным размерам."""
+    rows = [[B(text=f"📐 {x['room'][:40]} · {x['created_at'][8:10]}.{x['created_at'][5:7]}",
+               callback_data=f"sd:{x['id']}")] for x in scans[:5]]
+    rows.append([B(text="⬅️ Меню", callback_data="menu:home")])
     return M(inline_keyboard=rows)
 
 

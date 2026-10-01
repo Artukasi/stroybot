@@ -218,6 +218,7 @@ def test_every_button_has_a_handler(env):
               kb.object_kb(obj), kb.stages_kb(oid, [stage]), kb.expenses_kb(oid, [exp]),
               kb.back_to_list_kb(), kb.back_to_object_kb(oid), kb.report_kb(1), kb.report_objects_kb([obj]),
               kb.confirm_delete_kb(oid), scan_kb(1), scan_styles_kb(1),
+              kb.design_kb([{"id": 1, "room": "Кухня", "created_at": "2026-09-30 10:00:00"}]),
               folio.list_kb([{"id": 1, "title": "x"}]), folio.item_kb(1), folio.skip_kb()]
     datas = []
     for board in boards:

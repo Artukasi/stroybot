@@ -24,7 +24,7 @@ def _headers() -> dict:
 
 async def upload_image(data: bytes, filename: str = "photo.jpg") -> str:
     """Загружает картинку во временное хранилище kie.ai (живёт ~3 дня), возвращает URL."""
-    return await upload_file(data, filename, "image/jpeg")
+    return await upload_file(data, filename, "image/png" if data.startswith(b"\x89PNG") else "image/jpeg")
 
 
 async def upload_file(data: bytes, filename: str, mime: str) -> str:

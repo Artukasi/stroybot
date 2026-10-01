@@ -106,6 +106,19 @@ async def index(request: web.Request):
     return web.FileResponse(WEBAPP_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
+async def script(request: web.Request):
+    """Скрипты страницы: 3D-комната (room3d.js) и three.js в vendor/ — грузятся, только когда открыли 3D.
+    В vendor/ версия в имени файла, поэтому кешируем надолго; сжимаем на лету."""
+    name = request.match_info["name"]
+    path = WEBAPP_DIR / name
+    if not path.is_file():
+        raise web.HTTPNotFound()
+    cache = "public, max-age=31536000, immutable" if name.startswith("vendor/") else "no-cache"
+    resp = web.FileResponse(path, headers={"Cache-Control": cache, "Content-Type": "text/javascript; charset=utf-8"})
+    resp.enable_compression()
+    return resp
+
+
 async def health(request: web.Request):
     return web.json_response({"ok": True})
 
@@ -231,6 +244,7 @@ def create_app(bot=None) -> web.Application:
     app.router.add_get("/health", health)
     app.router.add_get("/app/", index)
     app.router.add_get("/app", index)
+    app.router.add_get(r"/app/{name:(vendor/)?[\w-]+(\.min)?\.js}", script)
     app.router.add_get("/api/me", api_me)
     app.router.add_get("/api/objects/archived", api_archived)
     app.router.add_post("/api/objects", api_create_object)

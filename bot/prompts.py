@@ -16,6 +16,33 @@ DESIGN_PROMPT = (
     "{extra}"
 )
 
+# Ремонт по 3D-скану с iPhone: всё должно выглядеть как настоящее фото, с точными размерами комнаты
+SCAN_DESIGN_PROMPT = (
+    "Renovate the room in this photo in {style}. The result must look like a real photograph of a finished room, "
+    "not a render. Keep the camera position, lens and perspective, the room geometry, walls, windows and doors "
+    "exactly where they are. Real size from a LiDAR scan: {facts}. Keep every piece of furniture in its place "
+    "and at its real size, restyled. {look} Real materials with natural texture (wood grain, fabric weave, "
+    "matte paint), soft daylight from the windows, realistic shadows and reflections, correct scale. "
+    "No CGI look, no people, no text, no watermarks."
+)
+SCAN_T2I_PROMPT = (
+    "Real photograph of a finished room renovation in {style}, taken at eye level from the doorway "
+    "with a 24 mm lens. The room was measured with a LiDAR scan, keep these exact proportions and placement: "
+    "{facts}. {look} Real materials with natural texture, soft daylight from the windows, realistic shadows, "
+    "tidy and lived-in. Looks like a real estate photo, not a 3D render. No people, no text, no watermarks."
+)
+SCAN_RENDER_PROMPT = (
+    "This image is a simple 3D model of a real room built from a LiDAR scan. Turn it into a real photograph "
+    "of the same room after renovation in {style}. Keep exactly: camera position and angle, perspective, "
+    "room geometry, wall lengths, ceiling height, positions and sizes of windows, doors and every piece "
+    "of furniture. Do not add, remove or move walls, windows, doors or furniture; keep each item's type, "
+    "shape and colour from the model (small decor like cushions, plants and books is fine). "
+    "Room facts: {facts}. {look} Replace flat 3D surfaces with real materials and textures, natural daylight "
+    "from the windows, soft shadows, true-to-scale details, subtle real-life imperfections. Photorealistic, "
+    "like a real estate photo shot on a full-frame camera. No CGI or 3D-render look, no people, no text, "
+    "no watermarks."
+)
+
 ESTIMATE_SYSTEM = """Ты — опытный сметчик в России. По описанию задачи ремонта составь ориентировочную смету.
 Формат ответа (Telegram HTML, без Markdown, без таблиц):
 <b>Смета: краткое название</b>

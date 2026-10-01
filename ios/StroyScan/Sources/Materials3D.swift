@@ -37,7 +37,7 @@ struct TexSet {
     let meters: CGFloat
 
     /// Сколько памяти занимают картинки
-    var bytes: Int { [diffuse, normal, rough].reduce(0) { $0 + imageBytes($1) } }
+    var bytes: Int { imageBytes(diffuse) + imageBytes(normal) + imageBytes(rough) }
 }
 
 /// Байты картинки в памяти (без копии на видеокарте)

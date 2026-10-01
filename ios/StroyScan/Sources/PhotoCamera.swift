@@ -11,16 +11,30 @@ final class PhotoCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     /// videoZoomFactor, который на кнопках называется «1×» (у двойной широкоугольной камеры 1.0 — это 0,5×)
     private var base: CGFloat = 1
     private var configured = false
+    private var running: NSKeyValueObservation?
 
     @Published var zoom: CGFloat = 1
     @Published var torch = false
     @Published var hasTorch = false
     @Published var hasUltraWide = false
     @Published var denied = false
+    /// Камера не открылась (занята другим приложением, запрещена или её нет)
+    @Published var failed = false
+    /// Камера снимает: только тогда кнопка спуска активна
+    @Published var ready = false
     @Published var shot: UIImage?
     @Published var busy = false
 
     var presets: [CGFloat] { hasUltraWide ? [0.5, 1, 2] : [1, 2] }
+
+    override init() {
+        super.init()
+        // кнопка спуска следит за камерой: остановилась или прервалась — кнопка гаснет
+        running = session.observe(\.isRunning, options: [.initial, .new]) { [weak self] session, _ in
+            let on = session.isRunning
+            DispatchQueue.main.async { self?.ready = on }
+        }
+    }
 
     func start() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -59,12 +73,22 @@ final class PhotoCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
                 if let d = found.first(where: { $0.deviceType == type }) { picked = d; break }
             }
             guard let device = picked ?? AVCaptureDevice.default(for: .video),
-                  let input = try? AVCaptureDeviceInput(device: device) else { return }
+                  let input = try? AVCaptureDeviceInput(device: device) else {
+                DispatchQueue.main.async { self.failed = true }
+                return
+            }
             self.session.beginConfiguration()
             self.session.sessionPreset = .photo
-            if self.session.canAddInput(input) { self.session.addInput(input) }
-            if self.session.canAddOutput(self.output) { self.session.addOutput(self.output) }
+            let added = self.session.canAddInput(input) && self.session.canAddOutput(self.output)
+            if added {
+                self.session.addInput(input)
+                self.session.addOutput(self.output)
+            }
             self.session.commitConfiguration()
+            guard added else {
+                DispatchQueue.main.async { self.failed = true }
+                return
+            }
             let ultra = device.deviceType == .builtInTripleCamera || device.deviceType == .builtInDualWideCamera
             self.base = ultra ? CGFloat(device.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue ?? 2) : 1
             self.device = device
@@ -110,12 +134,16 @@ final class PhotoCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     func capture() {
         busy = true
         queue.async {
-            if let connection = self.output.connection(with: .video) {
-                if #available(iOS 17.0, *) {
-                    if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
-                } else if connection.isVideoOrientationSupported {
-                    connection.videoOrientation = .portrait
-                }
+            // без живого видео capturePhoto роняет приложение — тогда просто не снимаем
+            guard self.configured, self.session.isRunning,
+                  let connection = self.output.connection(with: .video), connection.isEnabled, connection.isActive else {
+                DispatchQueue.main.async { self.busy = false }
+                return
+            }
+            if #available(iOS 17.0, *) {
+                if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+            } else if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
             }
             self.output.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
         }
@@ -160,13 +188,9 @@ struct PhotoCameraView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if camera.denied {
-                VStack(spacing: 16) {
-                    Text("Нет доступа к камере").font(.headline).foregroundStyle(.white)
-                    Text("Разрешите: Настройки → СтройСкан → Камера.")
-                        .foregroundStyle(.white.opacity(0.8)).multilineTextAlignment(.center)
-                    Button("Закрыть") { dismiss() }.buttonStyle(.borderedProminent)
-                }
-                .padding()
+                problem("Нет доступа к камере", "Разрешите: Настройки → СтройСкан → Камера.")
+            } else if camera.failed {
+                problem("Камера недоступна", "Закройте другие приложения с камерой и откройте съёмку ещё раз.")
             } else if let shot = camera.shot {
                 review(shot)
             } else {
@@ -233,10 +257,20 @@ struct PhotoCameraView: View {
                     if camera.busy { ProgressView() }
                 }
             }
-            .disabled(camera.busy)
+            .disabled(camera.busy || !camera.ready)
+            .opacity(camera.ready ? 1 : 0.4)
             .accessibilityLabel("Снять фото")
             .padding(.vertical, 24)
         }
+    }
+
+    private func problem(_ title: String, _ hint: String) -> some View {
+        VStack(spacing: 16) {
+            Text(title).font(.headline).foregroundStyle(.white)
+            Text(hint).foregroundStyle(.white.opacity(0.8)).multilineTextAlignment(.center)
+            Button("Закрыть") { dismiss() }.buttonStyle(.borderedProminent)
+        }
+        .padding()
     }
 
     private func review(_ shot: UIImage) -> some View {

@@ -76,7 +76,7 @@ struct Renovation3DView: View {
                 }
             }
             if let pick = editor.pick {
-                EditPanel(editor: editor, pick: pick)
+                EditPanel(editor: editor, pick: pick, alert: $alert)
             }
             bottomBar
         }
@@ -241,8 +241,10 @@ struct Renovation3DView: View {
     // MARK: Действия
 
     private func addItem(_ kind: String, _ variant: String) {
-        if !editor.add(kind: kind, variant: variant) {
-            alert = "Добавить можно не больше \(Look.maxAdded) вещей."
+        switch editor.add(kind: kind, variant: variant) {
+        case .tooMany: alert = "Добавить можно не больше \(Look.maxAdded) вещей."
+        case .noRoom: alert = "Эта вещь не помещается в комнату."
+        case .added: break
         }
     }
 
@@ -324,6 +326,8 @@ struct Renovation3DView: View {
 struct EditPanel: View {
     @ObservedObject var editor: RenoEditor
     let pick: RenoEditor.Pick
+    /// Сообщение на экране ремонта (вещь не помещается и т.п.)
+    @Binding var alert: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -419,13 +423,17 @@ struct EditPanel: View {
             Text("\(sizeText(a.width, a.depth, a.height)). Двигайте пальцем по полу.")
                 .font(.caption).foregroundStyle(.secondary)
             if !variants.isEmpty {
-                Chips(items: variants, selected: a.variant) { editor.setAdded(j, variant: $0) }
+                Chips(items: variants, selected: a.variant) {
+                    if !editor.setAdded(j, variant: $0) { alert = "Такой вариант в комнату не помещается." }
+                }
             }
             Swatches(colors: LookOptions.colors(kind: a.kind, variant: a.variant), selected: a.color) {
                 editor.setAdded(j, color: $0)
             }
             HStack(spacing: 16) {
-                Button { editor.rotateAdded(j) } label: {
+                Button {
+                    if !editor.rotateAdded(j) { alert = "Повёрнутой эта вещь в комнату не помещается." }
+                } label: {
                     Label("Повернуть", systemImage: "rotate.right").font(.subheadline.bold())
                 }
                 Button(role: .destructive) { editor.removeAdded(j) } label: {

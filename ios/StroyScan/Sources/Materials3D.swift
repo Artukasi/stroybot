@@ -35,25 +35,88 @@ struct TexSet {
     let normal: UIImage?
     let rough: UIImage?
     let meters: CGFloat
+
+    /// Сколько памяти занимают картинки
+    var bytes: Int { [diffuse, normal, rough].reduce(0) { $0 + imageBytes($1) } }
+}
+
+/// Байты картинки в памяти (без копии на видеокарте)
+func imageBytes(_ image: UIImage?) -> Int {
+    guard let cg = image?.cgImage else { return 0 }
+    return cg.bytesPerRow * cg.height
+}
+
+/// Кэш с пределом по памяти: лишнее выбрасывает то, что дольше всего не брали.
+/// Пока человек перебирает отделку, текстуры не копятся; при нехватке памяти — очищается весь.
+final class MemoryCache<Value> {
+    private struct Entry {
+        let value: Value
+        let cost: Int
+        var used: UInt64
+    }
+
+    private var items: [String: Entry] = [:]
+    private var total = 0
+    private var clock: UInt64 = 0
+    private let limit: Int
+    private let lock = NSLock()
+    private var warning: NSObjectProtocol?
+
+    /// limit — байты
+    init(limit: Int) {
+        self.limit = limit
+        warning = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+                                                         object: nil, queue: nil) { [weak self] _ in self?.removeAll() }
+    }
+
+    func get(_ key: String) -> Value? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var e = items[key] else { return nil }
+        clock += 1
+        e.used = clock
+        items[key] = e
+        return e.value
+    }
+
+    func set(_ key: String, _ value: Value, cost: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        clock += 1
+        total -= items[key]?.cost ?? 0
+        items[key] = Entry(value: value, cost: cost, used: clock)
+        total += cost
+        while total > limit && items.count > 1 {
+            guard let oldest = items.min(by: { $0.value.used < $1.value.used }) else { break }
+            total -= oldest.value.cost
+            items[oldest.key] = nil
+        }
+    }
+
+    func removeAll() {
+        lock.lock()
+        items = [:]
+        total = 0
+        lock.unlock()
+    }
 }
 
 /// Проход рисования: цвет, высота рельефа (серый) или шероховатость (серый)
 enum Pass { case color, height, rough }
 
 enum Tex {
-    private static var cache: [String: TexSet] = [:]
-    private static let lock = NSLock()
+    /// Нужное одной комнате — около 30 МБ, держим примерно два ремонта
+    private static let cache = MemoryCache<TexSet>(limit: 64 << 20)
 
     static func cached(_ key: String, _ make: () -> TexSet) -> TexSet {
-        lock.lock()
-        if let t = cache[key] { lock.unlock(); return t }
-        lock.unlock()
+        if let t = cache.get(key) { return t }
         let t = make()
-        lock.lock()
-        cache[key] = t
-        lock.unlock()
+        cache.set(key, t, cost: t.bytes)
         return t
     }
+
+    /// Экран 3D закрыли — текстуры больше не нужны
+    static func purge() { cache.removeAll() }
 
     // MARK: Холст
 
@@ -744,14 +807,18 @@ enum Tex {
 // MARK: - Материалы
 
 enum Mat {
-    private static var cache: [String: SCNMaterial] = [:]
+    /// Материал держит свои текстуры: предел по их памяти, простые цвета почти ничего не весят
+    private static let cache = MemoryCache<SCNMaterial>(limit: 64 << 20)
 
     private static func cached(_ key: String, _ make: () -> SCNMaterial) -> SCNMaterial {
-        if let m = cache[key] { return m }
+        if let m = cache.get(key) { return m }
         let m = make()
-        cache[key] = m
+        let maps = [m.diffuse, m.normal, m.roughness, m.emission].reduce(0) { $0 + imageBytes($1.contents as? UIImage) }
+        cache.set(key, m, cost: maps + 1024)
         return m
     }
+
+    static func purge() { cache.removeAll() }
 
     /// PBR-материал из набора карт. uvMeters: у геометрии текстурные координаты в метрах.
     static func textured(_ t: TexSet, rough: CGFloat, metal: CGFloat = 0, uvMeters: Bool, repeats: CGFloat = 1) -> SCNMaterial {

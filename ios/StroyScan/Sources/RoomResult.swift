@@ -200,12 +200,14 @@ struct RoomResult {
         }
     }
 
-    /// Уменьшает фото (длинная сторона ≤ 1600 px) и сжимает в JPEG
+    /// Уменьшает фото (длинная сторона ≤ 1600 px) и сжимает в JPEG.
+    /// Считаем в пикселях: снимок 3D с экрана приходит с масштабом экрана (×3), фото с камеры — ×1.
     static func jpeg(_ image: UIImage) -> Data? {
-        let side = max(image.size.width, image.size.height)
+        let px = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        let side = max(px.width, px.height)
         guard side > 0 else { return nil }
         let k = min(1, 1600 / side)
-        let size = CGSize(width: (image.size.width * k).rounded(), height: (image.size.height * k).rounded())
+        let size = CGSize(width: (px.width * k).rounded(), height: (px.height * k).rounded())
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in

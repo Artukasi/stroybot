@@ -389,6 +389,9 @@ final class RenoEditor: NSObject, ObservableObject {
 
     deinit {
         timer?.invalidate()
+        // текстуры нужны только этому экрану: отпускаем память
+        Tex.purge()
+        Mat.purge()
     }
 
     // MARK: Для экрана
@@ -540,30 +543,47 @@ final class RenoEditor: NSObject, ObservableObject {
         }
     }
 
-    func setAdded(_ j: Int, variant: String? = nil, color: String? = nil) {
+    /// Вариант или цвет добавленной вещи. false — вещь такого размера в комнату не помещается.
+    @discardableResult
+    func setAdded(_ j: Int, variant: String? = nil, color: String? = nil) -> Bool {
+        guard look.added.indices.contains(j) else { return false }
+        var a = look.added[j]
+        if let variant, variant != a.variant {
+            a.variant = variant
+            let s = LookOptions.size(kind: a.kind, variant: variant)
+            a.width = s.x
+            a.depth = s.y
+            a.height = s.z
+            if !LookOptions.colors(kind: a.kind, variant: variant).contains(a.color) {
+                a.color = LookOptions.defaultColor(kind: a.kind, variant: variant, palette: look.palette)
+            }
+            // стала больше и упёрлась в стену — двигаем на ближайшее место, где встаёт целиком
+            guard let c = nearestFit(a) else { return false }
+            a.x = Double(c.x)
+            a.y = Double(c.y)
+        }
+        if let color { a.color = color }
         edit { l in
             guard l.added.indices.contains(j) else { return }
-            var a = l.added[j]
-            if let variant, variant != a.variant {
-                a.variant = variant
-                let s = LookOptions.size(kind: a.kind, variant: variant)
-                a.width = s.x
-                a.depth = s.y
-                a.height = s.z
-                if !LookOptions.colors(kind: a.kind, variant: variant).contains(a.color) {
-                    a.color = LookOptions.defaultColor(kind: a.kind, variant: variant, palette: l.palette)
-                }
-            }
-            if let color { a.color = color }
             l.added[j] = a
         }
+        return true
     }
 
-    func rotateAdded(_ j: Int) {
+    /// Поворот на 90°. Не встаёт на месте — ближайшее место, где встаёт; false — повёрнутой не помещается.
+    @discardableResult
+    func rotateAdded(_ j: Int) -> Bool {
+        guard look.added.indices.contains(j) else { return false }
+        var a = look.added[j]
+        a.angle = (a.angle + .pi / 2).truncatingRemainder(dividingBy: 2 * .pi)
+        guard let c = nearestFit(a) else { return false }
+        a.x = Double(c.x)
+        a.y = Double(c.y)
         edit { l in
             guard l.added.indices.contains(j) else { return }
-            l.added[j].angle = (l.added[j].angle + .pi / 2).truncatingRemainder(dividingBy: 2 * .pi)
+            l.added[j] = a
         }
+        return true
     }
 
     func removeAdded(_ j: Int) {
@@ -574,13 +594,22 @@ final class RenoEditor: NSObject, ObservableObject {
         }
     }
 
+    enum AddResult { case added, tooMany, noRoom }
+
     /// Новая мебель на свободное место: к стене или ближе к середине комнаты
     @discardableResult
-    func add(kind: String, variant: String) -> Bool {
-        guard look.added.count < Look.maxAdded else { return false }
+    func add(kind: String, variant: String) -> AddResult {
+        guard look.added.count < Look.maxAdded else { return .tooMany }
         let s = LookOptions.size(kind: kind, variant: variant)
-        let spot = freeSpot(kind: kind, variant: variant, w: Float(s.x), d: Float(s.y), h: Float(s.z))
-            ?? (room.centroid, 0)
+        let w = Float(s.x), d = Float(s.y)
+        var found = freeSpot(kind: kind, variant: variant, w: w, d: d, h: Float(s.z))
+        if found == nil {
+            // свободного места нет — ставим ближе к середине, но целиком в комнате (можно поверх мебели)
+            for angle in [Float(0), .pi / 2] {
+                if let c = nearestFit(room.centroid, angle: angle, w: w, d: d) { found = (c, angle); break }
+            }
+        }
+        guard let spot = found else { return .noRoom }
         let item = Look.Added(kind: kind, variant: variant,
                               color: LookOptions.defaultColor(kind: kind, variant: variant, palette: look.palette),
                               width: s.x, depth: s.y, height: s.z,
@@ -588,7 +617,7 @@ final class RenoEditor: NSObject, ObservableObject {
         let j = look.added.count
         edit { $0.added.append(item) }
         select(.added(j))
-        return true
+        return .added
     }
 
     // MARK: Камера
@@ -1245,6 +1274,42 @@ final class RenoEditor: NSObject, ObservableObject {
         node.eulerAngles.y = -Float(a.angle)
     }
 
+    /// Вещь целиком на полу: все четыре угла внутри комнаты, ничего не торчит в стене или в проёме.
+    /// Зазор 2 см — на плинтус.
+    private func inRoom(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> Bool {
+        Foot(c, angle: angle, w: w + 0.04, d: d + 0.04).corners.allSatisfy { room.inside($0) }
+    }
+
+    private func inRoom(_ a: Look.Added, at c: SIMD2<Float>) -> Bool {
+        inRoom(c, angle: Float(a.angle), w: Float(a.width), d: Float(a.depth))
+    }
+
+    /// Ближайшее к c место (шаг 5 см), где вещь встаёт целиком; nil — в комнату не помещается
+    private func nearestFit(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> SIMD2<Float>? {
+        if inRoom(c, angle: angle, w: w, d: d) { return c }
+        var best: SIMD2<Float>?
+        var bestDist = Float.greatestFiniteMagnitude
+        var y = room.lo.y
+        while y <= room.hi.y {
+            var x = room.lo.x
+            while x <= room.hi.x {
+                let q = SIMD2(x, y)
+                let dist = simd_distance_squared(q, c)
+                if dist < bestDist && inRoom(q, angle: angle, w: w, d: d) {
+                    bestDist = dist
+                    best = q
+                }
+                x += 0.05
+            }
+            y += 0.05
+        }
+        return best
+    }
+
+    private func nearestFit(_ a: Look.Added) -> SIMD2<Float>? {
+        nearestFit(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle), w: Float(a.width), d: Float(a.depth))
+    }
+
     /// Свободное место под новую вещь: не на проходе у дверей, не перед окном, не поверх мебели
     private func freeSpot(kind: String, variant: String, w: Float, d: Float, h: Float) -> (SIMD2<Float>, Float)? {
         var blocks: [Foot] = []
@@ -1444,12 +1509,21 @@ final class RenoEditor: NSObject, ObservableObject {
                 lookStart = (yaw, pitch)
             }
         case .changed:
-            if let j = dragIndex, j < addedNodes.count {
+            if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
                 guard let hit = floorPoint(p) else { return }
+                let a = look.added[j]
                 let q = hit + dragOffset
-                if room.inside(q) {
-                    addedNodes[j].simdPosition.x = q.x
-                    addedNodes[j].simdPosition.z = q.y
+                let pos = addedNodes[j].simdPosition
+                let old = SIMD2(pos.x, pos.z)
+                // только целиком в комнате; упёрлись в стену — скользим вдоль неё.
+                // Вещь из старого ремонта, которая уже торчит в стене, можно вытащить.
+                let stuck = !inRoom(a, at: old)
+                let next = [q, SIMD2(q.x, old.y), SIMD2(old.x, q.y)].first {
+                    inRoom(a, at: $0) || (stuck && room.inside($0))
+                }
+                if let next {
+                    addedNodes[j].simdPosition.x = next.x
+                    addedNodes[j].simdPosition.z = next.y
                 }
             } else if inside {
                 let t = g.translation(in: view)

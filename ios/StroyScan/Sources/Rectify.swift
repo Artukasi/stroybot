@@ -50,6 +50,7 @@ enum Rectify {
     static let cover = 0.85
     static let confWeight: [Double] = [0.5, 0.8, 1.0]
     static let dirTrust = 0.25           // своё направление куска против того, где его середина
+    static let eps = 1e-6                // длины, равные с точностью до округления
 
     // MARK: - Данные
 
@@ -814,7 +815,7 @@ enum Rectify {
         }
         var total = 0.0
         for i in W.indices where !skip.contains(i) { total += W[i].length }
-        var best: (key: (Int, Double, Int), order: [(Int, Bool)], outs: [[SIMD2<Double>]?])?
+        var best: (hops: Int, cover: Double, order: [(Int, Bool)], outs: [[SIMD2<Double>]?])?
         for start in W.indices where !skip.contains(start) {
             var order: [(Int, Bool)] = [(start, true)]
             var outs: [[SIMD2<Double>]?] = []
@@ -840,9 +841,10 @@ enum Rectify {
             if !closedLoop || order.count < 3 { continue }
             let coverLen = order.reduce(0.0) { $0 + W[$1.0].length }
             if coverLen < cover * total { continue }
-            let key = (outs.filter { $0 != nil }.count, -coverLen, start)
-            if let b = best, !(key < b.key) { continue }
-            best = (key: key, order: order, outs: outs)
+            // меньше угаданных переходов, потом длиннее; поровну (до округления) — первый старт
+            let hopsN = outs.filter { $0 != nil }.count
+            if let b = best, !(hopsN < b.hops || (hopsN == b.hops && coverLen > b.cover + eps)) { continue }
+            best = (hops: hopsN, cover: coverLen, order: order, outs: outs)
         }
         guard let best else { return nil }
         return (best.order, best.outs)
@@ -943,9 +945,14 @@ enum Rectify {
         if used {
             // две стороны перегородки — не одна стена, снятая дважды: оставляем их врозь, если так комната не хуже
             let (alt, _, altScore) = attempt(raw, ops, phi, false)
-            if altScore <= score { res = alt }
+            if betterOrSame(altScore, score) { res = alt }
         }
         return res ?? rawResult(raw, phi)
+    }
+
+    /// Оценка a не хуже b (общая длина, равная до округления, — то же самое)
+    private static func betterOrSame(_ a: Score, _ b: Score) -> Bool {
+        (a.0, a.1, a.2) < (b.0, b.1, b.2) || ((a.0, a.1, a.2) == (b.0, b.1, b.2) && a.3 <= b.3 + eps)
     }
 
     /// Одна попытка выпрямить → (итог или nil, если он выглядит хуже скана; склеена ли двойная стена; оценка)
@@ -999,8 +1006,8 @@ enum Rectify {
                 order = order.reversed().map { ($0.0, !$0.1) }
                 outs = (0..<n).map { m in old[((n - 2 - m) % n + n) % n].map { Array($0.reversed()) } }
             }
-            var k = 0
-            for q in order.indices where W[order[q].0].length > W[order[k].0].length { k = q }
+            let longest = order.map { W[$0.0].length }.max() ?? 0
+            let k = order.indices.first { W[order[$0].0].length >= longest - eps } ?? 0
             order = Array(order[k...] + order[..<k])
             outs = Array(outs[k...] + outs[..<k])
             loop = (order, outs)

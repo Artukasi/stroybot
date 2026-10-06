@@ -8,8 +8,9 @@ extension RoomResult {
     static let maxIssues = 10
     static let maxIssueLength = 120
 
-    /// Разбор готового скана (после «Готово»)
-    static func check(_ captured: CapturedRoom, _ r: RoomResult) -> Quality {
+    /// Разбор готового скана (после «Готово») по выпрямленным стенам
+    static func check(_ captured: CapturedRoom, _ r: RoomResult, _ rect: Rectify.Result,
+                      _ toPlan: (SIMD2<Double>) -> SIMD2<Double>) -> Quality {
         var q = Quality()
         var found: [(Int, String)] = []     // (важность, текст)
         var penalty = 0
@@ -33,54 +34,51 @@ extension RoomResult {
             penalty += 40
         }
 
-        // стены, в которых RoomPlan не уверен
-        for (i, wall) in captured.walls.enumerated() where i < n {
-            switch wall.confidence {
-            case .low:
+        // стены и куски стен, в которых RoomPlan не уверен
+        for (i, wall) in rect.walls.enumerated() where i < n {
+            switch wall.conf {
+            case 0:
                 q.weakWalls.insert(i)
                 found.append((1, "\(name(i).capitalizedFirst): снята неуверенно — пройдите вдоль неё ещё раз, медленно."))
                 penalty += 12
-            case .medium:
+            case 1:
                 penalty += 3
             default:
-                break
+                for p in wall.pieces where p.conf == 0 { q.marks.append([toPlan(p.a), toPlan(p.b)]) }
             }
         }
 
-        // углы: конец стены должен упираться в соседнюю стену
-        if n >= 2 {
-            var pairs = Set<String>()
-            for i in 0..<n {
-                for end in [segs[i].0, segs[i].1] {
-                    var best = Double.greatestFiniteMagnitude, bestJ = -1
-                    var point = end
-                    for j in 0..<n where j != i {
-                        let (d, p) = segmentDistance(end, segs[j].0, segs[j].1)
-                        if d < best { best = d; bestJ = j; point = p }
-                    }
-                    guard best > 0.3, bestJ >= 0 else { continue }
-                    let key = "\(min(i, bestJ))-\(max(i, bestJ))"
-                    guard !pairs.contains(key) else { continue }
-                    pairs.insert(key)
-                    q.weakWalls.insert(i)
-                    q.gaps.append((end + point) / 2)
-                    if best < 2.5 {
-                        q.weakWalls.insert(bestJ)
-                        found.append((1, "Угол между стенами \(min(i, bestJ) + 1) и \(max(i, bestJ) + 1) не досканирован — снимите его ближе."))
-                    } else {
-                        found.append((1, "Край стены \(i + 1) ни с чем не сомкнулся — доснимите угол рядом с ним."))
-                    }
-                    penalty += 10
-                }
+        // углы, которые не удалось сомкнуть, и неснятые куски — жёлтым пунктиром на плане
+        for g in rect.gaps {
+            q.marks.append(g.path.map(toPlan))
+            let a = g.wallA + 1, b = g.wallB + 1
+            let m = fmt((g.length * 10).rounded() / 10)
+            switch g.kind {
+            case .corner where g.wallB >= 0:
+                q.weakWalls.formUnion([g.wallA, g.wallB])
+                found.append((1, "Угол между стенами \(a) и \(b) не сомкнулся — доснимите его (жёлтый пунктир на плане)."))
+                penalty += 10
+            case .missing where g.wallB >= 0:
+                q.weakWalls.formUnion([g.wallA, g.wallB])
+                found.append((1, "Между стенами \(a) и \(b) не хватает стены (около \(m) м) — доснимите это место."))
+                penalty += 15
+            case .hole:
+                found.append((2, "Стена \(a): кусок около \(m) м не снят — пройдите вдоль неё (жёлтый пунктир)."))
+                penalty += 6
+            default:
+                if g.wallA >= 0 { q.weakWalls.insert(g.wallA) }
+                found.append((1, "Край стены \(a) ни с чем не сомкнулся — доснимите угол рядом с ним."))
+                penalty += 10
             }
         }
+        q.weakWalls = q.weakWalls.filter { $0 >= 0 && $0 < n }
 
         // высота потолка
         if n >= 3 && (r.height < 2.0 || r.height > 4.5) {
             found.append((1, "Высота потолка вышла \(fmt(r.height)) м — похоже, пол или потолок сняты не полностью. Наведите камеру на пол и на потолок."))
             penalty += 15
         } else if n >= 3 {
-            for (i, w) in r.walls.enumerated() where i < n && abs(w.height - r.height) > 0.15 {
+            for (i, w) in r.walls.enumerated() where i < rect.walls.count && !rect.walls[i].made && abs(w.height - r.height) > 0.15 {
                 let cm = Int((abs(w.height - r.height) * 100).rounded())
                 q.weakWalls.insert(i)
                 found.append((2, "\(name(i).capitalizedFirst) \(w.height < r.height ? "ниже" : "выше") остальных на \(cm) см — доснимите её от пола до потолка."))
@@ -124,30 +122,29 @@ extension RoomResult {
             penalty += 3
         }
 
-        q.issues = found.sorted { $0.0 < $1.0 }.prefix(maxIssues).map { String($0.1.prefix(maxIssueLength)) }
+        q.issues = found.enumerated().sorted { $0.element.0 != $1.element.0 ? $0.element.0 < $1.element.0 : $0.offset < $1.offset }
+            .prefix(maxIssues).map { String($0.element.1.prefix(maxIssueLength)) }
         q.score = max(0, min(100, 100 - penalty))
         return q
     }
 
-    /// Быстрая проверка во время съёмки: что ещё не снято
-    static func liveIssues(_ room: CapturedRoom) -> [String] {
-        let walls = room.walls
-        if walls.count < 3 { return ["Пока видно мало стен — медленно обведите камерой всю комнату"] }
+    /// Быстрая проверка во время съёмки: что ещё не снято. where — где ближайший пунктир («справа, 2 м»)
+    static func liveIssues(_ room: CapturedRoom, _ rect: Rectify.Result, where place: String? = nil) -> [String] {
+        if rect.walls.count < 3 { return ["Пока видно мало стен — медленно обведите камерой всю комнату"] }
         var out: [String] = []
-        let weak = walls.filter { $0.confidence == .low }.count
-        if weak > 0 { out.append("Стены сняты неуверенно (\(weak)) — пройдите вдоль них ещё раз") }
-        let segs = walls.map { RoomResult.ends($0) }
-        var open = 0
-        for (i, s) in segs.enumerated() {
-            for end in [s.0, s.1] {
-                var best = Double.greatestFiniteMagnitude
-                for (j, t) in segs.enumerated() where j != i {
-                    best = min(best, segmentDistance(end, t.0, t.1).0)
-                }
-                if best > 0.5 { open += 1 }
+        let unclosed = rect.gaps.filter { $0.kind != .hole }
+        if !unclosed.isEmpty {
+            if let place {
+                out.append("Не все углы сомкнулись — жёлтый пунктир \(place): подойдите и снимите это место")
+            } else {
+                out.append("Не все углы сомкнулись — подойдите к жёлтому пунктиру и снимите это место")
             }
         }
-        if open > 0 { out.append("Не все углы сомкнулись — подойдите и снимите углы комнаты") }
+        let weak = rect.walls.filter { $0.conf == 0 }.count
+        if weak > 0 { out.append("Стены сняты неуверенно (\(weak)) — пройдите вдоль жёлтого пунктира ещё раз") }
+        if rect.gaps.contains(where: { $0.kind == .hole }) {
+            out.append("Кусок стены не снят — пройдите вдоль жёлтого пунктира")
+        }
         if room.doors.isEmpty && room.openings.isEmpty { out.append("Не видно двери — снимите вход в комнату целиком") }
         if room.objects.contains(where: { $0.confidence == .low }) {
             out.append("Мебель снята не полностью — обойдите её с двух сторон")

@@ -42,8 +42,8 @@ struct RoomResult {
         var issues: [String] = []
         /// Номера стен (с нуля), которые сняты плохо
         var weakWalls: Set<Int> = []
-        /// Точки на плане, где стены не сомкнулись
-        var gaps: [SIMD2<Double>] = []
+        /// Где доснять: ломаные на плане (жёлтый пунктир)
+        var marks: [[SIMD2<Double>]] = []
     }
 
     var room: String = "Комната"
@@ -226,54 +226,75 @@ struct RoomResult {
     }
 }
 
-private func center3(_ t: simd_float4x4) -> SIMD3<Float> {
-    SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
-}
-
-/// Расстояние от точки до стены (отрезок по полу + разница по высоте)
-private func distance(_ p: SIMD3<Float>, toWall wall: CapturedRoom.Surface) -> Float {
-    let t = wall.transform
-    let c = center3(t)
-    let dir = simd_normalize(SIMD3(t.columns.0.x, t.columns.0.y, t.columns.0.z))
-    let half = wall.dimensions.x / 2
-    let along = max(-half, min(half, simd_dot(p - c, dir)))
-    let nearest = c + dir * along
-    return simd_distance(p, nearest)
-}
-
 extension RoomResult {
+    /// Стены скана для подгонки: концы по полу, высота, низ, уверенность, сняты ли верх и низ
+    static func rawWalls(_ walls: [CapturedRoom.Surface]) -> [Rectify.Wall] {
+        // RoomPlan отмечает снятые края стен; не отметил ни одного — не знаем, считаем снятыми
+        let knowsEdges = walls.contains { !$0.completedEdges.isEmpty }
+        return walls.map { wall in
+            let e = RoomResult.ends(wall)
+            let h = Double(wall.dimensions.y)
+            let conf: Int
+            switch wall.confidence {
+            case .low: conf = 0
+            case .medium: conf = 1
+            default: conf = 2
+            }
+            return Rectify.Wall(a: e.0, b: e.1, height: h, bottom: Double(wall.transform.columns.3.y) - h / 2, conf: conf,
+                                top: !knowsEdges || wall.completedEdges.contains(.top),
+                                bot: !knowsEdges || wall.completedEdges.contains(.bottom))
+        }
+    }
+
+    /// Двери, окна и проёмы: середина по полу и ширина (дверь в разрыве стены не считается дырой)
+    static func rawOpenings(_ room: CapturedRoom) -> [Rectify.Opening] {
+        (room.doors + room.windows + room.openings).map {
+            Rectify.Opening(center: SIMD2(Double($0.transform.columns.3.x), Double($0.transform.columns.3.z)),
+                            width: Double($0.dimensions.x))
+        }
+    }
+
+    /// Выпрямленные стены скана. prev — угол сетки прошлого кадра (во время съёмки)
+    static func rectify(_ room: CapturedRoom, prev: Double? = nil) -> Rectify.Result {
+        Rectify.run(rawWalls(room.walls), openings: rawOpenings(room), prev: prev)
+    }
+
     init(_ captured: CapturedRoom) {
-        let capturedWalls = captured.walls
-        walls = capturedWalls.map { Wall(length: Double($0.dimensions.x), height: Double($0.dimensions.y)) }
+        self.init(captured, RoomResult.rectify(captured))
+    }
+
+    /// Размеры по выпрямленным стенам: углы сомкнуты, куски одной стены — одна стена
+    init(_ captured: CapturedRoom, _ rect: Rectify.Result) {
+        self.init()
+        let rw = rect.walls
+        walls = rw.map { Wall(length: $0.length, height: $0.height) }
 
         // высота — медиана высот стен: одна «выросшая» стена не портит результат
-        let heights = walls.map(\.height).sorted()
+        let heights = rw.filter { !$0.made }.map(\.height).sorted()
         if !heights.isEmpty {
             let mid = heights.count / 2
             height = heights.count % 2 == 1 ? heights[mid] : (heights[mid - 1] + heights[mid]) / 2
         }
         // уровень пола — низ самой низкой стены
-        let floorY = capturedWalls.map { $0.transform.columns.3.y - $0.dimensions.y / 2 }.min() ?? 0
+        let floorY = rw.map(\.bottom).min() ?? 0
 
-        // контур пола: на iOS 17 RoomPlan отдаёт его сам, на iOS 16 собираем из концов стен
-        var points: [SIMD2<Double>] = []
-        if #available(iOS 17.0, *), let floor = captured.floors.first, floor.polygonCorners.count > 2 {
-            points = floor.polygonCorners.map { c in
-                let w = floor.transform * SIMD4<Float>(c.x, c.y, c.z, 1)
-                return SIMD2(Double(w.x), Double(w.z))
+        // контур пола: по сомкнутым стенам; если не сомкнулись — на iOS 17 от RoomPlan, на iOS 16 по концам стен
+        var points = rect.loop
+        if points.count < 3 {
+            if #available(iOS 17.0, *), let floor = captured.floors.first, floor.polygonCorners.count > 2 {
+                points = floor.polygonCorners.map { c in
+                    let w = floor.transform * SIMD4<Float>(c.x, c.y, c.z, 1)
+                    return SIMD2(Double(w.x), Double(w.z))
+                }
+            } else {
+                points = RoomResult.convexHull(rw.flatMap { [$0.a, $0.b] })
             }
-        } else {
-            points = RoomResult.convexHull(capturedWalls.flatMap { wall -> [SIMD2<Double>] in
-                let e = RoomResult.ends(wall)
-                return [e.0, e.1]
-            })
         }
 
         // поворачиваем так, чтобы самая длинная стена шла по горизонтали: тогда габариты = длина × ширина
         var a = 0.0
-        if let longest = capturedWalls.max(by: { $0.dimensions.x < $1.dimensions.x }) {
-            a = atan2(Double(longest.transform.columns.0.z), Double(longest.transform.columns.0.x))
-        }
+        let longest = rw.max(by: { $0.length < $1.length })
+        if let longest { a = atan2(longest.b.y - longest.a.y, longest.b.x - longest.a.x) }
         let c = cos(-a), s = sin(-a)
         let rotate = { (p: SIMD2<Double>) -> SIMD2<Double> in SIMD2(p.x * c - p.y * s, p.x * s + p.y * c) }
         points = points.map(rotate)
@@ -288,9 +309,8 @@ extension RoomResult {
         let toPlan = { (p: SIMD2<Double>) -> SIMD2<Double> in rotate(p) - shift }
 
         // стены на плане: два конца в тех же координатах, что и контур пола
-        wallLines = capturedWalls.map { wall in
-            let e = RoomResult.ends(wall)
-            let p = toPlan(e.0), q = toPlan(e.1)
+        wallLines = rw.map { w in
+            let p = toPlan(w.a), q = toPlan(w.b)
             return SIMD4(p.x, p.y, q.x, q.y)
         }
 
@@ -302,7 +322,7 @@ extension RoomResult {
         for (kind, surface) in surfaces {
             let w = Double(surface.dimensions.x), h = Double(surface.dimensions.y)
             var o = Opening(kind: kind, width: w, height: h)
-            if let i = RoomResult.wallIndex(for: surface, in: capturedWalls) {
+            if let i = RoomResult.wallIndex(for: surface, in: captured.walls, rect: rect) {
                 walls[i].openingsArea += w * h
                 let line = wallLines[i]
                 let start = SIMD2(line.x, line.y), end = SIMD2(line.z, line.w)
@@ -311,27 +331,28 @@ extension RoomResult {
                 let center = toPlan(SIMD2(Double(t.columns.3.x), Double(t.columns.3.z)))
                 o.wall = i
                 o.offset = len > 0 ? min(max(simd_dot(center - start, (end - start) / len), 0), len) : 0
-                let wt = capturedWalls[i].transform
-                let wallBottom = Double(wt.columns.3.y - capturedWalls[i].dimensions.y / 2)
-                var bottom = Double(t.columns.3.y) - h / 2 - wallBottom
+                var bottom = Double(t.columns.3.y) - h / 2 - rw[i].bottom
                 if kind != "window" && bottom < 0.12 { bottom = 0 }
                 o.bottom = max(0, bottom)
             }
             openings.append(o)
         }
 
-        // мебель в тех же координатах, что и план
+        // мебель в тех же координатах, что и план; почти ровно стоящую — ровно по стенам
+        let onGrid = rect.ok && longest?.angled == false
         items = captured.objects.map { o in
             let t = o.transform
             let p = toPlan(SIMD2(Double(t.columns.3.x), Double(t.columns.3.z)))
-            let angle = atan2(Double(t.columns.0.z), Double(t.columns.0.x)) - a
-            let bottom = Double(t.columns.3.y - o.dimensions.y / 2 - floorY)
+            var angle = atan2(Double(t.columns.0.z), Double(t.columns.0.x)) - a
+            let k = (angle / Rectify.quarter).rounded()
+            if onGrid && abs(angle - k * Rectify.quarter) <= Rectify.snap { angle = k * Rectify.quarter }
+            let bottom = Double(t.columns.3.y - o.dimensions.y / 2) - floorY
             return Item(kind: RoomResult.kind(of: o.category),
                         width: Double(o.dimensions.x), height: Double(o.dimensions.y), depth: Double(o.dimensions.z),
                         x: p.x, y: p.y, angle: angle, bottom: bottom < 0.08 ? 0 : bottom)
         }
 
-        quality = RoomResult.check(captured, self)
+        quality = RoomResult.check(captured, self, rect, toPlan)
     }
 
     /// Концы стены по полу в мировых x, z
@@ -344,17 +365,17 @@ extension RoomResult {
         return (center - dir * half, center + dir * half)
     }
 
-    /// Какой стене принадлежит окно/дверь: на iOS 17 — по parentIdentifier, иначе ближайшая стена
-    static func wallIndex(for surface: CapturedRoom.Surface, in walls: [CapturedRoom.Surface]) -> Int? {
+    /// Какой выпрямленной стене принадлежит окно/дверь: на iOS 17 — по parentIdentifier, иначе ближайшая
+    static func wallIndex(for surface: CapturedRoom.Surface, in walls: [CapturedRoom.Surface], rect: Rectify.Result) -> Int? {
         if #available(iOS 17.0, *), let parent = surface.parentIdentifier,
-           let i = walls.firstIndex(where: { $0.identifier == parent }) {
-            return i
+           let i = walls.firstIndex(where: { $0.identifier == parent }), i < rect.rawToWall.count, rect.rawToWall[i] >= 0 {
+            return rect.rawToWall[i]
         }
-        let p = center3(surface.transform)
+        let p = SIMD2(Double(surface.transform.columns.3.x), Double(surface.transform.columns.3.z))
         var best: Int?
-        var bestDist = Float.greatestFiniteMagnitude
-        for (i, w) in walls.enumerated() {
-            let d = distance(p, toWall: w)
+        var bestDist = Double.greatestFiniteMagnitude
+        for (i, w) in rect.walls.enumerated() {
+            let d = Rectify.segDist(p, w.a, w.b)
             if d < bestDist { bestDist = d; best = i }
         }
         return best

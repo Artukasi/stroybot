@@ -127,8 +127,8 @@ struct ResultView: View {
                     }
                     .font(.subheadline)
                 }
-                if !q.weakWalls.isEmpty || !q.gaps.isEmpty {
-                    Text("Красным на плане — стены и углы, снятые плохо.")
+                if !q.weakWalls.isEmpty || !q.marks.isEmpty {
+                    Text("Жёлтым пунктиром на плане — где доснять.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let onRescan {
@@ -158,7 +158,7 @@ struct ResultView: View {
             .background(PlanFurniture(points: result.plan, items: result.items).opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls,
-                               gaps: result.quality.gaps).opacity(drawn >= 1 ? 1 : 0))
+                               marks: result.quality.marks).opacity(drawn >= 1 ? 1 : 0))
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
@@ -456,12 +456,12 @@ struct PlanLabels: View {
     }
 }
 
-/// Номера стен на плане; плохо снятые стены и несомкнутые углы — красным
+/// Номера стен на плане; где доснять — жёлтым пунктиром, как в камере во время скана
 struct PlanWalls: View {
     let points: [SIMD2<Double>]
     let lines: [SIMD4<Double>]
     let weak: Set<Int>
-    let gaps: [SIMD2<Double>]
+    let marks: [[SIMD2<Double>]]
 
     var body: some View {
         GeometryReader { geo in
@@ -474,21 +474,20 @@ struct PlanWalls: View {
                         path.move(to: map(lines[i].x, lines[i].y))
                         path.addLine(to: map(lines[i].z, lines[i].w))
                     }
+                    for m in marks where m.count > 1 {
+                        path.move(to: map(m[0].x, m[0].y))
+                        for p in m.dropFirst() { path.addLine(to: map(p.x, p.y)) }
+                    }
                 }
-                .stroke(Color.red, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                ForEach(Array(gaps.indices), id: \.self) { i in
-                    Circle().stroke(Color.red, lineWidth: 3)
-                        .frame(width: 22, height: 22)
-                        .position(map(gaps[i].x, gaps[i].y))
-                }
+                .stroke(Palette.signal, style: StrokeStyle(lineWidth: 5, lineCap: .round, dash: [9, 7]))
                 ForEach(Array(lines.indices), id: \.self) { i in
                     let m = map((lines[i].x + lines[i].z) / 2, (lines[i].y + lines[i].w) / 2)
                     let d = max(hypot(center.x - m.x, center.y - m.y), 1)
                     Text("\(i + 1)")
                         .font(.caption2.bold())
                         .frame(width: 18, height: 18)
-                        .background(weak.contains(i) ? Color.red : Color(.systemGray3), in: Circle())
-                        .foregroundStyle(.white)
+                        .background(weak.contains(i) ? Palette.signal : Color(.systemGray3), in: Circle())
+                        .foregroundStyle(weak.contains(i) ? Palette.ink : Color.white)
                         .position(x: m.x + (center.x - m.x) / d * 16, y: m.y + (center.y - m.y) / d * 16)
                 }
             }

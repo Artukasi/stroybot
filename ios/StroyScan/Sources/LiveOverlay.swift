@@ -5,9 +5,11 @@ import UIKit
 import simd
 
 /// Линии поверх камеры во время скана: выпрямленные стены — белым, где доснять — жёлтым пунктиром
-/// (он мигает). Всё собирается в четыре сетки и пересобирается при каждом обновлении скана.
+/// (чуть мерцает). Под каждой линией тёмная подложка — видно и на белой стене. Вдали линии толще,
+/// чтобы дальний угол читался через всю комнату. Сетки пересобираются при обновлении скана и когда телефон сдвинулся.
 final class LiveOverlay {
     let root = SCNNode()
+    private let haloNode = SCNNode()
     private let solidNode = SCNNode()
     private let dashNode = SCNNode()
     private let thinNode = SCNNode()
@@ -20,17 +22,38 @@ final class LiveOverlay {
         m.writesToDepthBuffer = false
         return m
     }()
+    /// Тёмная подложка (#14202E), рисуется первой и ничего не закрывает
+    private let haloMat: SCNMaterial = {
+        let m = LiveOverlay.material(UIColor(red: 0.08, green: 0.13, blue: 0.18, alpha: 1), 0.55)
+        m.readsFromDepthBuffer = false
+        m.writesToDepthBuffer = false
+        return m
+    }()
+    /// Последний скан с подгонкой и откуда смотрела камера, когда собирали сетки
+    private var last: (CapturedRoom, Rectify.Result)?
+    private var builtAt: SIMD3<Float>?
 
-    /// Толщина линий, метры
-    static let wallWidth: Float = 0.012
-    static let dashWidth: Float = 0.016
-    static let thinWidth: Float = 0.006
+    /// Толщина линии, метры: не тоньше min, а дальше — k на каждый метр до камеры
+    struct Pen {
+        let min: Float
+        let k: Float
+        func width(_ distance: Float) -> Float { max(self.min, k * distance) }
+    }
+    static let wallPen = Pen(min: 0.010, k: 0.005)
+    static let dashPen = Pen(min: 0.014, k: 0.0075)
+    static let thinPen = Pen(min: 0.005, k: 0.0025)
+    static let framePen = Pen(min: 0.0075, k: 0.00375)
+    /// Подложка во столько раз шире линии
+    static let halo: Float = 2.2
+    /// Пересобрать, когда телефон сдвинулся на столько метров
+    static let rebuildMove: Float = 0.3
 
     init() {
-        fillNode.renderingOrder = -1
+        fillNode.renderingOrder = -2
+        haloNode.renderingOrder = -1
         dashNode.renderingOrder = 10
-        for node in [fillNode, thinNode, solidNode, dashNode] { root.addChildNode(node) }
-        let pulse = SCNAction.sequence([.fadeOpacity(to: 0.4, duration: 0.6), .fadeOpacity(to: 1, duration: 0.6)])
+        for node in [fillNode, haloNode, thinNode, solidNode, dashNode] { root.addChildNode(node) }
+        let pulse = SCNAction.sequence([.fadeOpacity(to: 0.75, duration: 0.6), .fadeOpacity(to: 1, duration: 0.6)])
         dashNode.runAction(.repeatForever(pulse))
     }
 
@@ -44,19 +67,41 @@ final class LiveOverlay {
     }
 
     func clear() {
-        for node in [fillNode, thinNode, solidNode, dashNode] { node.geometry = nil }
+        last = nil
+        builtAt = nil
+        for node in [fillNode, haloNode, thinNode, solidNode, dashNode] { node.geometry = nil }
     }
 
-    /// Перерисовать по свежему скану и его подгонке
-    func update(_ room: CapturedRoom, _ rect: Rectify.Result) {
+    /// Перерисовать по свежему скану и его подгонке. eye — где сейчас камера
+    func update(_ room: CapturedRoom, _ rect: Rectify.Result, eye: SIMD3<Float>?) {
+        last = (room, rect)
+        build(eye)
+    }
+
+    /// Телефон заметно сдвинулся — пересобрать, чтобы толщина линий шла за расстоянием
+    func follow(_ eye: SIMD3<Float>) {
+        guard last != nil else { return }
+        if let at = builtAt, simd_distance(at, eye) < LiveOverlay.rebuildMove { return }
+        build(eye)
+    }
+
+    private func build(_ eye: SIMD3<Float>?) {
+        guard let (room, rect) = last else { return }
+        builtAt = eye
         let walls = rect.walls
-        guard !walls.isEmpty else { clear(); return }
-        var solid = LineMesh(), dash = LineMesh(), thin = LineMesh(), fill = LineMesh()
+        guard !walls.isEmpty else {
+            for node in [fillNode, haloNode, thinNode, solidNode, dashNode] { node.geometry = nil }
+            return
+        }
+        var s = Sketch(eye: eye)
         let floorY = LiveOverlay.median(walls.map(\.bottom))
         let topY = floorY + LiveOverlay.median(walls.map(\.height))
         let p3 = { (p: SIMD2<Double>, y: Double) in SIMD3<Float>(Float(p.x), Float(y), Float(p.y)) }
+        let wallPen = LiveOverlay.wallPen, dashPen = LiveOverlay.dashPen
 
-        for w in walls {
+        // копию стены («двоится») рисуем не стеной, а пунктиром её места — ниже, вместе с другими местами
+        let copies = rect.copies
+        for (i, w) in walls.enumerated() where copies[i] == nil {
             let y0 = w.bottom, y1 = w.bottom + w.height
             let len = w.length
             guard len > 0.02 else { continue }
@@ -64,30 +109,30 @@ final class LiveOverlay {
             let at = { (t: Double) in w.a + dir * t }
             // углы: сомкнутый — белая линия, открытый — жёлтый пунктир
             for (p, isOpen) in [(w.a, w.openA), (w.b, w.openB)] {
-                if isOpen { dash.dashed(p3(p, y0), p3(p, y1), LiveOverlay.dashWidth) } else { solid.line(p3(p, y0), p3(p, y1), LiveOverlay.wallWidth) }
+                if isOpen { s.dashed(p3(p, y0), p3(p, y1), dashPen) } else { s.line(p3(p, y0), p3(p, y1), wallPen) }
             }
-            // низ и верх стены: что снято уверенно — белым, остальное пунктиром
-            for run in LiveOverlay.runs(w) {
+            // низ и верх стены: что снято — белым, что доснять — пунктиром
+            for run in LiveOverlay.runs(rect, i) {
                 let p = at(run.t0), q = at(run.t1)
-                if run.bottom { solid.line(p3(p, y0), p3(q, y0), LiveOverlay.wallWidth) } else { dash.dashed(p3(p, y0), p3(q, y0), LiveOverlay.dashWidth) }
-                if run.top { solid.line(p3(p, y1), p3(q, y1), LiveOverlay.wallWidth) } else { dash.dashed(p3(p, y1), p3(q, y1), LiveOverlay.dashWidth) }
+                for y in [y0, y1] {
+                    if run.seen { s.line(p3(p, y), p3(q, y), wallPen) } else { s.dashed(p3(p, y), p3(q, y), dashPen) }
+                }
             }
             // лёгкая заливка стены, чуть меньше её краёв
             if len > 0.1 && w.height > 0.1 {
                 let p = at(0.02), q = at(len - 0.02)
-                fill.quad(p3(p, y0 + 0.02), p3(q, y0 + 0.02), p3(q, y1 - 0.02), p3(p, y1 - 0.02))
+                s.fill.quad(p3(p, y0 + 0.02), p3(q, y0 + 0.02), p3(q, y1 - 0.02), p3(p, y1 - 0.02))
             }
         }
 
-        // несомкнутые углы и пропущенные стены: пунктир по полу и по потолку, в самом углу — вертикальный
+        // несомкнутые углы, пропущенные стены, копии: пунктир по полу и по потолку, на изломах — вертикальный
         for g in rect.gaps where g.kind != .hole {
             for (p, q) in zip(g.path, g.path.dropFirst()) {
-                dash.dashed(p3(p, floorY), p3(q, floorY), LiveOverlay.dashWidth)
-                dash.dashed(p3(p, topY), p3(q, topY), LiveOverlay.dashWidth)
+                s.dashed(p3(p, floorY), p3(q, floorY), dashPen)
+                s.dashed(p3(p, topY), p3(q, topY), dashPen)
             }
-            for p in g.path.dropFirst().dropLast() {
-                dash.dashed(p3(p, floorY), p3(p, topY), LiveOverlay.dashWidth)
-            }
+            let corners = g.kind == .double ? g.path : Array(g.path.dropFirst().dropLast())
+            for p in corners { s.dashed(p3(p, floorY), p3(p, topY), dashPen) }
         }
 
         // двери, окна, проёмы — рамкой прямо на выпрямленной стене
@@ -95,21 +140,21 @@ final class LiveOverlay {
         surfaces += room.doors
         surfaces += room.windows
         surfaces += room.openings
-        for s in surfaces {
-            guard let i = RoomResult.wallIndex(for: s, in: room.walls, rect: rect), i < walls.count else { continue }
+        for o in surfaces {
+            guard let i = RoomResult.wallIndex(for: o, in: room.walls, rect: rect), i < walls.count else { continue }
             let w = walls[i]
             let len = w.length
             guard len > 0.05 else { continue }
             let dir = (w.b - w.a) / len
-            let c = SIMD2(Double(s.transform.columns.3.x), Double(s.transform.columns.3.z))
+            let c = SIMD2(Double(o.transform.columns.3.x), Double(o.transform.columns.3.z))
             let t = simd_dot(c - w.a, dir)
-            let half = Double(s.dimensions.x) / 2
+            let half = Double(o.dimensions.x) / 2
             let p = w.a + dir * (t - half), q = w.a + dir * (t + half)
-            let cy = Double(s.transform.columns.3.y), hh = Double(s.dimensions.y) / 2
+            let cy = Double(o.transform.columns.3.y), hh = Double(o.dimensions.y) / 2
             let corners = [p3(p, cy - hh), p3(q, cy - hh), p3(q, cy + hh), p3(p, cy + hh)]
             for k in 0..<4 {
                 let a = corners[k], b = corners[(k + 1) % 4]
-                if s.confidence == .low { dash.dashed(a, b, LiveOverlay.dashWidth) } else { thin.line(a, b, LiveOverlay.thinWidth * 1.5) }
+                if o.confidence == .low { s.dashed(a, b, dashPen) } else { s.line(a, b, LiveOverlay.framePen, thin: true) }
             }
         }
 
@@ -128,65 +173,47 @@ final class LiveOverlay {
             // вершины: индекс = 4*sx + 2*sy + sz (0 — минус, 1 — плюс)
             let edges = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)]
             for (a, b) in edges {
-                if o.confidence == .low { dash.dashed(c[a], c[b], LiveOverlay.thinWidth * 1.5) } else { thin.line(c[a], c[b], LiveOverlay.thinWidth) }
+                if o.confidence == .low { s.dashed(c[a], c[b], LiveOverlay.framePen) } else { s.line(c[a], c[b], LiveOverlay.thinPen, thin: true) }
             }
         }
 
-        solidNode.geometry = solid.geometry(solidMat)
-        dashNode.geometry = dash.geometry(dashMat)
-        thinNode.geometry = thin.geometry(thinMat)
-        fillNode.geometry = fill.geometry(fillMat)
+        haloNode.geometry = s.halo.geometry(haloMat)
+        solidNode.geometry = s.solid.geometry(solidMat)
+        dashNode.geometry = s.dash.geometry(dashMat)
+        thinNode.geometry = s.thin.geometry(thinMat)
+        fillNode.geometry = s.fill.geometry(fillMat)
     }
 
-    /// Участок стены от t0 до t1 (метры от начала): снят ли уверенно низ и верх
+    /// Участок стены от t0 до t1 (метры от начала): снят или его надо доснять
     struct Run {
         var t0: Double
         var t1: Double
-        var bottom: Bool
-        var top: Bool
+        var seen: Bool
     }
 
-    /// Делит стену на участки по кускам скана. Продление до угла и щели меньше 25 см — как снятые.
-    static func runs(_ w: Rectify.OutWall) -> [Run] {
+    /// Делит стену i на участки. Неуверенная или дорисованная стена — вся пунктиром; у остальных пунктиром
+    /// неуверенные куски и неснятые промежутки. Продление до угла, дверь в разрыве, щель до 25 см — как снятые
+    static func runs(_ rect: Rectify.Result, _ i: Int) -> [Run] {
+        guard i >= 0, i < rect.walls.count else { return [] }
+        let w = rect.walls[i]
         let len = w.length
         guard len > 0 else { return [] }
-        let dir = (w.b - w.a) / len
-        let spans: [(Double, Double, Rectify.OutPiece)] = w.pieces.map { p in
-            let s = simd_dot(p.a - w.a, dir), e = simd_dot(p.b - w.a, dir)
-            return (max(0, min(s, e)), min(len, max(s, e)), p)
-        }
-        guard let lo = spans.map({ $0.0 }).min(), let hi = spans.map({ $0.1 }).max(), hi > lo else {
-            return [Run(t0: 0, t1: len, bottom: w.conf > 0, top: w.conf > 0)]
-        }
-        var cuts = Set([0, lo, hi, len])
-        for s in spans { cuts.formUnion([s.0, s.1]) }
-        let points = cuts.sorted()
+        if w.made || w.conf == 0 { return [Run(t0: 0, t1: len, seen: false)] }
+        let bad = (rect.unsure(i) + rect.holes(i)).sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }
         var out: [Run] = []
-        for (t0, t1) in zip(points, points.dropFirst()) where t1 - t0 > 0.005 {
-            let m = (t0 + t1) / 2
-            var bottom = true, top = true
-            if m > lo && m < hi {
-                let cover = spans.filter { $0.0 <= m && m <= $0.1 }
-                if cover.isEmpty {
-                    // щель между кусками: длинная — не снята
-                    let hole = t1 - t0 > Rectify.holeMin
-                    bottom = !hole
-                    top = !hole
-                } else {
-                    bottom = cover.contains { $0.2.conf > 0 && $0.2.bot }
-                    top = cover.contains { $0.2.conf > 0 && $0.2.top }
-                }
-            } else if w.conf == 0 {
-                bottom = false
-                top = false
-            }
-            if var last = out.last, last.bottom == bottom, last.top == top, abs(last.t1 - t0) < 1e-9 {
-                last.t1 = t1
-                out[out.count - 1] = last
+        var t = 0.0
+        for (a0, b) in bad {
+            let a = max(a0, t)
+            guard b > a else { continue }
+            if a - t > 0.005 { out.append(Run(t0: t, t1: a, seen: true)) }
+            if let lastRun = out.last, !lastRun.seen, abs(lastRun.t1 - a) < 1e-9 {
+                out[out.count - 1].t1 = b
             } else {
-                out.append(Run(t0: t0, t1: t1, bottom: bottom, top: top))
+                out.append(Run(t0: a, t1: b, seen: false))
             }
+            t = b
         }
+        if len - t > 0.005 { out.append(Run(t0: t, t1: len, seen: true)) }
         return out
     }
 
@@ -194,6 +221,54 @@ final class LiveOverlay {
         let s = v.sorted()
         guard !s.isEmpty else { return 0 }
         return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
+    }
+}
+
+/// Все сетки одного кадра: каждая линия ложится вместе со своей тёмной подложкой,
+/// толщина — по расстоянию до камеры
+private struct Sketch {
+    var solid = LineMesh()
+    var dash = LineMesh()
+    var thin = LineMesh()
+    var halo = LineMesh()
+    var fill = LineMesh()
+    let eye: SIMD3<Float>?
+
+    init(eye: SIMD3<Float>?) { self.eye = eye }
+
+    private func width(_ pen: LiveOverlay.Pen, _ p: SIMD3<Float>) -> Float {
+        pen.width(eye.map { simd_distance($0, p) } ?? 2)
+    }
+
+    /// Сплошная линия кусками по 0,5 м: у каждого куска своя толщина
+    mutating func line(_ p: SIMD3<Float>, _ q: SIMD3<Float>, _ pen: LiveOverlay.Pen, thin isThin: Bool = false) {
+        let len = simd_distance(p, q)
+        guard len > 0.001, len.isFinite, len < 50 else { return }
+        let dir = (q - p) / len
+        let n = max(1, Int((len / 0.5).rounded(.up)))
+        for k in 0..<n {
+            let a = p + (q - p) * (Float(k) / Float(n)), b = p + (q - p) * (Float(k + 1) / Float(n))
+            let w = width(pen, (a + b) / 2)
+            if isThin { thin.line(a, b, w) } else { solid.line(a, b, w) }
+            // подложка выступает только на самых концах линии
+            let pad = w * (LiveOverlay.halo - 1) / 2
+            halo.line(k == 0 ? a - dir * pad : a, k == n - 1 ? b + dir * pad : b, w * LiveOverlay.halo)
+        }
+    }
+
+    mutating func dashed(_ p: SIMD3<Float>, _ q: SIMD3<Float>, _ pen: LiveOverlay.Pen, dash: Float = 0.12, gap: Float = 0.08) {
+        let len = simd_distance(p, q)
+        guard len > 0.001, len.isFinite, len < 50 else { return }
+        let dir = (q - p) / len
+        var s: Float = 0
+        while s < len {
+            let a = p + dir * s, b = p + dir * min(s + dash, len)
+            let w = width(pen, (a + b) / 2)
+            self.dash.line(a, b, w)
+            let pad = w * (LiveOverlay.halo - 1) / 2
+            halo.line(a - dir * pad, b + dir * pad, w * LiveOverlay.halo)
+            s += dash + gap
+        }
     }
 }
 
@@ -227,17 +302,6 @@ struct LineMesh {
         }
     }
 
-    mutating func dashed(_ p: SIMD3<Float>, _ q: SIMD3<Float>, _ width: Float, dash: Float = 0.10, gap: Float = 0.07) {
-        let len = simd_distance(p, q)
-        guard len > 0.001, len.isFinite, len < 50 else { return }
-        let dir = (q - p) / len
-        var s: Float = 0
-        while s < len {
-            line(p + dir * s, p + dir * min(s + dash, len), width)
-            s += dash + gap
-        }
-    }
-
     mutating func quad(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>) {
         guard vertices.count < LineMesh.maxVertices else { return }
         let base = UInt32(vertices.count)
@@ -263,21 +327,24 @@ struct LivePlan {
 
     init() {}
 
+    /// Те же правила, что в камере: снятое — белым, доснять — пунктиром (LiveOverlay.runs и места из подгонки)
     init(_ rect: Rectify.Result) {
         angle = rect.angle
         func seg(_ p: SIMD2<Double>, _ q: SIMD2<Double>) -> SIMD4<Double> {
             let a = Rectify.rot(p, -rect.angle), b = Rectify.rot(q, -rect.angle)
             return SIMD4(a.x, a.y, b.x, b.y)
         }
-        for w in rect.walls {
-            if w.conf == 0 {
-                dashed.append(seg(w.a, w.b))
-                continue
+        let copies = rect.copies
+        for (i, w) in rect.walls.enumerated() where copies[i] == nil {
+            let len = w.length
+            guard len > 0 else { continue }
+            let dir = (w.b - w.a) / len
+            for run in LiveOverlay.runs(rect, i) {
+                let s = seg(w.a + dir * run.t0, w.a + dir * run.t1)
+                if run.seen { solid.append(s) } else { dashed.append(s) }
             }
-            solid.append(seg(w.a, w.b))
-            for p in w.pieces where p.conf == 0 { dashed.append(seg(p.a, p.b)) }
         }
-        for g in rect.gaps {
+        for g in rect.gaps where g.kind != .hole {
             for (p, q) in zip(g.path, g.path.dropFirst()) { dashed.append(seg(p, q)) }
         }
     }

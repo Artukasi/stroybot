@@ -3,6 +3,7 @@ import AVFoundation
 import RoomPlan
 import SceneKit
 import SwiftUI
+import UIKit
 
 /// Экран скана: камера ARKit, лидар и распознавание — Apple RoomPlan, а линии рисуем сами.
 /// Стены Apple во время съёмки «плывут» и двоятся, поэтому показываем выпрямленные: прямые углы,
@@ -75,8 +76,8 @@ final class ScanController: NSObject, ObservableObject {
     /// Подсказка поверх камеры и важная ли она
     @Published var hint: String?
     @Published var hintWarn = false
-    /// Что ещё не снято (по живому скану)
-    @Published var liveIssues: [String] = []
+    /// Что ещё не снято — считается в момент «Готово», для окна «Ещё не всё снято»
+    @Published var unfinished: [String] = []
     @Published var counts = ""
     @Published var torchOn = false
     /// Мини-план по выпрямленным стенам и где сейчас телефон: x, z и куда смотрит
@@ -97,6 +98,24 @@ final class ScanController: NSObject, ObservableObject {
     private var drawQueued = false
     private var running = false
     private var cancelled = false
+    /// Жёлтые места живого скана и что ещё не видно (дверь, мебель)
+    private var marks: [RoomResult.LiveMark] = []
+    private var extras: [String] = []
+    /// Сколько секунд камера смотрела на жёлтые клетки пола (0,5 × 0,5 м). Место стало белым — счёт с нуля
+    private var looked: [SIMD2<Int32>: Double] = [:]
+    private var marked = Set<SIMD2<Int32>>()
+    private var lookedTick: Date?
+    /// Куда показывает подсказка: держим сторону и метры, пока телефон чуть поворачивают
+    private var placeTarget: SIMD2<Double>?
+    private var placeSide: Side?
+    private var placeMeters: Int?
+    private var placeNear = false
+
+    /// Клетка пола, сколько метров и в каком конусе камера «смотрит» на место, сколько секунд — и место точно проблемное
+    static let cellSize = 0.5
+    static let lookRange = 2.5
+    static let lookAngle = 35 * Rectify.deg
+    static let realAfter = 3.0
 
     private static let tips = [
         "Снимите все углы комнаты — медленно, по кругу",
@@ -124,6 +143,8 @@ final class ScanController: NSObject, ObservableObject {
         view.scene.rootNode.addChildNode(overlay.root)
         guard !running, !cancelled else { return }
         running = true
+        // скан идёт минуту-две без касаний: экран не должен гаснуть и блокироваться
+        UIApplication.shared.isIdleTimerDisabled = true
         session.run(configuration: RoomCaptureSession.Configuration())
     }
 
@@ -143,6 +164,7 @@ final class ScanController: NSObject, ObservableObject {
     }
 
     private func stop() {
+        UIApplication.shared.isIdleTimerDisabled = false
         guard running else { return }
         running = false
         session.stop()
@@ -175,53 +197,200 @@ final class ScanController: NSObject, ObservableObject {
         let rect = RoomResult.rectify(room, prev: gridAngle)
         gridAngle = rect.angle
         self.rect = rect
-        overlay.update(room, rect)
+        let eye = session.arSession.currentFrame.map { SIMD3<Float>($0.camera.transform.columns.3.x, $0.camera.transform.columns.3.y,
+                                                                    $0.camera.transform.columns.3.z) }
+        overlay.update(room, rect, eye: eye)
         plan = LivePlan(rect)
+        marks = rect.walls.count >= 3 ? RoomResult.liveMarks(rect) : []
+        extras = RoomResult.liveExtras(room)
+        marked = Set(marks.flatMap { ScanController.samples($0.path) }.compactMap(ScanController.cell))
+        looked = looked.filter { marked.contains($0.key) }
         let windows = room.windows.count, doors = room.doors.count + room.openings.count
-        counts = "Стен: \(rect.walls.count) · окон: \(windows) · дверей: \(doors) · мебели: \(room.objects.count)"
-        liveIssues = RoomResult.liveIssues(room, rect, where: gapPlace())
+        counts = "Стен: \(rect.wallCount) · окон: \(windows) · дверей: \(doors) · мебели: \(room.objects.count)"
     }
 
-    /// Где телефон и куда смотрит — для мини-плана (несколько раз в секунду)
+    /// Где телефон и куда смотрит — для мини-плана и подсказок (несколько раз в секунду)
     func trackCamera() {
         guard !finishing, let t = session.arSession.currentFrame?.camera.transform else { return }
         let pos = SIMD2(Double(t.columns.3.x), Double(t.columns.3.z))
         let f = SIMD2(Double(-t.columns.2.x), Double(-t.columns.2.z))
         // смотрит в пол или потолок — направление оставляем прежним
         let heading = simd_length(f) > 0.15 ? atan2(f.y, f.x) : (me?.z ?? 0)
+        look(pos, heading)
+        overlay.follow(SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z))
         if let me, simd_distance(SIMD2(me.x, me.y), pos) < 0.03, abs(remainder(me.z - heading, 2 * Double.pi)) < 0.05 { return }
         me = SIMD3(pos.x, pos.y, heading)
     }
 
-    /// Где ближайший жёлтый пунктир относительно телефона: «справа, 2 м»
-    private func gapPlace() -> String? {
-        guard let rect, let me else { return nil }
-        let pos = SIMD2(me.x, me.y)
-        let fwd = SIMD2(cos(me.z), sin(me.z)), right = SIMD2(-fwd.y, fwd.x)
-        var best: SIMD2<Double>?
+    /// Копит, сколько камера смотрела на жёлтые места: клетки до 2,5 м впереди, в пределах ±35°
+    private func look(_ pos: SIMD2<Double>, _ heading: Double) {
+        let now = Date()
+        let dt = min(0.5, lookedTick.map { now.timeIntervalSince($0) } ?? 0)
+        lookedTick = now
+        guard dt > 0 else { return }
+        let fwd = SIMD2(cos(heading), sin(heading))
+        let size = ScanController.cellSize
+        for c in marked {
+            let center = SIMD2(Double(c.x) + 0.5, Double(c.y) + 0.5) * size
+            let v = center - pos
+            let d = simd_length(v)
+            if d > ScanController.lookRange { continue }
+            if d > size && simd_dot(v / d, fwd) < cos(ScanController.lookAngle) { continue }
+            looked[c, default: 0] += dt
+        }
+    }
+
+    /// Точки ломаной через каждые 0,3 м (с концами)
+    private static func samples(_ path: [SIMD2<Double>]) -> [SIMD2<Double>] {
+        guard let first = path.first else { return [] }
+        var out = [first]
+        for (p, q) in zip(path, path.dropFirst()) {
+            let n = max(1, Int((simd_distance(p, q) / 0.3).rounded(.up)))
+            for k in 1...n { out.append(p + (q - p) * (Double(k) / Double(n))) }
+        }
+        return out
+    }
+
+    private static func cell(_ p: SIMD2<Double>) -> SIMD2<Int32>? {
+        guard p.x.isFinite, p.y.isFinite, abs(p.x) < 10_000, abs(p.y) < 10_000 else { return nil }
+        return SIMD2(Int32((p.x / cellSize).rounded(.down)), Int32((p.y / cellSize).rounded(.down)))
+    }
+
+    /// На место уже смотрели несколько секунд, а оно всё жёлтое — значит, правда надо доснять
+    private func isReal(_ m: RoomResult.LiveMark) -> Bool {
+        ScanController.samples(m.path).contains { p in ScanController.cell(p).map { looked[$0, default: 0] >= ScanController.realAfter } ?? false }
+    }
+
+    /// Ближайшее к телефону место из списка и точка на нём
+    private static func nearest(_ list: [RoomResult.LiveMark], to pos: SIMD2<Double>) -> (RoomResult.LiveMark, SIMD2<Double>)? {
+        var best: (RoomResult.LiveMark, SIMD2<Double>)?
         var bestDist = Double.greatestFiniteMagnitude
-        for g in rect.gaps where g.kind != .hole {
-            for (p, q) in zip(g.path, g.path.dropFirst()) {
-                let ab = q - p
-                let l2 = simd_dot(ab, ab)
-                let t = l2 > 0 ? max(0, min(1, simd_dot(pos - p, ab) / l2)) : 0
-                let c = p + ab * t
-                let d = simd_distance(c, pos)
-                if d < bestDist { bestDist = d; best = c }
+        for m in list {
+            for (p, q) in zip(m.path, m.path.dropFirst()) {
+                let (d, c) = RoomResult.segmentDistance(pos, p, q)
+                if d < bestDist {
+                    bestDist = d
+                    best = (m, c)
+                }
             }
         }
-        guard let best else { return nil }
-        let v = best - pos
-        if bestDist < 1 { return "рядом с вами" }
-        let ang = abs(atan2(simd_dot(v, right), simd_dot(v, fwd))) / Rectify.deg
-        let side: String
-        if ang < 35 { side = "впереди" } else if ang < 125 { side = simd_dot(v, right) > 0 ? "справа" : "слева" } else { side = "сзади" }
-        return "\(side), \(Int(bestDist.rounded())) м"
+        return best
+    }
+
+    /// Сторона относительно взгляда; угол в градусах, плюс — справа
+    private enum Side {
+        case ahead, right, behind, left
+
+        init(_ a: Double) {
+            if abs(a) < 35 {
+                self = .ahead
+            } else if abs(a) < 125 {
+                self = a > 0 ? .right : .left
+            } else {
+                self = .behind
+            }
+        }
+
+        /// Угол ещё в этой стороне, с запасом margin градусов за границу
+        func holds(_ a: Double, margin m: Double) -> Bool {
+            switch self {
+            case .ahead: return abs(a) < 35 + m
+            case .right: return a > 35 - m && a < 125 + m
+            case .left: return a < -35 + m && a > -125 - m
+            case .behind: return abs(a) > 125 - m
+            }
+        }
+
+        var word: String {
+            switch self {
+            case .ahead: return "впереди"
+            case .right: return "справа"
+            case .behind: return "сзади"
+            case .left: return "слева"
+            }
+        }
+    }
+
+    /// Угол от взгляда к точке, градусы (−180…180, плюс — справа)
+    private static func bearing(_ v: SIMD2<Double>, _ heading: Double) -> Double {
+        let fwd = SIMD2(cos(heading), sin(heading)), right = SIMD2(-fwd.y, fwd.x)
+        return atan2(simd_dot(v, right), simd_dot(v, fwd)) / Rectify.deg
+    }
+
+    /// «справа, 2 м» — как есть, для списка в окне «Ещё не всё снято»
+    private static func place(_ target: SIMD2<Double>, from me: SIMD3<Double>) -> String {
+        let v = target - SIMD2(me.x, me.y)
+        let d = simd_length(v)
+        if d < 1 { return "рядом с вами" }
+        return "\(Side(bearing(v, me.z)).word), \(max(1, Int(d.rounded()))) м"
+    }
+
+    /// «справа, 2 м» без дрожи: сторона меняется, только когда ушла за границу на 10°, метры — с запасом 0,8 м
+    private func steadyPlace(_ target: SIMD2<Double>, from me: SIMD3<Double>) -> String {
+        if let t = placeTarget, simd_distance(t, target) > 0.7 {
+            placeSide = nil
+            placeMeters = nil
+            placeNear = false
+        }
+        placeTarget = target
+        let v = target - SIMD2(me.x, me.y)
+        let d = simd_length(v)
+        placeNear = placeNear ? d < 1.3 : d < 1.0
+        if placeNear { return "рядом с вами" }
+        let ang = ScanController.bearing(v, me.z)
+        let side = placeSide.flatMap { $0.holds(ang, margin: 10) ? $0 : nil } ?? Side(ang)
+        placeSide = side
+        let meters = placeMeters.flatMap { abs(d - Double($0)) <= 0.8 ? $0 : nil } ?? max(1, Int(d.rounded()))
+        placeMeters = meters
+        return "\(side.word), \(meters) м"
+    }
+
+    /// Подсказка про жёлтые места. Пока комнату обходят — куда идти дальше. Предупреждение — только когда
+    /// комната обойдена, а на место уже смотрели несколько секунд и оно всё жёлтое
+    private func markHint() -> (String, Bool)? {
+        guard let rect else { return nil }
+        if rect.walls.count < 3 { return ("Пока видно мало стен — медленно обведите камерой всю комнату", false) }
+        guard let me, !marks.isEmpty else { return nil }
+        // контур не замкнулся, есть открытый конец или пропущенная стена — комнату ещё обходят
+        let covered = !rect.loop.isEmpty && !marks.contains { $0.inProgress }
+        let real = covered ? marks.filter(isReal) : []
+        guard let (mark, point) = ScanController.nearest(real.isEmpty ? marks : real, to: SIMD2(me.x, me.y)) else { return nil }
+        let place = steadyPlace(point, from: me)
+        if !real.isEmpty { return ("\(mark.text) — \(place)", true) }
+        return (covered ? "Доснимите пунктир — \(place)" : "Снимайте дальше по кругу — пунктир \(place)", false)
+    }
+
+    /// «Готово»: всё, что ещё жёлтое, с местами, и чего не видно — прямо сейчас
+    func checkFinish() -> [String] {
+        var out: [String] = []
+        if let rect, rect.walls.count < 3 { out.append("Видно мало стен — обведите камерой всю комнату") }
+        // ближние места — первыми, одинаковые строки — один раз
+        var lines: [(Double, String)] = []
+        for m in marks {
+            if let me, let found = ScanController.nearest([m], to: SIMD2(me.x, me.y)) {
+                lines.append((simd_distance(found.1, SIMD2(me.x, me.y)), "\(m.text) — \(ScanController.place(found.1, from: me))"))
+            } else {
+                lines.append((0, m.text))
+            }
+        }
+        var seen = Set<String>()
+        for (_, line) in lines.sorted(by: { $0.0 < $1.0 }) where seen.insert(line).inserted { out.append(line) }
+        out += extras
+        unfinished = out
+        return out
+    }
+
+    /// Текст окна «Ещё не всё снято»: первые четыре места и сколько ещё
+    var unfinishedText: String {
+        var shown = Array(unfinished.prefix(4))
+        if unfinished.count > 4 { shown.append("и ещё \(unfinished.count - 4)") }
+        return shown.joined(separator: "\n")
     }
 
     // MARK: - Готово: собираем комнату
 
     private func ended(_ data: CapturedRoomData, _ error: Error?) {
+        UIApplication.shared.isIdleTimerDisabled = false
         guard !cancelled else { return }
         running = false
         // RoomPlan мог остановиться сам (телефон перегрелся, камера потерялась) — собираем, что успели
@@ -285,7 +454,7 @@ final class ScanController: NSObject, ObservableObject {
         if instruction != nil { instructionAt = Date() }
     }
 
-    /// Раз в секунду: что сказать человеку прямо сейчас
+    /// Примерно раз в секунду: что сказать человеку прямо сейчас
     func poll() {
         ticks += 1
         guard !finishing, let frame = session.arSession.currentFrame else { return }
@@ -295,7 +464,13 @@ final class ScanController: NSObject, ObservableObject {
         if text == nil, !torchOn, ScanController.isDark(frame) {
             text = hasTorch ? "Темновато — включите фонарик кнопкой вверху" : "Темновато — включите свет в комнате"
         }
-        if text == nil, Date().timeIntervalSince(started) > 10, let first = liveIssues.first { text = first }
+        let settled = Date().timeIntervalSince(started) > 10
+        if text == nil, settled, let (say, warn) = markHint() {
+            hint = say
+            hintWarn = warn
+            return
+        }
+        if text == nil, settled, let first = extras.first { text = first }
         if let text {
             hint = text
             hintWarn = true
@@ -371,7 +546,7 @@ struct ScanScreen: View {
                         .accessibilityLabel(controller.torchOn ? "Выключить фонарик" : "Включить фонарик")
                     }
                     Button {
-                        if controller.liveIssues.isEmpty { controller.finish() } else { askFinish = true }
+                        if controller.checkFinish().isEmpty { controller.finish() } else { askFinish = true }
                     } label: {
                         Text(controller.finishing ? "Считаю…" : "Готово").bold()
                             .padding(.horizontal, 18).padding(.vertical, 10)
@@ -431,6 +606,7 @@ struct ScanScreen: View {
         .onReceive(fast) { _ in controller.trackCamera() }
         .onDisappear {
             controller.setTorch(false)
+            UIApplication.shared.isIdleTimerDisabled = false
             if controller.result == nil { controller.cancel() }
         }
         .onChange(of: controller.result != nil) { ready in
@@ -440,7 +616,7 @@ struct ScanScreen: View {
             Button("Доснять", role: .cancel) {}
             Button("Закончить так") { controller.finish() }
         } message: {
-            Text(controller.liveIssues.prefix(3).joined(separator: "\n"))
+            Text(controller.unfinishedText)
         }
         .alert("Скан не получился", isPresented: .constant(controller.failed != nil)) {
             Button("Понятно") { controller.failed = nil; dismiss() }

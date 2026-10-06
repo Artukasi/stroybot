@@ -127,7 +127,7 @@ struct ResultView: View {
                     }
                     .font(.subheadline)
                 }
-                if !q.weakWalls.isEmpty || !q.marks.isEmpty {
+                if !q.marks.isEmpty {
                     Text("Жёлтым пунктиром на плане — где доснять.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -456,7 +456,8 @@ struct PlanLabels: View {
     }
 }
 
-/// Номера стен на плане; где доснять — жёлтым пунктиром, как в камере во время скана
+/// Номера стен на плане; где доснять — жёлтым пунктиром, те же места, что были жёлтыми в камере.
+/// weak — только жёлтый кружок номера; пунктиром — ровно marks (угол, кусок, стена целиком)
 struct PlanWalls: View {
     let points: [SIMD2<Double>]
     let lines: [SIMD4<Double>]
@@ -470,10 +471,6 @@ struct PlanWalls: View {
                 let center = map(points.map(\.x).reduce(0, +) / Double(max(points.count, 1)),
                                  points.map(\.y).reduce(0, +) / Double(max(points.count, 1)))
                 Path { path in
-                    for i in weak.sorted() where i < lines.count {
-                        path.move(to: map(lines[i].x, lines[i].y))
-                        path.addLine(to: map(lines[i].z, lines[i].w))
-                    }
                     for m in marks where m.count > 1 {
                         path.move(to: map(m[0].x, m[0].y))
                         for p in m.dropFirst() { path.addLine(to: map(p.x, p.y)) }

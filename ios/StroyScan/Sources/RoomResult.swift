@@ -227,11 +227,9 @@ struct RoomResult {
 }
 
 extension RoomResult {
-    /// Стены скана для подгонки: концы по полу, высота, низ, уверенность, сняты ли верх и низ
+    /// Стены скана для подгонки: концы по полу, высота, низ, уверенность
     static func rawWalls(_ walls: [CapturedRoom.Surface]) -> [Rectify.Wall] {
-        // RoomPlan отмечает снятые края стен; не отметил ни одного — не знаем, считаем снятыми
-        let knowsEdges = walls.contains { !$0.completedEdges.isEmpty }
-        return walls.map { wall in
+        walls.map { wall in
             let e = RoomResult.ends(wall)
             let h = Double(wall.dimensions.y)
             let conf: Int
@@ -240,9 +238,7 @@ extension RoomResult {
             case .medium: conf = 1
             default: conf = 2
             }
-            return Rectify.Wall(a: e.0, b: e.1, height: h, bottom: Double(wall.transform.columns.3.y) - h / 2, conf: conf,
-                                top: !knowsEdges || wall.completedEdges.contains(.top),
-                                bot: !knowsEdges || wall.completedEdges.contains(.bottom))
+            return Rectify.Wall(a: e.0, b: e.1, height: h, bottom: Double(wall.transform.columns.3.y) - h / 2, conf: conf)
         }
     }
 
@@ -263,9 +259,11 @@ extension RoomResult {
         self.init(captured, RoomResult.rectify(captured))
     }
 
-    /// Размеры по выпрямленным стенам: углы сомкнуты, куски одной стены — одна стена
-    init(_ captured: CapturedRoom, _ rect: Rectify.Result) {
+    /// Размеры по выпрямленным стенам: углы сомкнуты, куски одной стены — одна стена.
+    /// Копия стены («двоится») в размеры не идёт, её место остаётся жёлтым на плане
+    init(_ captured: CapturedRoom, _ fitted: Rectify.Result) {
         self.init()
+        let rect = fitted.withoutCopies()
         let rw = rect.walls
         walls = rw.map { Wall(length: $0.length, height: $0.height) }
 
@@ -365,16 +363,20 @@ extension RoomResult {
         return (center - dir * half, center + dir * half)
     }
 
-    /// Какой выпрямленной стене принадлежит окно/дверь: на iOS 17 — по parentIdentifier, иначе ближайшая
+    /// Какой выпрямленной стене принадлежит окно/дверь: на iOS 17 — по parentIdentifier, иначе ближайшая.
+    /// Дверь на копии стены («двоится») — на той стене, которую копия повторяет
     static func wallIndex(for surface: CapturedRoom.Surface, in walls: [CapturedRoom.Surface], rect: Rectify.Result) -> Int? {
+        let copies = rect.copies
         if #available(iOS 17.0, *), let parent = surface.parentIdentifier,
            let i = walls.firstIndex(where: { $0.identifier == parent }), i < rect.rawToWall.count, rect.rawToWall[i] >= 0 {
-            return rect.rawToWall[i]
+            let k = rect.rawToWall[i]
+            if let j = copies[k] { return j >= 0 ? j : nil }
+            return k
         }
         let p = SIMD2(Double(surface.transform.columns.3.x), Double(surface.transform.columns.3.z))
         var best: Int?
         var bestDist = Double.greatestFiniteMagnitude
-        for (i, w) in rect.walls.enumerated() {
+        for (i, w) in rect.walls.enumerated() where copies[i] == nil {
             let d = Rectify.segDist(p, w.a, w.b)
             if d < bestDist { bestDist = d; best = i }
         }

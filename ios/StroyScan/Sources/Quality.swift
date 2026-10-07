@@ -4,14 +4,13 @@ import simd
 
 /// Проверка скана: где RoomPlan не уверен, какие углы не сомкнулись, что не нашлось.
 /// Подсказки короткие и по-русски: их читает человек с телефоном в руке.
-/// Жёлтое везде одно и то же: в камере, на мини-плане, в подсказке и на итоговом плане.
+/// Места «доснять» одни и те же: в подсказке во время скана и в списке после него.
 extension RoomResult {
     static let maxIssues = 10
     static let maxIssueLength = 120
 
     /// Разбор готового скана (после «Готово») по выпрямленным стенам без копий
-    static func check(_ captured: CapturedRoom, _ r: RoomResult, _ rect: Rectify.Result,
-                      _ toPlan: (SIMD2<Double>) -> SIMD2<Double>) -> Quality {
+    static func check(_ captured: CapturedRoom, _ r: RoomResult, _ rect: Rectify.Result) -> Quality {
         var q = Quality()
         var found: [(Int, String)] = []     // (важность, текст)
         var penalty = 0
@@ -39,7 +38,6 @@ extension RoomResult {
         for (i, wall) in rect.walls.enumerated() where i < n {
             if wall.made {
                 q.weakWalls.insert(i)
-                q.marks.append([toPlan(wall.a), toPlan(wall.b)])
                 let cm = Int((wall.length * 100).rounded())
                 found.append((1, "Стена \(i + 1): уступ около \(cm) см не снят, его дорисовали — доснимите это место."))
                 penalty += 6
@@ -47,7 +45,6 @@ extension RoomResult {
             }
             if wall.conf == 0 {
                 q.weakWalls.insert(i)
-                q.marks.append([toPlan(wall.a), toPlan(wall.b)])
                 found.append((1, "\(name(i).capitalizedFirst): снята неуверенно — пройдите вдоль неё ещё раз, медленно."))
                 penalty += 12
                 continue
@@ -56,22 +53,20 @@ extension RoomResult {
             let unsure = rect.unsureSpans(i)
             if !unsure.isEmpty {
                 q.weakWalls.insert(i)
-                for (a, b) in unsure { q.marks.append([toPlan(a), toPlan(b)]) }
                 let m = fmt((unsure.reduce(0) { $0 + simd_distance($1.0, $1.1) } * 10).rounded() / 10)
                 found.append((2, "Стена \(i + 1): кусок около \(m) м снят неуверенно — пройдите вдоль неё ещё раз."))
                 penalty += 3
             }
         }
 
-        // углы, которые не удалось сомкнуть, неснятые куски, двойные стены — жёлтым пунктиром на плане
+        // углы, которые не удалось сомкнуть, неснятые куски, двойные стены
         for g in rect.gaps {
-            q.marks.append(g.path.map(toPlan))
             let a = g.wallA + 1, b = g.wallB + 1
             let m = fmt((g.length * 10).rounded() / 10)
             switch g.kind {
             case .corner where g.wallB >= 0:
                 q.weakWalls.formUnion([g.wallA, g.wallB])
-                found.append((1, "Угол между стенами \(a) и \(b) не сомкнулся — доснимите его (жёлтый пунктир на плане)."))
+                found.append((1, "Угол между стенами \(a) и \(b) не сомкнулся — доснимите его."))
                 penalty += 10
             case .missing where g.wallB >= 0:
                 q.weakWalls.formUnion([g.wallA, g.wallB])
@@ -79,11 +74,11 @@ extension RoomResult {
                 penalty += 15
             case .hole:
                 q.weakWalls.insert(g.wallA)
-                found.append((2, "Стена \(a): кусок около \(m) м не снят — пройдите вдоль неё (жёлтый пунктир)."))
+                found.append((2, "Стена \(a): кусок около \(m) м не снят — пройдите вдоль неё."))
                 penalty += 6
             case .double:
                 q.weakWalls.insert(g.wallA)
-                found.append((1, "Стена \(a) двоится — переснимите её медленно (жёлтый пунктир на плане)."))
+                found.append((1, "Стена \(a) двоится — переснимите её медленно."))
                 penalty += 10
             default:
                 if g.wallA >= 0 { q.weakWalls.insert(g.wallA) }
@@ -100,7 +95,6 @@ extension RoomResult {
             for (i, w) in r.walls.enumerated() where i < rect.walls.count && !rect.walls[i].made && abs(w.height - r.height) > 0.15 {
                 let cm = Int((abs(w.height - r.height) * 100).rounded())
                 q.weakWalls.insert(i)
-                q.marks.append([toPlan(rect.walls[i].a), toPlan(rect.walls[i].b)])
                 found.append((2, "\(name(i).capitalizedFirst) \(w.height < r.height ? "ниже" : "выше") остальных на \(cm) см — доснимите её от пола до потолка."))
                 penalty += 6
             }
@@ -149,7 +143,7 @@ extension RoomResult {
         return q
     }
 
-    /// Жёлтое место во время скана: что не так и где (ломаная по полу, мировые x, z)
+    /// Место «доснять» во время скана: что не так и где (ломаная по полу, мировые x, z)
     struct LiveMark {
         enum Kind { case corner, missing, end, hole, double, unsure, step }
         let kind: Kind
@@ -172,7 +166,7 @@ extension RoomResult {
         var inProgress: Bool { kind == .end || kind == .missing }
     }
 
-    /// Все жёлтые места живого скана — те же, что пунктиром в камере и на мини-плане
+    /// Все места «доснять» живого скана — по свежей подгонке
     static func liveMarks(_ rect: Rectify.Result) -> [LiveMark] {
         var out: [LiveMark] = []
         for g in rect.gaps {
@@ -199,7 +193,7 @@ extension RoomResult {
         return out
     }
 
-    /// Чего ещё не видно, кроме жёлтых мест
+    /// Чего ещё не видно, кроме мест «доснять»
     static func liveExtras(_ room: CapturedRoom) -> [String] {
         var out: [String] = []
         if room.doors.isEmpty && room.openings.isEmpty { out.append("Не видно двери — снимите вход в комнату целиком") }
@@ -219,9 +213,9 @@ extension RoomResult {
     }
 }
 
-/// Что из подгонки рисовать жёлтым (те же правила в камере, на мини-плане и на итоговом плане; snapsim/overlay.py)
+/// Что из подгонки считать местами «доснять» (те же правила во время скана и после него)
 extension Rectify.Result {
-    /// Копии стен («двоится») → стена, которую повторяет копия. Копию рисуем не стеной, а пунктиром места
+    /// Копии стен («двоится») → стена, которую повторяет копия. Копию не рисуем и в размеры не берём
     var copies: [Int: Int] {
         var out: [Int: Int] = [:]
         for g in gaps where g.kind == .double && g.wallA >= 0 { out[g.wallA] = g.wallB }
@@ -317,4 +311,6 @@ extension Rectify.Result {
 extension String {
     /// «стена 2» → «Стена 2»
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+    /// «Угол не сомкнулся» → «угол не сомкнулся»
+    var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }

@@ -1,23 +1,22 @@
 import ARKit
 import AVFoundation
 import RoomPlan
-import SceneKit
 import SwiftUI
 import UIKit
 
-/// Экран скана: камера ARKit, лидар и распознавание — Apple RoomPlan, а линии рисуем сами.
-/// Стены Apple во время съёмки «плывут» и двоятся, поэтому показываем выпрямленные: прямые углы,
-/// куски одной стены — одна стена, углы сомкнуты. Где доснять — жёлтый пунктир прямо в комнате.
+/// Экран скана — стандартный вид Apple RoomPlan: живая 3D-модель комнаты прямо в камере (контуры стен,
+/// окон и дверей, коробки мебели). RoomPlan сам уточняет её, когда камера снова видит стену или предмет.
+/// Своего поверх камеры не рисуем — ни пунктира, ни заливки. Выпрямленная комната — на мини-плане и в итоге.
 struct RoomScanner: UIViewRepresentable {
     @ObservedObject var controller: ScanController
 
-    func makeUIView(context: Context) -> ARSCNView {
-        let view = ARSCNView(frame: .zero)
+    func makeUIView(context: Context) -> RoomCaptureView {
+        let view = RoomCaptureView(frame: .zero)
         controller.start(in: view)
         return view
     }
 
-    func updateUIView(_ uiView: ARSCNView, context: Context) {}
+    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
 }
 
 /// Слушает RoomPlan во время съёмки и передаёт события на главный поток
@@ -66,10 +65,9 @@ enum Torch {
     }
 }
 
-final class ScanController: NSObject, ObservableObject {
-    let session = RoomCaptureSession()
+final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate {
+    weak var view: RoomCaptureView?
     let watcher = LiveWatcher()
-    private let overlay = LiveOverlay()
     @Published var result: RoomResult?
     @Published var failed: String?
     @Published var finishing = false
@@ -80,7 +78,7 @@ final class ScanController: NSObject, ObservableObject {
     @Published var unfinished: [String] = []
     @Published var counts = ""
     @Published var torchOn = false
-    /// Мини-план по выпрямленным стенам и где сейчас телефон: x, z и куда смотрит
+    /// Мини-план по выпрямленным стенам и мебели и где сейчас телефон: x, z и куда смотрит
     @Published var plan = LivePlan()
     @Published var me: SIMD3<Double>?
     let hasTorch = Torch.available
@@ -90,7 +88,9 @@ final class ScanController: NSObject, ObservableObject {
     private var instructionAt = Date.distantPast
     private let started = Date()
     private var ticks = 0
-    /// Последний живой скан, его подгонка и угол сетки (чтобы линии не дёргались)
+    /// Последний живой скан, его подгонка и угол сетки (чтобы линии не дёргались).
+    /// Подгонку каждый раз считаем заново по всему свежему скану: уже снятые стены, углы и мебель
+    /// тоже подстраиваются под новые замеры RoomPlan
     private var latest: CapturedRoom?
     private var rect: Rectify.Result?
     private var gridAngle: Double?
@@ -98,10 +98,11 @@ final class ScanController: NSObject, ObservableObject {
     private var drawQueued = false
     private var running = false
     private var cancelled = false
-    /// Жёлтые места живого скана и что ещё не видно (дверь, мебель)
+    private var building = false
+    /// Места живого скана, которые стоит доснять, и что ещё не видно (дверь, мебель)
     private var marks: [RoomResult.LiveMark] = []
     private var extras: [String] = []
-    /// Сколько секунд камера смотрела на жёлтые клетки пола (0,5 × 0,5 м). Место стало белым — счёт с нуля
+    /// Сколько секунд камера смотрела на клетки пола у мест «доснять» (0,5 × 0,5 м). Место снято — счёт с нуля
     private var looked: [SIMD2<Int32>: Double] = [:]
     private var marked = Set<SIMD2<Int32>>()
     private var lookedTick: Date?
@@ -127,31 +128,40 @@ final class ScanController: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        listen()
+    }
+    // RoomCaptureViewDelegate требует NSCoding
+    required init?(coder: NSCoder) {
+        super.init()
+        listen()
+    }
+    func encode(with coder: NSCoder) {}
+
+    private func listen() {
         watcher.onRoom = { [weak self] room in self?.received(room) }
         watcher.onInstruction = { [weak self] instruction in self?.coach(instruction) }
         watcher.onEnd = { [weak self] data, error in self?.ended(data, error) }
-        session.delegate = watcher
     }
 
-    /// Камера — сессия RoomPlan (второй ARSession не запускаем), поверх — наши линии
-    func start(in view: ARSCNView) {
-        view.session = session.arSession
-        view.scene = SCNScene()
-        view.automaticallyUpdatesLighting = false
-        view.rendersCameraGrain = false
-        view.antialiasingMode = .multisampling4X
-        view.scene.rootNode.addChildNode(overlay.root)
+    /// Сессия вида RoomPlan: её живой скан и подсказки слушаем сами, 3D-модель вид рисует сам
+    private var session: RoomCaptureSession? { view?.captureSession }
+    private var frame: ARFrame? { session?.arSession.currentFrame }
+
+    func start(in view: RoomCaptureView) {
+        self.view = view
+        view.delegate = self
+        view.captureSession.delegate = watcher
         guard !running, !cancelled else { return }
         running = true
         // скан идёт минуту-две без касаний: экран не должен гаснуть и блокироваться
         UIApplication.shared.isIdleTimerDisabled = true
-        session.run(configuration: RoomCaptureSession.Configuration())
+        view.captureSession.run(configuration: RoomCaptureSession.Configuration())
     }
 
     func finish() {
         guard !finishing else { return }
         finishing = true
-        if let buffer = session.arSession.currentFrame?.capturedImage {
+        if let buffer = frame?.capturedImage {
             photo = RoomResult.jpeg(from: buffer)
         }
         stop()
@@ -167,7 +177,7 @@ final class ScanController: NSObject, ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = false
         guard running else { return }
         running = false
-        session.stop()
+        session?.stop()
     }
 
     func toggleTorch() { setTorch(!torchOn) }
@@ -197,10 +207,7 @@ final class ScanController: NSObject, ObservableObject {
         let rect = RoomResult.rectify(room, prev: gridAngle)
         gridAngle = rect.angle
         self.rect = rect
-        let eye = session.arSession.currentFrame.map { SIMD3<Float>($0.camera.transform.columns.3.x, $0.camera.transform.columns.3.y,
-                                                                    $0.camera.transform.columns.3.z) }
-        overlay.update(room, rect, eye: eye)
-        plan = LivePlan(rect)
+        plan = LivePlan(rect, room)
         marks = rect.walls.count >= 3 ? RoomResult.liveMarks(rect) : []
         extras = RoomResult.liveExtras(room)
         marked = Set(marks.flatMap { ScanController.samples($0.path) }.compactMap(ScanController.cell))
@@ -211,18 +218,17 @@ final class ScanController: NSObject, ObservableObject {
 
     /// Где телефон и куда смотрит — для мини-плана и подсказок (несколько раз в секунду)
     func trackCamera() {
-        guard !finishing, let t = session.arSession.currentFrame?.camera.transform else { return }
+        guard !finishing, let t = frame?.camera.transform else { return }
         let pos = SIMD2(Double(t.columns.3.x), Double(t.columns.3.z))
         let f = SIMD2(Double(-t.columns.2.x), Double(-t.columns.2.z))
         // смотрит в пол или потолок — направление оставляем прежним
         let heading = simd_length(f) > 0.15 ? atan2(f.y, f.x) : (me?.z ?? 0)
         look(pos, heading)
-        overlay.follow(SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z))
         if let me, simd_distance(SIMD2(me.x, me.y), pos) < 0.03, abs(remainder(me.z - heading, 2 * Double.pi)) < 0.05 { return }
         me = SIMD3(pos.x, pos.y, heading)
     }
 
-    /// Копит, сколько камера смотрела на жёлтые места: клетки до 2,5 м впереди, в пределах ±35°
+    /// Копит, сколько камера смотрела на места «доснять»: клетки до 2,5 м впереди, в пределах ±35°
     private func look(_ pos: SIMD2<Double>, _ heading: Double) {
         let now = Date()
         let dt = min(0.5, lookedTick.map { now.timeIntervalSince($0) } ?? 0)
@@ -256,7 +262,7 @@ final class ScanController: NSObject, ObservableObject {
         return SIMD2(Int32((p.x / cellSize).rounded(.down)), Int32((p.y / cellSize).rounded(.down)))
     }
 
-    /// На место уже смотрели несколько секунд, а оно всё жёлтое — значит, правда надо доснять
+    /// На место уже смотрели несколько секунд, а оно так и не снято — значит, правда надо доснять
     private func isReal(_ m: RoomResult.LiveMark) -> Bool {
         ScanController.samples(m.path).contains { p in ScanController.cell(p).map { looked[$0, default: 0] >= ScanController.realAfter } ?? false }
     }
@@ -345,8 +351,8 @@ final class ScanController: NSObject, ObservableObject {
         return "\(side.word), \(meters) м"
     }
 
-    /// Подсказка про жёлтые места. Пока комнату обходят — куда идти дальше. Предупреждение — только когда
-    /// комната обойдена, а на место уже смотрели несколько секунд и оно всё жёлтое
+    /// Подсказка про места «доснять». Пока комнату обходят — куда идти дальше. Предупреждение — только когда
+    /// комната обойдена, а на место уже смотрели несколько секунд и оно так и не снято
     private func markHint() -> (String, Bool)? {
         guard let rect else { return nil }
         if rect.walls.count < 3 { return ("Пока видно мало стен — медленно обведите камерой всю комнату", false) }
@@ -357,10 +363,10 @@ final class ScanController: NSObject, ObservableObject {
         guard let (mark, point) = ScanController.nearest(real.isEmpty ? marks : real, to: SIMD2(me.x, me.y)) else { return nil }
         let place = steadyPlace(point, from: me)
         if !real.isEmpty { return ("\(mark.text) — \(place)", true) }
-        return (covered ? "Доснимите пунктир — \(place)" : "Снимайте дальше по кругу — пунктир \(place)", false)
+        return (covered ? "Доснимите: \(mark.text.lowercasedFirst) — \(place)" : "Снимайте дальше по кругу — \(place)", false)
     }
 
-    /// «Готово»: всё, что ещё жёлтое, с местами, и чего не видно — прямо сейчас
+    /// «Готово»: что ещё не снято, с местами, и чего не видно — прямо сейчас
     func checkFinish() -> [String] {
         var out: [String] = []
         if let rect, rect.walls.count < 3 { out.append("Видно мало стен — обведите камерой всю комнату") }
@@ -389,13 +395,14 @@ final class ScanController: NSObject, ObservableObject {
 
     // MARK: - Готово: собираем комнату
 
+    /// Скан закончился: данные приходят и от сессии, и от вида RoomPlan — собираем один раз
     private func ended(_ data: CapturedRoomData, _ error: Error?) {
         UIApplication.shared.isIdleTimerDisabled = false
-        guard !cancelled else { return }
+        guard !cancelled, !building else { return }
+        building = true
         running = false
         // RoomPlan мог остановиться сам (телефон перегрелся, камера потерялась) — собираем, что успели
         finishing = true
-        overlay.clear()
         let photo = self.photo
         Task {
             do {
@@ -423,6 +430,14 @@ final class ScanController: NSObject, ObservableObject {
         let text = "Не получилось собрать комнату. Пройдите по комнате медленнее, при хорошем свете, и снимите все углы."
         let reason = error.localizedDescription
         return reason.isEmpty ? text : text + "\n\n" + reason
+    }
+
+    // MARK: - RoomCaptureViewDelegate
+
+    /// Комнату собираем сами (RoomBuilder, ровная мебель) — вид RoomPlan её не обрабатывает
+    func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
+        DispatchQueue.main.async { self.ended(roomDataForProcessing, error) }
+        return false
     }
 
     private func done(_ r: RoomResult) {
@@ -457,7 +472,7 @@ final class ScanController: NSObject, ObservableObject {
     /// Примерно раз в секунду: что сказать человеку прямо сейчас
     func poll() {
         ticks += 1
-        guard !finishing, let frame = session.arSession.currentFrame else { return }
+        guard !finishing, let frame else { return }
         var text: String?
         if Date().timeIntervalSince(instructionAt) < 2.5 { text = instruction }
         if text == nil { text = ScanController.trackingHint(frame.camera.trackingState) }
@@ -567,30 +582,25 @@ struct ScanScreen: View {
                     .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 14))
                     .animation(.easeInOut(duration: 0.25), value: hint)
                 }
-                if !controller.counts.isEmpty && !controller.finishing {
-                    Text(controller.counts)
-                        .font(.caption.weight(.semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Color.black.opacity(0.45), in: Capsule())
+                if !controller.finishing {
+                    // внизу экрана — 3D-модель RoomPlan, поэтому мини-план сверху, справа от счётчиков
+                    HStack(alignment: .top, spacing: 10) {
+                        if !controller.counts.isEmpty {
+                            Text(controller.counts)
+                                .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        Spacer(minLength: 0)
+                        if !controller.plan.isEmpty {
+                            MiniPlanView(plan: controller.plan, me: controller.me)
+                        }
+                    }
+                    .allowsHitTesting(false)
                 }
             }
             .padding()
-        }
-        .overlay(alignment: .bottomLeading) {
-            if !controller.plan.isEmpty && !controller.finishing {
-                VStack(alignment: .leading, spacing: 6) {
-                    MiniPlanView(plan: controller.plan, me: controller.me)
-                    HStack(spacing: 6) {
-                        DashSample().stroke(Palette.signal, style: StrokeStyle(lineWidth: 3, dash: [4, 3]))
-                            .frame(width: 22, height: 3)
-                        Text("доснять").font(.caption.weight(.semibold)).foregroundStyle(.white)
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Color.black.opacity(0.45), in: Capsule())
-                }
-                .padding()
-                .allowsHitTesting(false)
-            }
         }
         .overlay {
             if controller.finishing {
@@ -621,15 +631,5 @@ struct ScanScreen: View {
         .alert("Скан не получился", isPresented: .constant(controller.failed != nil)) {
             Button("Понятно") { controller.failed = nil; dismiss() }
         } message: { Text(controller.failed ?? "") }
-    }
-}
-
-/// Образец пунктира для подписи под мини-планом
-struct DashSample: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: rect.minX, y: rect.midY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        return p
     }
 }

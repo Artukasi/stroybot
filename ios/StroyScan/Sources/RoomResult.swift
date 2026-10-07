@@ -42,8 +42,6 @@ struct RoomResult {
         var issues: [String] = []
         /// Номера стен (с нуля), которые сняты плохо
         var weakWalls: Set<Int> = []
-        /// Где доснять: ломаные на плане (жёлтый пунктир)
-        var marks: [[SIMD2<Double>]] = []
     }
 
     var room: String = "Комната"
@@ -260,7 +258,7 @@ extension RoomResult {
     }
 
     /// Размеры по выпрямленным стенам: углы сомкнуты, куски одной стены — одна стена.
-    /// Копия стены («двоится») в размеры не идёт, её место остаётся жёлтым на плане
+    /// Копия стены («двоится») в размеры не идёт, о ней пишет проверка скана
     init(_ captured: CapturedRoom, _ fitted: Rectify.Result) {
         self.init()
         let rect = fitted.withoutCopies()
@@ -336,21 +334,32 @@ extension RoomResult {
             openings.append(o)
         }
 
-        // мебель в тех же координатах, что и план; почти ровно стоящую — ровно по стенам
-        let onGrid = rect.ok && longest?.angled == false
+        // мебель в тех же координатах, что и план; почти ровно стоящую — параллельно стенам (по сетке комнаты)
+        let grid: Double? = rect.ok ? rect.angle : nil
         items = captured.objects.map { o in
             let t = o.transform
             let p = toPlan(SIMD2(Double(t.columns.3.x), Double(t.columns.3.z)))
-            var angle = atan2(Double(t.columns.0.z), Double(t.columns.0.x)) - a
-            let k = (angle / Rectify.quarter).rounded()
-            if onGrid && abs(angle - k * Rectify.quarter) <= Rectify.snap { angle = k * Rectify.quarter }
+            let angle = RoomResult.objectAngle(o, grid: grid) - a
             let bottom = Double(t.columns.3.y - o.dimensions.y / 2) - floorY
             return Item(kind: RoomResult.kind(of: o.category),
                         width: Double(o.dimensions.x), height: Double(o.dimensions.y), depth: Double(o.dimensions.z),
                         x: p.x, y: p.y, angle: angle, bottom: bottom < 0.08 ? 0 : bottom)
         }
 
-        quality = RoomResult.check(captured, self, rect, toPlan)
+        quality = RoomResult.check(captured, self, rect)
+    }
+
+    /// Мебель, повёрнутая к сетке комнаты не больше чем на столько, ставится ровно по стенам
+    static let objectSnap = 12 * Rectify.deg
+
+    /// Поворот предмета по полу (мировой, как у стен). grid — угол сетки выпрямленных стен (nil — не выпрямляем)
+    static func objectAngle(_ o: CapturedRoom.Object, grid: Double?) -> Double {
+        let t = o.transform
+        let angle = atan2(Double(t.columns.0.z), Double(t.columns.0.x))
+        guard let grid else { return angle }
+        let k = ((angle - grid) / Rectify.quarter).rounded()
+        let snapped = grid + k * Rectify.quarter
+        return abs(angle - snapped) <= objectSnap ? snapped : angle
     }
 
     /// Концы стены по полу в мировых x, z

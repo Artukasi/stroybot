@@ -127,8 +127,8 @@ struct ResultView: View {
                     }
                     .font(.subheadline)
                 }
-                if !q.marks.isEmpty {
-                    Text("Жёлтым пунктиром на плане — где доснять.")
+                if !q.weakWalls.isEmpty {
+                    Text("Оранжевые номера на плане — стены, которые стоит доснять.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let onRescan {
@@ -157,8 +157,8 @@ struct ResultView: View {
             .background(PlanShape(points: result.plan).fill(Palette.draft.opacity(0.1)))
             .background(PlanFurniture(points: result.plan, items: result.items).opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
-            .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls,
-                               marks: result.quality.marks).opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls)
+                .opacity(drawn >= 1 ? 1 : 0))
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
@@ -456,13 +456,11 @@ struct PlanLabels: View {
     }
 }
 
-/// Номера стен на плане; где доснять — жёлтым пунктиром, те же места, что были жёлтыми в камере.
-/// weak — только жёлтый кружок номера; пунктиром — ровно marks (угол, кусок, стена целиком)
+/// Номера стен на плане; стены, которые стоит доснять (weak), — оранжевым кружком
 struct PlanWalls: View {
     let points: [SIMD2<Double>]
     let lines: [SIMD4<Double>]
     let weak: Set<Int>
-    let marks: [[SIMD2<Double>]]
 
     var body: some View {
         GeometryReader { geo in
@@ -470,21 +468,14 @@ struct PlanWalls: View {
                 let map = { (x: Double, y: Double) in CGPoint(x: f.ox + CGFloat(x) * f.k, y: f.oy + CGFloat(y) * f.k) }
                 let center = map(points.map(\.x).reduce(0, +) / Double(max(points.count, 1)),
                                  points.map(\.y).reduce(0, +) / Double(max(points.count, 1)))
-                Path { path in
-                    for m in marks where m.count > 1 {
-                        path.move(to: map(m[0].x, m[0].y))
-                        for p in m.dropFirst() { path.addLine(to: map(p.x, p.y)) }
-                    }
-                }
-                .stroke(Palette.signal, style: StrokeStyle(lineWidth: 5, lineCap: .round, dash: [9, 7]))
                 ForEach(Array(lines.indices), id: \.self) { i in
                     let m = map((lines[i].x + lines[i].z) / 2, (lines[i].y + lines[i].w) / 2)
                     let d = max(hypot(center.x - m.x, center.y - m.y), 1)
                     Text("\(i + 1)")
                         .font(.caption2.bold())
                         .frame(width: 18, height: 18)
-                        .background(weak.contains(i) ? Palette.signal : Color(.systemGray3), in: Circle())
-                        .foregroundStyle(weak.contains(i) ? Palette.ink : Color.white)
+                        .background(weak.contains(i) ? Color.orange : Color(.systemGray3), in: Circle())
+                        .foregroundStyle(Color.white)
                         .position(x: m.x + (center.x - m.x) / d * 16, y: m.y + (center.y - m.y) / d * 16)
                 }
             }

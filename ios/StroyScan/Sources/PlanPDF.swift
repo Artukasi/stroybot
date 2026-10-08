@@ -498,6 +498,47 @@ enum PlanPDF {
         if labels { scaleBar(k: k, at: CGPoint(x: box.minX - 20, y: box.maxY + 12)) }
     }
 
+    // MARK: - Фотоотчёт для заказчика
+
+    static func photoReport(title: String, summary: String, photos: [(UIImage, String)]) -> URL? {
+        let format = UIGraphicsPDFRendererFormat()
+        format.documentInfo = [kCGPDFContextCreator as String: "СтройСкан", kCGPDFContextTitle as String: title]
+        let renderer = UIGraphicsPDFRenderer(bounds: page, format: format)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Фотоотчёт.pdf")
+        let w = page.width - 2 * margin
+        func height(_ s: String, _ size: CGFloat) -> CGFloat {
+            (s as NSString).boundingRect(with: CGSize(width: w, height: 2000), options: [.usesLineFragmentOrigin],
+                                         attributes: [.font: UIFont.systemFont(ofSize: size)], context: nil).height
+        }
+        do {
+            try renderer.writePDF(to: url) { ctx in
+                ctx.beginPage()
+                var y = header(title: title, subtitle: "Фотоотчёт")
+                text(summary, at: CGPoint(x: margin, y: y), size: 11, width: w)
+                y += height(summary, 11) + 18
+                for (i, (img, caption)) in photos.enumerated() {
+                    let k = min(w / max(img.size.width, 1), 300 / max(img.size.height, 1))
+                    let size = CGSize(width: img.size.width * k, height: img.size.height * k)
+                    let capText = "Фото \(i + 1)" + (caption.isEmpty ? "" : ". \(caption)")
+                    let need = size.height + height(capText, 10) + 24
+                    if y + need > page.height - 50 {
+                        footer()
+                        ctx.beginPage()
+                        y = header(title: title, subtitle: "Фотоотчёт (продолжение)")
+                    }
+                    img.draw(in: CGRect(x: margin + (w - size.width) / 2, y: y, width: size.width, height: size.height))
+                    y += size.height + 6
+                    text(capText, at: CGPoint(x: margin, y: y), size: 10, bold: !caption.isEmpty, width: w)
+                    y += height(capText, 10) + 18
+                }
+                footer()
+            }
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Бланк замера окон и дверей
 
     static func openingsForm(_ r: RoomResult) -> URL? {

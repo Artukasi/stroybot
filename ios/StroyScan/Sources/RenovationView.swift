@@ -63,6 +63,7 @@ struct Renovation3DView: View {
     @State private var shot: RenderShot?
     @State private var share: ShareFile?
     @State private var addingPiece = false
+    @State private var keySettings = false
 
     init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false,
          fixedMode: EngMode? = nil, tiling: Binding<Tiling>? = nil, scanId: Int?,
@@ -169,6 +170,7 @@ struct Renovation3DView: View {
         }
         .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
         .fullScreenCover(item: $shot) { RenderResultView(shot: $0) }
+        .sheet(isPresented: $keySettings) { KieSettingsView() }
         .sheet(isPresented: $addingPiece) {
             CustomPieceAddView { piece, image in
                 switch editor.addCustom(piece, image: image) {
@@ -337,7 +339,7 @@ struct Renovation3DView: View {
                 .disabled(rendering || !editor.ready)
             }
             if editor.pick == nil {
-                Text("«Как в жизни» — ИИ превратит вид из комнаты в фото. Тратит кредиты в боте.")
+                Text("«Как в жизни» — ИИ превратит вид из комнаты в фото. Нужен ключ kie.ai (Нейросети → ⚙️).")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -406,8 +408,8 @@ struct Renovation3DView: View {
 
     /// Снимок 3D из комнаты → бот дорисовывает его до фото
     private func makeReal() async {
-        guard link.connected else {
-            alert = "Подключите бота на главном экране — фото рисует СтройБот."
+        guard Kie.ready || link.connected else {
+            keySettings = true
             return
         }
         rendering = true
@@ -433,6 +435,15 @@ struct Renovation3DView: View {
             return
         }
         let current = editor.look
+        if Kie.ready {
+            do {
+                let url = try await RoomAI.render(editor.result, snapshot: jpeg, look: current)
+                shot = RenderShot(url: url, before: before, credits: nil)
+            } catch {
+                alert = KieError.describe(error)
+            }
+            return
+        }
         do {
             let answer: (image: URL, credits: Int?)
             do {

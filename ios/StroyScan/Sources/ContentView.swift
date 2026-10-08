@@ -40,15 +40,15 @@ struct ContentView: View {
                     if !RoomCaptureSession.isSupported {
                         card {
                             Text("На этом iPhone нет лидара").font(.headline)
-                            Text("Сканер работает на iPhone 12 Pro и новее (модели Pro) и iPad Pro. Без лидара пришлите в бот фото плана или комнаты с рулеткой.")
+                            Text("Сканер работает на iPhone 12 Pro и новее (модели Pro) и iPad Pro. Без лидара работают «Нейросети», замер и уровень.")
                                 .foregroundStyle(.secondary)
                         }
                     } else {
                         actions
                     }
                     queueCard
-                    connection
                     BackupCard()
+                    connection
                     history
                     tips
                 }
@@ -380,12 +380,12 @@ struct ContentView: View {
         card {
             HStack {
                 Circle().fill(link.connected ? Color.green : Color.orange).frame(width: 10, height: 10)
-                Text(link.connected ? "Подключено к боту" : "Не подключено к боту").font(.headline)
+                Text(link.connected ? "Подключено к СтройБоту" : "СтройБот — по желанию").font(.headline)
                 Spacer()
                 Button(link.connected ? "Переподключить" : "Подключить") { showPair = true }
             }
             if !link.connected {
-                Text("Напишите боту /scanner и нажмите «Подключить iPhone», или введите код вручную.")
+                Text("Приложение работает само. Бот нужен, только если хотите получать сканы в Telegram: напишите ему /scanner.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         }
@@ -518,7 +518,7 @@ struct HeroCard: View {
             .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Замер лидаром").font(.title.bold()).foregroundStyle(.white)
-                Text("Комната или вся квартира за пару минут. Размеры сразу уходят в СтройБот: материалы и смета.")
+                Text("Комната или вся квартира за пару минут. Материалы, смета и ремонт — прямо в телефоне.")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.75))
                     .frame(maxWidth: 230, alignment: .leading)
             }

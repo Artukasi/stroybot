@@ -32,7 +32,7 @@ struct FlatView: View {
                     planCard
                     totals
                     roomList
-                    sendButton
+                    if link.connected { sendButton }
                     Button { sharePDF() } label: { Label("План квартиры в PDF", systemImage: "doc.richtext") }
                     Button {
                         if let url = PlanDXF.flat(name: flat?.name ?? "Квартира", rooms: rooms.map { $0.1 }, outlines: outlines) {

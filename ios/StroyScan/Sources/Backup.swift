@@ -1,6 +1,7 @@
 import Compression
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Резервная копия в боте: все сканы, квартиры, прошлые съёмки, ремонт и электрика из 3D, логотип,
 /// свои цены и данные бригады — одним zip. Если приложение удалили или переустановка сорвалась,
@@ -52,20 +53,60 @@ final class Backup: ObservableObject {
         defer { busy = false }
         do {
             let zip = try await link.downloadBackup()
-            let (tmp, dir) = try await Task.detached { try Self.unpack(zip) }.value
-            defer { try? FileManager.default.removeItem(at: tmp) }
-            guard let added = store.importBackup(from: dir) else {
-                message = "Копия в боте повреждена, восстановить не получилось."
-                return
-            }
-            Self.restoreSettings(from: dir, root: store.folderURL)
-            offer = nil
-            message = added.rooms == 0
-                ? "Всё из копии уже есть в телефоне."
-                : "Вернули комнат: \(added.rooms)" + (added.flats > 0 ? ", квартир: \(added.flats)." : ".")
+            try await apply(zip, store, from: "в боте")
         } catch {
             message = LinkError.describe(error)
         }
+    }
+
+    /// Копия в файл — для «Файлов», iCloud Drive, Telegram или почты. Бот не нужен
+    func exportFile(_ store: ScanStore) async -> URL? {
+        guard !busy else { return nil }
+        busy = true
+        defer { busy = false }
+        do {
+            let root = store.folderURL
+            let zip = try await Task.detached { try Self.pack(root) }.value
+            let day = Date().formatted(.iso8601.year().month().day())
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("СтройСкан-копия-\(day).zip")
+            try zip.write(to: url, options: .atomic)
+            let now = Date()
+            last = now
+            UserDefaults.standard.set(now, forKey: "backup.last")
+            return url
+        } catch {
+            message = "Не получилось собрать копию: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Вернуть из файла копии (zip), выбранного в «Файлах»
+    func restoreFile(_ url: URL, _ store: ScanStore) async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let zip = try Data(contentsOf: url)
+            try await apply(zip, store, from: "в файле")
+        } catch {
+            message = "Это не похоже на копию СтройСкана: \(error.localizedDescription)"
+        }
+    }
+
+    private func apply(_ zip: Data, _ store: ScanStore, from place: String) async throws {
+        let (tmp, dir) = try await Task.detached { try Self.unpack(zip) }.value
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        guard let added = store.importBackup(from: dir) else {
+            message = "Копия \(place) повреждена, восстановить не получилось."
+            return
+        }
+        Self.restoreSettings(from: dir, root: store.folderURL)
+        offer = nil
+        message = added.rooms == 0
+            ? "Всё из копии уже есть в телефоне."
+            : "Вернули комнат: \(added.rooms)" + (added.flats > 0 ? ", квартир: \(added.flats)." : ".")
     }
 
     // MARK: - Упаковка
@@ -216,56 +257,69 @@ enum ZipReader {
     }
 }
 
-/// Карточка на главном: копия в боте
+/// Карточка на главном: резервная копия (в боте — сама, в файл — всегда)
 struct BackupCard: View {
     @EnvironmentObject var store: ScanStore
     @EnvironmentObject var link: BotLink
     @EnvironmentObject var backup: Backup
+    @State private var share: ShareFile?
+    @State private var importing = false
 
     var body: some View {
-        if link.connected {
-            VStack(alignment: .leading, spacing: 10) {
-                if let offer = backup.offer {
-                    Label("В боте есть копия ваших сканов", systemImage: "icloud.and.arrow.down").font(.headline)
-                    Text("Сохранена \(offer.formatted(date: .abbreviated, time: .shortened)). Вернуть комнаты, квартиры, ремонт из 3D и цены?")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Button { Task { await backup.restore(store, link) } } label: {
-                        Group {
-                            if backup.busy { ProgressView() } else { Label("Восстановить", systemImage: "arrow.down.circle.fill") }
+        VStack(alignment: .leading, spacing: 10) {
+            if link.connected, let offer = backup.offer {
+                Label("В боте есть копия ваших сканов", systemImage: "icloud.and.arrow.down").font(.headline)
+                Text("Сохранена \(offer.formatted(date: .abbreviated, time: .shortened)). Вернуть комнаты, квартиры, ремонт из 3D и цены?")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Button { Task { await backup.restore(store, link) } } label: {
+                    Group {
+                        if backup.busy { ProgressView() } else { Label("Восстановить", systemImage: "arrow.down.circle.fill") }
+                    }
+                    .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
+                    .foregroundStyle(Palette.ink)
+                }
+                .disabled(backup.busy)
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: backup.busy ? "arrow.triangle.2.circlepath" : "externaldrive.badge.checkmark")
+                        .font(.title3).foregroundStyle(Palette.draft)
+                        .rotationEffect(.degrees(backup.busy ? 360 : 0))
+                        .animation(backup.busy ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: backup.busy)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Резервная копия").font(.subheadline.bold())
+                        Text(backup.last.map { "сохранена \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "ещё не сохранялась")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Menu {
+                        Button { Task { if let url = await backup.exportFile(store) { share = ShareFile(url: url) } } } label: {
+                            Label("Сохранить в файл", systemImage: "square.and.arrow.up")
                         }
-                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
-                        .foregroundStyle(Palette.ink)
+                        Button { importing = true } label: { Label("Вернуть из файла", systemImage: "folder") }
+                        if link.connected {
+                            Divider()
+                            Button { Task { await backup.save(store, link) } } label: { Label("Сохранить в бот", systemImage: "arrow.up.circle") }
+                            Button { Task { await backup.restore(store, link) } } label: { Label("Вернуть из бота", systemImage: "arrow.down.circle") }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").font(.title3)
                     }
                     .disabled(backup.busy)
-                } else {
-                    HStack(spacing: 10) {
-                        Image(systemName: backup.busy ? "arrow.triangle.2.circlepath" : "externaldrive.badge.checkmark")
-                            .font(.title3).foregroundStyle(Palette.draft)
-                            .rotationEffect(.degrees(backup.busy ? 360 : 0))
-                            .animation(backup.busy ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: backup.busy)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Копия в боте").font(.subheadline.bold())
-                            Text(backup.last.map { "сохранена \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "ещё не сохранялась")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Menu {
-                            Button { Task { await backup.save(store, link) } } label: { Label("Сохранить сейчас", systemImage: "arrow.up.circle") }
-                            Button { Task { await backup.restore(store, link) } } label: { Label("Вернуть из копии", systemImage: "arrow.down.circle") }
-                        } label: {
-                            Image(systemName: "ellipsis.circle").font(.title3)
-                        }
-                        .disabled(backup.busy)
-                    }
-                    Text("Сохраняется сама, когда вы что-то меняете. Если приложение удалится, сканы вернутся из бота.")
-                        .font(.caption2).foregroundStyle(.secondary)
                 }
+                Text(link.connected
+                     ? "В бот копия сохраняется сама. Ещё можно сохранить файл — в «Файлы», iCloud или Telegram."
+                     : "Сохраните файл копии в «Файлы», iCloud или Telegram. Если приложение удалится, сканы вернутся из него.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-            .task { await backup.check(store, link) }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .task { await backup.check(store, link) }
+        .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.zip]) { result in
+            if case .success(let url) = result { Task { await backup.restoreFile(url, store) } }
         }
     }
 }

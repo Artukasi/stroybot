@@ -1,48 +1,10 @@
 import PhotosUI
 import SwiftUI
 
-// MARK: - Нейросети СтройБота прямо в приложении
-
-/// Баланс, цены, стили и пакеты — из бота (/api/profile). Кредиты общие с ботом и Mini App
-struct AIProfile {
-    struct Pack: Identifiable {
-        let id: String
-        let credits: Int
-        let stars: Int
-    }
-
-    var credits = 0
-    var prices: [String: Int] = [:]
-    var freeConsult = 0
-    var styles: [(id: String, name: String)] = []
-    var packs: [Pack] = []
-    var reportMax = 10
-
-    init() {}
-
-    init(json d: [String: Any]) {
-        let int = { (v: Any?) in (v as? NSNumber)?.intValue ?? 0 }
-        credits = int(d["credits"])
-        prices = (d["prices"] as? [String: Any] ?? [:]).mapValues { int($0) }
-        freeConsult = int(d["free_consult_left"])
-        let order = ["scandi", "loft", "modern", "classic", "japandi", "budget"]
-        styles = (d["styles"] as? [String: String] ?? [:]).map { (id: $0.key, name: $0.value) }
-            .sorted { (order.firstIndex(of: $0.id) ?? 99, $0.name) < (order.firstIndex(of: $1.id) ?? 99, $1.name) }
-        packs = (d["packs"] as? [[String: Any]] ?? []).compactMap { p in
-            guard let id = p["id"] as? String else { return nil }
-            return Pack(id: id, credits: int(p["credits"]), stars: int(p["stars"]))
-        }
-        reportMax = max(1, int(d["report_max_photos"]))
-    }
-
-    func price(_ kind: String) -> String {
-        guard let p = prices[kind] else { return "" }
-        return p == 0 ? "бесплатно" : "\(p) кр."
-    }
-}
+// MARK: - Нейросети прямо в приложении: свой ключ kie.ai, без бота и компьютера
 
 enum AIText {
-    /// Простой HTML из бота (b, i, code) → текст с жирным и курсивом
+    /// Простой HTML из ответа модели (b, i, code) → текст с жирным и курсивом
     static func attributed(_ html: String) -> AttributedString {
         var s = html
         for (a, b) in [("<b>", "**"), ("</b>", "**"), ("<strong>", "**"), ("</strong>", "**"),
@@ -58,64 +20,70 @@ enum AIText {
         return (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
     }
 
-    /// Без разметки — скопировать или отправить
+    /// Без разметки — скопировать или переслать
     static func plain(_ html: String) -> String {
         String(attributed(html).characters)
     }
 }
 
-/// Главный экран нейросетей: баланс, пополнение и все инструменты
+/// Баланс kie.ai, общий для всех экранов нейросетей
+@MainActor
+final class AIState: ObservableObject {
+    @Published var ready = Kie.ready
+    @Published var balance: Double?
+
+    func refresh() async {
+        ready = Kie.ready
+        guard ready else { balance = nil; return }
+        balance = try? await Kie.balance()
+    }
+}
+
+/// Главный экран нейросетей
 struct AIView: View {
-    @EnvironmentObject var link: BotLink
     /// Комната, из которой открыли: её размеры подставим в смету и КП
     var room: RoomResult? = nil
-    @State private var profile: AIProfile?
-    @State private var problem: String?
-    @State private var buying = false
+    @StateObject private var state = AIState()
+    @State private var settings = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if !link.connected {
-                    Text("Нейросети работают через СтройБот. Подключите бота на главном экране: в боте команда /scanner.")
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                if !state.ready {
+                    setup
                 } else {
                     balance
-                    if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        NavigationLink { AIDesignView(profile: $profile) } label: {
-                            card("Дизайн по фото", "paintbrush.pointed.fill", profile?.price("design") ?? "")
+                        NavigationLink { AIDesignView(state: state) } label: {
+                            card("Дизайн по фото", "paintbrush.pointed.fill", "ремонт на вашем фото")
                         }
                         NavigationLink {
-                            AITextView(kind: "consult", title: "Консультант", profile: $profile,
+                            AITextView(kind: .consult, state: state,
                                        placeholder: "Спросите что угодно про ремонт: чем выровнять стены, какой клей для плитки, сколько сохнет стяжка…")
                         } label: {
-                            card("Консультант", "bubble.left.and.text.bubble.right.fill",
-                                 (profile?.freeConsult ?? 0) > 0 ? "бесплатно: \(profile?.freeConsult ?? 0) сегодня" : profile?.price("consult") ?? "")
+                            card("Консультант", "bubble.left.and.text.bubble.right.fill", "вопрос голосом или текстом")
                         }
                         NavigationLink {
-                            AITextView(kind: "estimate", title: "Смета", profile: $profile, prefill: room.map(AIView.roomText),
+                            AITextView(kind: .estimate, state: state, prefill: room.map { AIPrompts.estimateRequest($0) + "\nЧто делаем: " },
                                        placeholder: "Что за помещение и что делаем: «ванная 2×1,7 м, высота 2,6, плитка на стены и пол, замена труб»")
                         } label: {
-                            card("Смета", "list.bullet.rectangle.portrait.fill", profile?.price("estimate") ?? "")
+                            card("Смета", "list.bullet.rectangle.portrait.fill", room == nil ? "по описанию" : "по размерам скана")
                         }
                         NavigationLink {
-                            AITextView(kind: "kp", title: "Коммерческое предложение", profile: $profile, prefill: room.map(AIView.roomText),
+                            AITextView(kind: .kp, state: state, prefill: room.map { AIPrompts.estimateRequest($0) + "\nЗаказчик и работы: " },
                                        placeholder: "Для кого, какие работы, сроки и цена — соберу аккуратное КП для заказчика")
                         } label: {
-                            card("КП заказчику", "doc.text.fill", profile?.price("kp") ?? "")
+                            card("КП заказчику", "doc.text.fill", "этапы, сроки, цена")
                         }
-                        NavigationLink { AICheckView(profile: $profile) } label: {
-                            card("Проверка работы", "checkmark.seal.fill", profile?.price("check") ?? "")
+                        NavigationLink { AICheckView(state: state) } label: {
+                            card("Проверка работы", "checkmark.seal.fill", "брак по фото")
                         }
-                        NavigationLink { AIReportView(profile: $profile) } label: {
-                            card("Фотоотчёт PDF", "photo.stack.fill", profile?.price("report") ?? "")
+                        NavigationLink { AIReportView(state: state) } label: {
+                            card("Фотоотчёт PDF", "photo.stack.fill", "заказчику за минуту")
                         }
                     }
                     .buttonStyle(PressStyle())
-                    Text("Те же нейросети, что в чате СтройБота, и кредиты те же. Если ИИ не ответил — кредиты возвращаются сами.")
+                    Text("Работает без бота и компьютера: приложение само обращается к нейросетям kie.ai с вашим ключом. Нужен только интернет. Тратятся кредиты kie.ai.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -124,35 +92,46 @@ struct AIView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Нейросети")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
-        .refreshable { await load() }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Ключ и модели")
+            }
+        }
+        .sheet(isPresented: $settings, onDismiss: { Task { await state.refresh() } }) { KieSettingsView() }
+        .task { await state.refresh() }
+        .refreshable { await state.refresh() }
+    }
+
+    private var setup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Подключите нейросети", systemImage: "key.fill").font(.headline)
+            Text("Нужен ключ kie.ai — тот же, что у бота. Вставьте его один раз: он хранится только в этом iPhone, и дальше всё работает без бота и компьютера.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Button { settings = true } label: {
+                Text("Вставить ключ").bold().frame(maxWidth: .infinity).padding(.vertical, 14)
+                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14)).foregroundStyle(Palette.ink)
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
     }
 
     private var balance: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Баланс").font(.caption).foregroundStyle(.white.opacity(0.7))
-                if let p = profile {
-                    Text("\(p.credits) кредитов").font(.title2.bold()).foregroundStyle(.white).contentTransition(.numericText())
-                } else {
-                    ProgressView().tint(.white)
-                }
+                Text("Баланс kie.ai").font(.caption).foregroundStyle(.white.opacity(0.7))
+                Text(state.balance.map { "\(Int($0)) кредитов" } ?? "—").font(.title2.bold()).foregroundStyle(.white)
             }
             Spacer()
-            Menu {
-                ForEach(profile?.packs ?? []) { p in
-                    Button("\(p.credits) кредитов — \(p.stars) ⭐") { Task { await buy(p) } }
-                }
-            } label: {
+            Link(destination: URL(string: "https://kie.ai/billing")!) {
                 HStack(spacing: 6) {
-                    if buying { ProgressView() } else { Image(systemName: "plus.circle.fill") }
+                    Image(systemName: "plus.circle.fill")
                     Text("Пополнить").bold()
                 }
                 .padding(.vertical, 10).padding(.horizontal, 14)
                 .background(Palette.signal, in: Capsule())
                 .foregroundStyle(Palette.ink)
             }
-            .disabled(profile?.packs.isEmpty ?? true)
         }
         .padding()
         .background(Palette.ink, in: RoundedRectangle(cornerRadius: 20))
@@ -168,42 +147,9 @@ struct AIView: View {
         .padding(14)
         .background(Palette.ink, in: RoundedRectangle(cornerRadius: 18))
     }
-
-    private func load() async {
-        guard link.connected else { return }
-        do {
-            profile = AIProfile(json: try await link.api("GET", "/api/profile", timeout: 20))
-            problem = nil
-        } catch {
-            problem = LinkError.describe(error)
-        }
-    }
-
-    /// Оплата звёздами — в Telegram; кредиты придут в бот, баланс обновится, когда вернётесь
-    private func buy(_ p: AIProfile.Pack) async {
-        buying = true
-        defer { buying = false }
-        do {
-            let answer = try await link.api("POST", "/api/invoice", json: ["pack": p.id], timeout: 20)
-            if let s = answer["link"] as? String, let url = URL(string: s) {
-                await UIApplication.shared.open(url)
-            }
-        } catch {
-            problem = LinkError.describe(error)
-        }
-    }
-
-    /// Размеры комнаты для сметы и КП
-    static func roomText(_ r: RoomResult) -> String {
-        let f = { (v: Double) in String(format: "%.2f", v).replacingOccurrences(of: ".", with: ",") }
-        var s = "\(r.room): пол \(f(r.floorArea)) м², стены \(f(r.wallArea)) м² (без проёмов), высота \(f(r.height)) м, периметр \(f(r.perimeter)) м"
-        let windows = r.openings.filter { $0.kind == "window" }.count, doors = r.openings.filter { $0.kind != "window" }.count
-        if windows + doors > 0 { s += ", окон \(windows), дверей \(doors)" }
-        return s + ". Размеры сняты лидаром.\nЧто делаем: "
-    }
 }
 
-/// Ошибка «нет кредитов» и прочие — одной строкой под кнопкой
+/// Ошибка одной строкой под кнопкой
 private struct ProblemText: View {
     let text: String?
     var body: some View {
@@ -211,26 +157,40 @@ private struct ProblemText: View {
     }
 }
 
-/// Ответ ИИ: текст с жирным, копировать, отправить себе в чат с ботом
+/// Большая жёлтая кнопка с крутилкой
+private struct GoButton: View {
+    let title: String
+    let busyTitle: String
+    let busy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                if busy { ProgressView() }
+                Text(busy ? busyTitle : title).bold()
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 14)
+            .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
+            .foregroundStyle(Palette.ink)
+        }
+    }
+}
+
+/// Ответ ИИ: текст с жирным, копировать, переслать
 struct AIAnswer: View {
-    @EnvironmentObject var link: BotLink
     let html: String
-    let raw: String
-    @State private var sent = false
     @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(AIText.attributed(html)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 16) {
+            HStack(spacing: 18) {
                 Button {
                     UIPasteboard.general.string = AIText.plain(html)
                     copied = true
                 } label: { Label(copied ? "Скопировано" : "Копировать", systemImage: copied ? "checkmark" : "doc.on.doc") }
-                ShareLink(item: AIText.plain(html)) { Label("Поделиться", systemImage: "square.and.arrow.up") }
-                Button {
-                    Task { sent = (try? await link.api("POST", "/api/send", json: ["text": raw], timeout: 30)) != nil }
-                } label: { Label(sent ? "В чате" : "В чат", systemImage: sent ? "checkmark" : "paperplane") }
+                ShareLink(item: AIText.plain(html)) { Label("Переслать", systemImage: "square.and.arrow.up") }
             }
             .font(.subheadline.bold())
         }
@@ -241,15 +201,19 @@ struct AIAnswer: View {
 
 /// Текстовые инструменты: консультант, смета, КП
 struct AITextView: View {
-    @EnvironmentObject var link: BotLink
-    let kind: String
-    let title: String
-    @Binding var profile: AIProfile?
+    enum Kind {
+        case consult, estimate, kp
+        var title: String { self == .consult ? "Консультант" : self == .estimate ? "Смета" : "Коммерческое предложение" }
+        var system: String { self == .consult ? AIPrompts.consult : self == .estimate ? AIPrompts.estimate : AIPrompts.kp }
+    }
+
+    let kind: Kind
+    @ObservedObject var state: AIState
     var prefill: String? = nil
     let placeholder: String
     @State private var text = ""
     @State private var working = false
-    @State private var answer: (html: String, raw: String)?
+    @State private var answer: String?
     @State private var problem: String?
     @StateObject private var dictation = Dictation()
     @State private var base = ""
@@ -266,26 +230,17 @@ struct AITextView: View {
                 .padding(8)
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 DictateButton(dictation: dictation)
-                Button { Task { await ask() } } label: {
-                    HStack {
-                        if working { ProgressView() }
-                        Text(working ? "Думаю…" : kind == "consult" ? "Спросить" : "Составить").bold()
-                        if let p = profile, !working {
-                            Text(kind == "consult" && p.freeConsult > 0 ? "· бесплатно" : "· \(p.price(kind))").opacity(0.7)
-                        }
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
-                    .foregroundStyle(Palette.ink)
+                GoButton(title: kind == .consult ? "Спросить" : "Составить", busyTitle: "Думаю…", busy: working) {
+                    Task { await ask() }
                 }
                 .disabled(working || text.trimmingCharacters(in: .whitespacesAndNewlines).count < 3)
                 ProblemText(text: problem)
-                if let a = answer { AIAnswer(html: a.html, raw: a.raw) }
+                if let answer { AIAnswer(html: answer) }
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle(title)
+        .navigationTitle(kind.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { if text.isEmpty, let prefill { text = prefill } }
         .onChange(of: dictation.running) { on in if on { base = text } }
@@ -302,14 +257,10 @@ struct AITextView: View {
         problem = nil
         defer { working = false }
         do {
-            let d = try await link.api("POST", "/api/ai/text", json: ["kind": kind, "text": text])
-            answer = (d["html"] as? String ?? "", d["raw"] as? String ?? "")
-            if let c = (d["credits"] as? NSNumber)?.intValue {
-                profile?.credits = c
-                if kind == "consult", let p = profile, p.freeConsult > 0 { profile?.freeConsult = p.freeConsult - 1 }
-            }
+            answer = try await Kie.chat(system: kind.system, text: String(text.prefix(4000)))
+            await state.refresh()
         } catch {
-            problem = LinkError.describe(error)
+            problem = KieError.describe(error)
         }
     }
 }
@@ -350,34 +301,65 @@ struct AIPhotoPicker: View {
     }
 }
 
+/// Картинка из нейросети: показать, сохранить в «Фото», переслать
+struct AIImageResult: View {
+    let url: URL
+    @State private var image: UIImage?
+    @State private var saved = false
+    @State private var failed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 16))
+                HStack(spacing: 18) {
+                    Button {
+                        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                        saved = true
+                    } label: { Label(saved ? "В «Фото»" : "Сохранить", systemImage: saved ? "checkmark" : "square.and.arrow.down") }
+                    ShareLink(item: Image(uiImage: image), preview: SharePreview("Ремонт", image: Image(uiImage: image))) {
+                        Label("Переслать", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .font(.subheadline.bold())
+            } else if failed {
+                Text("Картинка не загрузилась.").foregroundStyle(.secondary)
+                Link("Открыть в браузере", destination: url)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 200)
+            }
+        }
+        .task(id: url) {
+            image = nil
+            failed = false
+            saved = false
+            if let (d, _) = try? await URLSession.shared.data(from: url), let img = UIImage(data: d) { image = img } else { failed = true }
+        }
+    }
+}
+
 /// Дизайн по фото: стиль и пожелания → картинка ремонта
 struct AIDesignView: View {
-    @EnvironmentObject var link: BotLink
-    @Binding var profile: AIProfile?
+    @ObservedObject var state: AIState
     @State private var photo: UIImage?
     @State private var style = "scandi"
     @State private var wishes = ""
     @State private var working = false
     @State private var result: URL?
     @State private var problem: String?
-    /// Фото уже в боте: другой стиль можно пробовать без повторной загрузки
-    @State private var uploaded = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 AIPhotoPicker(photo: $photo)
-                    .onChange(of: photo) { _ in uploaded = false }
-                if let styles = profile?.styles, !styles.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(styles, id: \.id) { s in
-                                Button { style = s.id } label: {
-                                    Text(s.name).font(.subheadline.weight(.semibold))
-                                        .padding(.vertical, 8).padding(.horizontal, 14)
-                                        .background(style == s.id ? Palette.ink : Color(.secondarySystemGroupedBackground), in: Capsule())
-                                        .foregroundStyle(style == s.id ? .white : Palette.ink)
-                                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(AIPrompts.styles, id: \.id) { s in
+                            Button { style = s.id } label: {
+                                Text(s.name).font(.subheadline.weight(.semibold))
+                                    .padding(.vertical, 8).padding(.horizontal, 14)
+                                    .background(style == s.id ? Palette.ink : Color(.secondarySystemGroupedBackground), in: Capsule())
+                                    .foregroundStyle(style == s.id ? .white : Palette.ink)
                             }
                         }
                     }
@@ -386,34 +368,10 @@ struct AIDesignView: View {
                     .lineLimit(1...3)
                     .padding(12)
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-                Button { Task { await make() } } label: {
-                    HStack {
-                        if working { ProgressView() }
-                        Text(working ? "Рисую, до 3 минут…" : "Нарисовать ремонт").bold()
-                        if let p = profile, !working { Text("· \(p.price("design"))").opacity(0.7) }
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
-                    .foregroundStyle(Palette.ink)
-                }
-                .disabled(working || photo == nil)
+                GoButton(title: "Нарисовать ремонт", busyTitle: "Рисую, до 3 минут…", busy: working) { Task { await make() } }
+                    .disabled(working || photo == nil)
                 ProblemText(text: problem)
-                if let result {
-                    AsyncImage(url: result) { img in
-                        img.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 16))
-                    } placeholder: {
-                        ProgressView().frame(maxWidth: .infinity, minHeight: 200)
-                    }
-                    HStack(spacing: 16) {
-                        ShareLink(item: result) { Label("Поделиться", systemImage: "square.and.arrow.up") }
-                        Button { Task { _ = try? await link.api("POST", "/api/send", json: ["photo": result.absoluteString, "text": "Дизайн по фото"], timeout: 30) } } label: {
-                            Label("В чат с ботом", systemImage: "paperplane")
-                        }
-                    }
-                    .font(.subheadline.bold())
-                    Text("Ссылка на картинку живёт несколько дней — отправьте её в чат, чтобы сохранилась.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                if let result { AIImageResult(url: result) }
             }
             .padding()
         }
@@ -427,27 +385,24 @@ struct AIDesignView: View {
         working = true
         problem = nil
         defer { working = false }
+        let w = wishes.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let fields = [("style", style), ("wishes", wishes)]
-            let d = try await link.apiForm("/api/ai/design", fields: fields, files: uploaded ? [] : [("photo", jpeg)])
-            uploaded = true
-            if let s = d["image"] as? String { result = URL(string: s) }
-            if let c = (d["credits"] as? NSNumber)?.intValue { profile?.credits = c }
+            result = try await Kie.editImage(jpeg, prompt: AIPrompts.fill(AIPrompts.design, [
+                "style": AIPrompts.styleEn(style), "extra": w.isEmpty ? "" : "Client wishes (in Russian): \(w)"]))
+            await state.refresh()
         } catch {
-            uploaded = false
-            problem = LinkError.describe(error)
+            problem = KieError.describe(error)
         }
     }
 }
 
 /// Проверка работы по фото: ИИ ищет брак и говорит, что переделать
 struct AICheckView: View {
-    @EnvironmentObject var link: BotLink
-    @Binding var profile: AIProfile?
+    @ObservedObject var state: AIState
     @State private var photo: UIImage?
     @State private var note = ""
     @State private var working = false
-    @State private var answer: (html: String, raw: String)?
+    @State private var answer: String?
     @State private var problem: String?
 
     var body: some View {
@@ -458,19 +413,10 @@ struct AICheckView: View {
                     .lineLimit(1...3)
                     .padding(12)
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-                Button { Task { await check() } } label: {
-                    HStack {
-                        if working { ProgressView() }
-                        Text(working ? "Смотрю…" : "Проверить").bold()
-                        if let p = profile, !working { Text("· \(p.price("check"))").opacity(0.7) }
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
-                    .foregroundStyle(Palette.ink)
-                }
-                .disabled(working || photo == nil)
+                GoButton(title: "Проверить", busyTitle: "Смотрю…", busy: working) { Task { await check() } }
+                    .disabled(working || photo == nil)
                 ProblemText(text: problem)
-                if let a = answer { AIAnswer(html: a.html, raw: a.raw) }
+                if let answer { AIAnswer(html: answer) }
             }
             .padding()
         }
@@ -484,32 +430,36 @@ struct AICheckView: View {
         working = true
         problem = nil
         defer { working = false }
+        let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let d = try await link.apiForm("/api/ai/check", fields: [("note", note)], files: [("photo", jpeg)])
-            answer = (d["html"] as? String ?? "", d["raw"] as? String ?? "")
-            if let c = (d["credits"] as? NSNumber)?.intValue { profile?.credits = c }
+            answer = try await Kie.chat(system: AIPrompts.check,
+                                        text: "Оцени качество работы на фото." + (n.isEmpty ? "" : " Комментарий заказчика: \(n)"), image: jpeg)
+            await state.refresh()
         } catch {
-            problem = LinkError.describe(error)
+            problem = KieError.describe(error)
         }
     }
 }
 
-/// Фотоотчёт: фото с подписями → PDF приходит в чат с ботом, его можно сразу переслать заказчику
+/// Фотоотчёт: фото с подписями → ИИ пишет резюме → PDF в телефоне, сразу переслать заказчику
 struct AIReportView: View {
-    @EnvironmentObject var link: BotLink
-    @Binding var profile: AIProfile?
+    @ObservedObject var state: AIState
+    @State private var title = ""
     @State private var photos: [UIImage] = []
     @State private var captions: [String] = []
     @State private var notes = ""
     @State private var picked: [PhotosPickerItem] = []
     @State private var working = false
-    @State private var done: String?
+    @State private var share: ShareFile?
     @State private var problem: String?
 
-    private var limit: Int { profile?.reportMax ?? 10 }
+    private let limit = 12
 
     var body: some View {
         Form {
+            Section("Объект") {
+                TextField("Например: ЖК Солнечный, кв. 45", text: $title)
+            }
             Section {
                 PhotosPicker(selection: $picked, maxSelectionCount: max(1, limit - photos.count), matching: .images) {
                     Label("Добавить фото (до \(limit))", systemImage: "photo.on.rectangle.angled")
@@ -529,28 +479,25 @@ struct AIReportView: View {
             } header: {
                 Text("Фото работ")
             }
-            Section("Комментарий для заказчика") {
+            Section("Комментарий прораба") {
                 TextField("Что сделано за этап, что дальше", text: $notes, axis: .vertical).lineLimit(2...5)
             }
             Section {
-                Button { Task { await send() } } label: {
+                Button { Task { await make() } } label: {
                     HStack {
                         if working { ProgressView() }
                         Text(working ? "Собираю PDF…" : "Собрать отчёт").bold()
-                        if let p = profile, !working { Text("· \(p.price("report"))").opacity(0.7) }
                     }
                 }
                 .disabled(working || photos.isEmpty)
                 ProblemText(text: problem)
-                if let done {
-                    Label("PDF пришёл в чат с ботом — оттуда его можно переслать заказчику.", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text(AIText.attributed(done)).font(.footnote)
-                }
+            } footer: {
+                Text("ИИ напишет заказчику короткое резюме по подписям, приложение соберёт PDF с вашим логотипом — и сразу откроет «Поделиться».")
             }
         }
         .navigationTitle("Фотоотчёт")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
         .onChange(of: picked) { items in
             guard !items.isEmpty else { return }
             Task {
@@ -565,19 +512,25 @@ struct AIReportView: View {
         }
     }
 
-    private func send() async {
+    private func make() async {
         working = true
         problem = nil
         defer { working = false }
-        let files = photos.compactMap { RoomResult.jpeg($0) }.map { ("photos", $0) }
-        var fields = captions.map { ("captions", $0) }
-        fields.append(("notes", notes))
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let caps = captions.enumerated().map { "Фото \($0.offset + 1): \($0.element.isEmpty ? "без подписи" : $0.element)" }.joined(separator: "\n")
         do {
-            let d = try await link.apiForm("/api/report", fields: fields, files: files, timeout: 300)
-            done = d["summary"] as? String ?? ""
-            if let c = (d["credits"] as? NSNumber)?.intValue { profile?.credits = c }
+            let summary = try await Kie.chat(system: AIPrompts.report,
+                                             text: "Объект: \(name.isEmpty ? "не указан" : name)\nОбщий комментарий прораба: \(notes.isEmpty ? "нет" : notes)\n\(caps)",
+                                             maxTokens: 800)
+            if let url = PlanPDF.photoReport(title: name.isEmpty ? "Фотоотчёт о ходе работ" : "Фотоотчёт: \(name)", summary: summary,
+                                             photos: Array(zip(photos, captions))) {
+                share = ShareFile(url: url)
+            } else {
+                problem = "Не получилось собрать PDF."
+            }
+            await state.refresh()
         } catch {
-            problem = LinkError.describe(error)
+            problem = KieError.describe(error)
         }
     }
 }

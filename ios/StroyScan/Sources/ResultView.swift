@@ -69,7 +69,8 @@ struct ResultView: View {
     @State private var designing = false
     @State private var designURL: URL?
     @State private var designError: String?
-    @State private var credits: Int?
+    @State private var keySettings = false
+    @State private var hasKey = Kie.ready
     /// Ремонт, собранный в 3D (стиль, отделка, мебель)
     @State private var look = RenoStyle.scandi.finishes
     @State private var camera = false
@@ -110,7 +111,7 @@ struct ResultView: View {
                 }
 
                 NavigationLink {
-                    FurnitureSizesView { fresh in try await ensureScanId(fresh: fresh) }
+                    FurnitureSizesView(result: result, look: look)
                 } label: {
                     Label("Мебель по размерам", systemImage: "sofa")
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
@@ -171,8 +172,8 @@ struct ResultView: View {
                 }
                 .buttonStyle(PressStyle())
 
-                sendButton
-                if sent, let scanId { designSection(scanId) }
+                designSection
+                if link.connected || pending || sent { sendButton }
                 Button { sharePDF() } label: {
                     Label("План в PDF — для клиента или магазина", systemImage: "doc.richtext")
                 }
@@ -184,7 +185,7 @@ struct ResultView: View {
                 Button { shareScanFile() } label: {
                     Label("Файл скана для бота", systemImage: "doc.badge.arrow.up")
                 }
-                Text("Пришлите этот файл в чат СтройБота — ремонт и смета посчитаются прямо по размерам скана.")
+                Text("По желанию: пришлите этот файл в чат СтройБота — он тоже посчитает ремонт и смету по скану.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let usdz = result.usdz {
                     ShareLink(item: usdz) { Label("3D-модель комнаты (USDZ)", systemImage: "cube") }
@@ -545,17 +546,25 @@ struct ResultView: View {
 
     // MARK: - ИИ-ремонт на фото
 
-    private func designSection(_ scanId: Int) -> some View {
+    private var designSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Ремонт на фото").font(.headline)
-            Text("ИИ перерисует фото комнаты в выбранном стиле. Тратит кредиты в боте.")
+            Text(result.photo == nil
+                 ? "ИИ нарисует комнату с этими размерами в выбранном стиле."
+                 : "ИИ перерисует фото комнаты в выбранном стиле.")
                 .font(.subheadline).foregroundStyle(.secondary)
+            if !hasKey {
+                Button { keySettings = true } label: {
+                    Label("Сначала вставьте ключ kie.ai", systemImage: "key.fill")
+                }
+                .font(.subheadline.bold())
+            }
             Picker("Стиль", selection: $designStyle) {
                 ForEach(designStyles) { Text($0.title).tag($0.key) }
             }
             .pickerStyle(.menu)
             Button {
-                Task { await runDesign(scanId) }
+                if hasKey { Task { await runDesign() } } else { keySettings = true }
             } label: {
                 HStack {
                     if designing { ProgressView() }
@@ -565,10 +574,7 @@ struct ResultView: View {
                 .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
                 .foregroundStyle(Palette.ink)
             }
-            .disabled(designing || result.photo == nil)
-            if result.photo == nil {
-                Text("Нужно фото комнаты").font(.footnote).foregroundStyle(.secondary)
-            }
+            .disabled(designing)
             if let designError {
                 Text(designError).font(.footnote).foregroundStyle(.red)
             }
@@ -577,6 +583,7 @@ struct ResultView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .sheet(isPresented: $keySettings, onDismiss: { hasKey = Kie.ready }) { KieSettingsView() }
     }
 
     private func designResult(_ url: URL) -> some View {
@@ -591,24 +598,20 @@ struct ResultView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            HStack {
-                ShareLink(item: url) { Label("Поделиться", systemImage: "square.and.arrow.up") }
-                Spacer()
-                if let credits { Text("Кредитов: \(credits)").font(.footnote).foregroundStyle(.secondary) }
+            NavigationLink { AIImageResult(url: url) } label: {
+                Label("Открыть, сохранить или поделиться", systemImage: "square.and.arrow.down")
             }
         }
     }
 
-    private func runDesign(_ scanId: Int) async {
+    private func runDesign() async {
         designing = true
         designError = nil
         defer { designing = false }
         do {
-            let answer = try await link.design(scanId: scanId, style: designStyle, look: lookChanged ? look.json : nil)
-            designURL = answer.image
-            credits = answer.credits
+            designURL = try await RoomAI.design(result, style: designStyle, look: look)
         } catch {
-            designError = (error as? LinkError)?.text ?? "Не получилось: \(error.localizedDescription)"
+            designError = KieError.describe(error)
         }
     }
 }

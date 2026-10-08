@@ -267,6 +267,7 @@ struct CustomPieceAddView: View {
 
     @State private var source = Source.link
     @State private var linkText = ""
+    @State private var browse: BrowseURL?
     @State private var link: String?
     @State private var loading = false
     @State private var problem: String?
@@ -351,6 +352,9 @@ struct CustomPieceAddView: View {
                     }
                 }
             }
+            .sheet(item: $browse) { b in
+                ShopPageView(start: b.url, what: "товар") { found, img in apply(found, img) }
+            }
             .fullScreenCover(isPresented: $camera) {
                 PhotoCameraView { data in if let img = UIImage(data: data) { photo = TileImage.upright(img) } }
             }
@@ -372,9 +376,21 @@ struct CustomPieceAddView: View {
         defer { loading = false }
         do {
             let (found, img) = try await TileLink.fetch(linkText)
+            apply(found, img)
+        } catch TileLink.Problem.badURL {
+            problem = "Это не похоже на ссылку. Скопируйте адрес страницы товара."
+        } catch {
+            // сайт не отдал страницу «простому» запросу — открываем как в Safari
+            if let url = linkIn(linkText) { browse = BrowseURL(url: url) }
+            else { problem = "Не получилось открыть страницу. Проверьте интернет или добавьте вещь по фото." }
+        }
+    }
+
+    private func apply(_ found: TileLinkFound, _ img: UIImage) {
+        do {
             photo = TileImage.upright(img)
             name = String(found.name.prefix(80))
-            link = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
+            link = found.page?.absoluteString ?? linkText.trimmingCharacters(in: .whitespacesAndNewlines)
             let s = PieceSize.parse(found.text)
             let txt = { (v: Double?) in v.map { fmt(($0 * 1000).rounded() / 10) } ?? "" }
             if s.w != nil { width = txt(s.w) }
@@ -383,12 +399,6 @@ struct CustomPieceAddView: View {
             note = s.w == nil && s.d == nil && s.h == nil
                 ? "Размеров на странице не нашёл — впишите их из карточки товара."
                 : "Размеры взял со страницы — сверьте с карточкой товара (иногда там размер упаковки)."
-        } catch TileLink.Problem.noImage {
-            problem = "На странице не нашлось фото товара. Сделайте скриншот и добавьте его через «Фото»."
-        } catch TileLink.Problem.badURL {
-            problem = "Это не похоже на ссылку. Скопируйте адрес страницы товара."
-        } catch {
-            problem = "Не получилось открыть страницу. Проверьте интернет или добавьте вещь по фото."
         }
     }
 

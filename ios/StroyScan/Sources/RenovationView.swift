@@ -149,6 +149,8 @@ struct Renovation3DView: View {
                 editor.setBare(true)
                 // мебель не мешает видеть стены; вернуть — кнопкой справа. Для плитки мебель видна: так понятнее дизайн
                 if fixedMode != .tile && !editor.furnitureHidden { editor.setFurnitureHidden(true) }
+                // на плитке — как человек оставил в прошлый раз
+                if fixedMode == .tile && UserDefaults.standard.bool(forKey: "tile.hideFurniture") { editor.setFurnitureHidden(true) }
                 if editor.engMode != fixedMode { editor.setEngMode(fixedMode) }
             }
             editor.setTileItems(tiles.tiles)

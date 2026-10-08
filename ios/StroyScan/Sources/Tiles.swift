@@ -669,6 +669,20 @@ struct TilePanel: View {
                 ForEach(TileItem.Kind.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
+            Button {
+                let on = !editor.furnitureHidden
+                editor.setFurnitureHidden(on)
+                UserDefaults.standard.set(on, forKey: "tile.hideFurniture")
+            } label: {
+                Label(editor.furnitureHidden ? "Показать мебель" : "Убрать мебель",
+                      systemImage: editor.furnitureHidden ? "sofa" : "sofa.fill")
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity).padding(.vertical, 9)
+                    .background(editor.furnitureHidden ? AnyShapeStyle(Palette.signal) : AnyShapeStyle(Color(.tertiarySystemFill)),
+                                in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(Palette.ink)
+            }
+            .buttonStyle(.plain)
             if let hint = editor.engHint {
                 Label(hint, systemImage: "hand.tap").font(.footnote.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
@@ -951,6 +965,8 @@ struct TileLinkFound {
     var height: Double?
     /// Текст страницы без разметки — в нём ищем размеры мебели
     var text = ""
+    /// Адрес страницы товара (после переходов)
+    var page: URL?
 }
 
 enum TileLink {
@@ -968,17 +984,22 @@ enum TileLink {
     static let agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
     static func fetch(_ text: String) async throws -> (TileLinkFound, UIImage) {
-        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // из «поделиться» часто приходит текст со ссылкой внутри
-        if let r = s.range(of: #"https?://\S+"#, options: .regularExpression) { s = String(s[r]) }
-        guard let url = URL(string: s), url.scheme?.hasPrefix("http") == true else { throw Problem.badURL }
+        guard let url = linkIn(text) else { throw Problem.badURL }
         var req = URLRequest(url: url, timeoutInterval: 20)
         req.setValue(agent, forHTTPHeaderField: "User-Agent")
         req.setValue("ru-RU,ru;q=0.9", forHTTPHeaderField: "Accept-Language")
-        guard let (data, _) = try? await URLSession.shared.data(for: req) else { throw Problem.download }
+        guard let (data, resp) = try? await URLSession.shared.data(for: req) else { throw Problem.download }
+        // защита от ботов отдаёт 403/429 или пустую заглушку — тогда откроем страницу в браузере
+        if let code = (resp as? HTTPURLResponse)?.statusCode, code >= 400 { throw Problem.download }
         let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1251) ?? ""
         guard var found = parse(html, base: url) else { throw Problem.noImage }
         found.text = plain(html)
+        found.page = url
+        if found.width == nil, let sz = tileSize(name: found.name, props: "", desc: "", text: found.text) {
+            found.width = sz.0
+            found.height = sz.1
+        }
         var imgReq = URLRequest(url: found.image, timeoutInterval: 20)
         imgReq.setValue(agent, forHTTPHeaderField: "User-Agent")
         imgReq.setValue(url.absoluteString, forHTTPHeaderField: "Referer")
@@ -1047,6 +1068,36 @@ enum TileLink {
             .replacingOccurrences(of: "&#39;", with: "'").replacingOccurrences(of: "&nbsp;", with: " ")
     }
 
+    /// Размер плитки по странице: сначала название и характеристики, потом поля «Длина/Ширина», потом весь текст
+    static func tileSize(name: String, props: String, desc: String, text: String) -> (Double, Double)? {
+        if let s = size(in: name) { return s }
+        if let s = fields(props) ?? size(in: props) { return s }
+        if let s = size(in: desc) { return s }
+        return fields(text) ?? size(in: String(text.prefix(200_000)))
+    }
+
+    /// «Ширина (мм): 300 … Длина, см 60» → сантиметры
+    static func fields(_ text: String) -> (Double, Double)? {
+        let pattern = #"(?i)(длина|ширина|высота)([^0-9\n]{0,40}?)(\d{1,4}(?:[.,]\d{1,2})?)\s*(мм|см|mm|cm)?"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let ns = text as NSString
+        var got: [String: Double] = [:]
+        for m in re.matches(in: text, range: NSRange(location: 0, length: min(ns.length, 300_000))) {
+            let key = ns.substring(with: m.range(at: 1)).lowercased()
+            guard got[key] == nil,
+                  var v = Double(ns.substring(with: m.range(at: 3)).replacingOccurrences(of: ",", with: ".")), v > 0 else { continue }
+            let between = ns.substring(with: m.range(at: 2)).lowercased()
+            let unit = m.range(at: 4).location != NSNotFound ? ns.substring(with: m.range(at: 4)).lowercased() : ""
+            if unit == "мм" || unit == "mm" || between.contains("мм") || between.contains("mm") || (unit.isEmpty && !between.contains("см") && v > 160) {
+                v /= 10
+            }
+            if v >= 2 && v <= 320 { got[key] = v }
+            if got["ширина"] != nil && (got["длина"] != nil || got["высота"] != nil) { break }
+        }
+        guard let w = got["ширина"], let h = got["длина"] ?? got["высота"] else { return nil }
+        return (w, h)
+    }
+
     /// «60x120 см», «600×600 мм», «30 х 60» → сантиметры
     static func size(in text: String) -> (Double, Double)? {
         let pattern = #"(\d{1,4}(?:[.,]\d{1,2})?)\s*[xхXХ×*]\s*(\d{1,4}(?:[.,]\d{1,2})?)\s*(мм|mm|см|cm)?"#
@@ -1067,6 +1118,11 @@ enum TileLink {
     }
 }
 
+struct BrowseURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 /// Новая отделка: фото (камера или галерея) или ссылка, рамка по размеру плитки/раппорта, цвет, размеры и упаковка
 struct TileAddView: View {
     var editing: TileItem? = nil
@@ -1080,6 +1136,7 @@ struct TileAddView: View {
     @State private var picked: PhotosPickerItem?
     @State private var camera = false
     @State private var linkText = ""
+    @State private var browse: BrowseURL?
     @State private var loading = false
     @State private var problem: String?
     @State private var photo: UIImage?
@@ -1200,6 +1257,9 @@ struct TileAddView: View {
             .fullScreenCover(isPresented: $camera) {
                 PhotoCameraView { data in if let img = UIImage(data: data) { use(img) } }
             }
+            .sheet(item: $browse) { b in
+                ShopPageView(start: b.url, what: kindWord) { found, img in apply(found, img) }
+            }
         }
     }
 
@@ -1214,16 +1274,44 @@ struct TileAddView: View {
                 PhotosPicker(selection: $picked, matching: .images) { Label("Выбрать из галереи", systemImage: "photo") }
                 Text("Снимайте прямо, без бликов, при дневном свете.").font(.caption).foregroundStyle(.secondary)
             } else {
-                TextField("Ссылка на товар в магазине", text: $linkText, axis: .vertical)
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                HStack {
+                    TextField("Вставьте ссылку на товар", text: $linkText, axis: .vertical)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button {
+                        if let t = UIPasteboard.general.string { linkText = t; Task { await loadLink() } }
+                    } label: { Image(systemName: "doc.on.clipboard") }
+                    .buttonStyle(.borderless)
+                }
                 Button { Task { await loadLink() } } label: {
                     HStack {
                         if loading { ProgressView() }
-                        Text(loading ? "Загружаю…" : "Взять со страницы")
+                        Text(loading ? "Загружаю…" : "Взять со страницы").bold()
                     }
                 }
                 .disabled(linkText.isEmpty || loading)
-                Text("Любой сайт: Леруа Мерлен, Петрович, ОБИ, Керамин, Kerama Marazzi и другие. Возьму картинку, название и размер.")
+                if let url = linkIn(linkText) {
+                    Button { browse = BrowseURL(url: url) } label: {
+                        Label("Открыть страницу и выбрать картинку самому", systemImage: "safari")
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Или найдите в магазине:").font(.caption).foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(ShopSearch.shops, id: \.name) { shop in
+                                Button {
+                                    if let u = ShopSearch.url(shop.base, searchWord) { browse = BrowseURL(url: u) }
+                                } label: {
+                                    Text(shop.name).font(.caption.bold())
+                                        .padding(.horizontal, 10).padding(.vertical, 7)
+                                        .background(Palette.signal.opacity(0.35), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                Text("Как это работает: в магазине нажмите «Поделиться» → «Скопировать ссылку», здесь — значок вставки. Если сайт не отдаёт страницу напрямую, она откроется внутри приложения: нажмите «Взять \(kindWord)» и выберите картинку.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
@@ -1310,23 +1398,52 @@ struct TileAddView: View {
         problem = nil
     }
 
+    private var searchWord: String {
+        switch kind {
+        case .tile: return "керамическая плитка"
+        case .wallpaper: return "обои"
+        case .board: return "ламинат"
+        case .paint: return "краска для стен"
+        }
+    }
+
+    private var kindWord: String {
+        switch kind {
+        case .tile: return "плитку"
+        case .wallpaper: return "обои"
+        case .board: return "ламинат"
+        case .paint: return "краску"
+        }
+    }
+
     private func loadLink() async {
         loading = true
         problem = nil
         defer { loading = false }
         do {
             let (found, img) = try await TileLink.fetch(linkText)
-            use(img)
-            name = found.name
-            if kind == .tile, let w = found.width, let h = found.height {
-                width = fmt(w)
-                height = fmt(h)
-            }
-            link = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
-            fixColor = false   // фото из магазина уже обработано
+            apply(found, img)
+        } catch TileLink.Problem.badURL {
+            problem = TileLink.Problem.badURL.localizedDescription
         } catch {
-            problem = error.localizedDescription
+            // сайт не отдал страницу или картинку «простому» запросу — открываем как в Safari
+            if let url = linkIn(linkText) { browse = BrowseURL(url: url) } else { problem = error.localizedDescription }
         }
+    }
+
+    private func apply(_ found: TileLinkFound, _ img: UIImage) {
+        use(img)
+        name = found.name
+        if kind == .tile || kind == .board, let w = found.width, let h = found.height {
+            // доска: сначала длина, потом ширина
+            width = fmt(kind == .board ? max(w, h) : w)
+            height = fmt(kind == .board ? min(w, h) : h)
+            problem = nil
+        } else if kind == .tile || kind == .board {
+            problem = "Размер на странице не нашёл — впишите его ниже из карточки товара."
+        }
+        link = found.page?.absoluteString ?? linkText.trimmingCharacters(in: .whitespacesAndNewlines)
+        fixColor = false   // фото из магазина уже обработано
     }
 
     /// Рамка по пропорциям; фото под ней двигают и приближают

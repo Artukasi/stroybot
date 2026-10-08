@@ -125,9 +125,11 @@ final class BotLink: ObservableObject {
         do {
             answer = try await URLSession.shared.data(for: req)
         } catch let e as URLError where e.code == .timedOut {
-            throw LinkError.message("Бот долго не отвечает. Попробуйте ещё раз.")
-        } catch let e as URLError where e.code == .notConnectedToInternet {
-            throw LinkError.message("Нет интернета.")
+            throw LinkError.offline("Бот долго не отвечает. Попробуйте ещё раз.")
+        } catch let e as URLError where e.code == .notConnectedToInternet || e.code == .networkConnectionLost {
+            throw LinkError.offline("Нет интернета.")
+        } catch is URLError {
+            throw LinkError.offline("Бот сейчас недоступен: компьютер с ботом выключен или адрес сменился.")
         }
         let (data, resp) = answer
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -146,7 +148,7 @@ final class BotLink: ObservableObject {
         case 400: throw LinkError.message("Бот не понял запрос. Обновите приложение и бота.")
         case 429: throw LinkError.message("Слишком много попыток. Подождите 10 минут.")
         case 502 where design: throw LinkError.message("ИИ не ответил, кредиты вернули. Попробуйте ещё раз.")
-        case 502, 503, 504: throw LinkError.message("Бот сейчас недоступен. Попробуйте позже.")
+        case 500...599: throw LinkError.offline("Бот сейчас недоступен. Попробуйте позже.")
         default: throw LinkError.message("Ошибка сервера (\(status)).")
         }
     }
@@ -154,12 +156,14 @@ final class BotLink: ObservableObject {
 
 enum LinkError: Error {
     case message(String)
+    /// Нет связи с ботом (интернет, бот выключен) — можно отправить позже
+    case offline(String)
     /// Скана нет в боте (удалили или другой аккаунт) — надо отправить заново
     case scanMissing
 
     var text: String {
         switch self {
-        case .message(let t): return t
+        case .message(let t), .offline(let t): return t
         case .scanMissing: return "Скан не найден в боте. Отправьте его ещё раз."
         }
     }

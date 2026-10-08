@@ -241,7 +241,7 @@ extension RoomResult {
     }
 
     /// Двери, окна и проёмы: середина по полу и ширина (дверь в разрыве стены не считается дырой)
-    static func rawOpenings(_ room: CapturedRoom) -> [Rectify.Opening] {
+    static func rawOpenings(_ room: ScanParts) -> [Rectify.Opening] {
         (room.doors + room.windows + room.openings).map {
             Rectify.Opening(center: SIMD2(Double($0.transform.columns.3.x), Double($0.transform.columns.3.z)),
                             width: Double($0.dimensions.x))
@@ -249,17 +249,22 @@ extension RoomResult {
     }
 
     /// Выпрямленные стены скана. prev — угол сетки прошлого кадра (во время съёмки)
-    static func rectify(_ room: CapturedRoom, prev: Double? = nil) -> Rectify.Result {
+    static func rectify(_ room: ScanParts, prev: Double? = nil) -> Rectify.Result {
         Rectify.run(rawWalls(room.walls), openings: rawOpenings(room), prev: prev)
     }
 
     init(_ captured: CapturedRoom) {
-        self.init(captured, RoomResult.rectify(captured))
+        self.init(ScanParts(captured))
+    }
+
+    /// Один скан или несколько сканов одной комнаты («доснять»)
+    init(_ parts: ScanParts) {
+        self.init(parts, RoomResult.rectify(parts))
     }
 
     /// Размеры по выпрямленным стенам: углы сомкнуты, куски одной стены — одна стена.
     /// Копия стены («двоится») в размеры не идёт, о ней пишет проверка скана
-    init(_ captured: CapturedRoom, _ fitted: Rectify.Result) {
+    init(_ captured: ScanParts, _ fitted: Rectify.Result) {
         self.init()
         let rect = fitted.withoutCopies()
         let rw = rect.walls
@@ -277,11 +282,8 @@ extension RoomResult {
         // контур пола: по сомкнутым стенам; если не сомкнулись — на iOS 17 от RoomPlan, на iOS 16 по концам стен
         var points = rect.loop
         if points.count < 3 {
-            if #available(iOS 17.0, *), let floor = captured.floors.first, floor.polygonCorners.count > 2 {
-                points = floor.polygonCorners.map { c in
-                    let w = floor.transform * SIMD4<Float>(c.x, c.y, c.z, 1)
-                    return SIMD2(Double(w.x), Double(w.z))
-                }
+            if captured.floorPolygon.count > 2 {
+                points = captured.floorPolygon
             } else {
                 points = RoomResult.convexHull(rw.flatMap { [$0.a, $0.b] })
             }

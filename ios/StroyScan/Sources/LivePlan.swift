@@ -15,7 +15,7 @@ struct LivePlan {
     init() {}
 
     /// Стены — как в подгонке (копию «двоящейся» стены не рисуем), мебель — параллельно стенам, размеры — из скана
-    init(_ rect: Rectify.Result, _ room: CapturedRoom) {
+    init(_ rect: Rectify.Result, _ room: ScanParts) {
         angle = rect.angle
         let turn = -rect.angle
         let copies = rect.copies

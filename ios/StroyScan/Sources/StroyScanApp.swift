@@ -3,11 +3,15 @@ import SwiftUI
 @main
 struct StroyScanApp: App {
     @StateObject private var link = BotLink()
+    @StateObject private var store = ScanStore()
+    @StateObject private var hub = ScanHub()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(link)
+                .environmentObject(store)
+                .environmentObject(hub)
                 .tint(Palette.signal)
                 // ссылка из бота: stroyscan://pair?server=https://…&code=ABCD2345
                 .onOpenURL { url in

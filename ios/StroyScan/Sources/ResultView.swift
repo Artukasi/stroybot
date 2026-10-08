@@ -18,14 +18,52 @@ let designStyles: [DesignStyle] = [
     DesignStyle(key: "budget", title: "Бюджетный ремонт"),
 ]
 
+/// Комната из истории: читаем с диска один раз
+struct SavedRoomView: View {
+    @EnvironmentObject var store: ScanStore
+    @EnvironmentObject var hub: ScanHub
+    let id: UUID
+    let onRescan: () -> Void
+    @State private var loaded: RoomResult?
+    @State private var missing = false
+
+    var body: some View {
+        Group {
+            if let loaded {
+                ResultView(savedID: id, result: loaded, canContinue: hub.rooms(for: id) != nil, onRescan: onRescan)
+            } else if missing {
+                Text("Скан не найден. Возможно, его удалили.").foregroundStyle(.secondary).padding()
+            } else {
+                ProgressView()
+            }
+        }
+        .onAppear {
+            guard loaded == nil else { return }
+            loaded = store.result(id)
+            missing = loaded == nil
+        }
+    }
+}
+
 /// Результат скана: план сверху с длинами стен, площади и отправка в бот.
 struct ResultView: View {
     @EnvironmentObject var link: BotLink
+    @EnvironmentObject var store: ScanStore
+    @EnvironmentObject var hub: ScanHub
+    /// Запись в истории «Мои комнаты»
+    let savedID: UUID
     @State var result: RoomResult
-    /// «Доснять / Переснять»: новый скан вместо этого
+    /// Телефон ещё помнит комнату: «Доснять» продолжит этот скан
+    var canContinue = false
+    /// «Доснять / Переснять»
     var onRescan: (() -> Void)? = nil
     @State private var drawn: CGFloat = 0
     @State private var sent = false
+    /// Номер скана в боте (у каждой комнаты свой)
+    @State private var scanId: Int?
+    @State private var loadedLook = false
+    @State private var counted = false
+    @State private var sending = false
     @State private var pickerItem: PhotosPickerItem?
     @State private var designStyle = "scandi"
     @State private var designing = false
@@ -42,6 +80,7 @@ struct ResultView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                AssembleView(result: result)
                 planView
                 qualityCard
 
@@ -56,7 +95,7 @@ struct ResultView: View {
 
                 if !result.wallLines.isEmpty {
                     NavigationLink {
-                        Renovation3DView(result: result, look: $look, scanId: sent ? link.lastScanId : nil) { fresh in
+                        Renovation3DView(result: result, look: $look, scanId: sent ? scanId : nil) { fresh in
                             try await ensureScanId(fresh: fresh)
                         }
                     } label: {
@@ -77,7 +116,10 @@ struct ResultView: View {
                 }
 
                 sendButton
-                if sent, let scanId = link.lastScanId { designSection(scanId) }
+                if sent, let scanId { designSection(scanId) }
+                Button { sharePDF() } label: {
+                    Label("План в PDF — для клиента или магазина", systemImage: "doc.richtext")
+                }
                 Button { shareScanFile() } label: {
                     Label("Файл скана для бота", systemImage: "doc.badge.arrow.up")
                 }
@@ -95,6 +137,16 @@ struct ResultView: View {
             guard let item else { return }
             Task { await loadPhoto(item) }
         }
+        .onAppear {
+            scanId = store.botScanId(savedID, server: link.server)
+            sent = scanId != nil
+            if !loadedLook, let saved = store.look(savedID) { look = saved }
+            loadedLook = true
+        }
+        .onChange(of: look) { l in
+            if loadedLook { store.setLook(savedID, l) }
+        }
+        .onChange(of: result.room) { _ in store.update(savedID, result: result) }
         .fullScreenCover(isPresented: $camera) {
             PhotoCameraView { data in usePhoto(data) }
         }
@@ -138,7 +190,9 @@ struct ResultView: View {
                             .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
                             .foregroundStyle(Palette.ink)
                     }
-                    Text("Скан начнётся заново: снимите комнату целиком, задержитесь на местах из списка.")
+                    Text(canContinue
+                         ? "Скан продолжится с того же места: доснимите только места из списка — они сами добавятся к комнате."
+                         : "Скан начнётся заново: снимите комнату целиком, задержитесь на местах из списка.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -169,25 +223,48 @@ struct ResultView: View {
 
     private var statsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            stat("Пол", fmt(result.floorArea), "м²")
-            stat("Стены без проёмов", fmt(result.wallArea), "м²")
-            stat("Периметр", fmt(result.perimeter), "м")
-            stat("Высота", fmt(result.height), "м")
-            stat("Длина × ширина", "\(fmt(result.length)) × \(fmt(result.width))", "м")
-            stat("Окна и двери", "\(result.windows) и \(result.doors)", "шт")
-            stat("Плинтус", fmt(result.skirting), "м")
-            stat("Откосы окон", fmt(result.slopes), "м")
+            stat("Пол", result.floorArea, "м²", 0)
+            stat("Стены без проёмов", result.wallArea, "м²", 1)
+            stat("Периметр", result.perimeter, "м", 2)
+            stat("Высота", result.height, "м", 3)
+            stat("Длина × ширина", "\(fmt(result.length)) × \(fmt(result.width))", "м", 4)
+            stat("Окна и двери", "\(result.windows) и \(result.doors)", "шт", 5)
+            stat("Плинтус", result.skirting, "м", 6)
+            stat("Откосы окон", result.slopes, "м", 7)
+        }
+        .onAppear {
+            guard !counted else { return }
+            withAnimation(.easeOut(duration: 1.3).delay(0.3)) { counted = true }
         }
     }
 
-    private func stat(_ title: String, _ value: String, _ unit: String) -> some View {
+    /// Число набегает от нуля, карточки появляются по очереди
+    private func stat(_ title: String, _ value: Double, _ unit: String, _ i: Int) -> some View {
+        statCard(title, i) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                CountUp(value: counted ? value : 0).font(.title3.bold())
+                Text(unit).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func stat(_ title: String, _ value: String, _ unit: String, _ i: Int) -> some View {
+        statCard(title, i) {
+            Text(value).font(.title3.bold()) + Text(" \(unit)").font(.subheadline).foregroundColor(.secondary)
+        }
+    }
+
+    private func statCard<C: View>(_ title: String, _ i: Int, @ViewBuilder _ value: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title3.bold()) + Text(" \(unit)").font(.subheadline).foregroundColor(.secondary)
+            value()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .opacity(counted ? 1 : 0)
+        .offset(y: counted ? 0 : 14)
+        .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.05 * Double(i)), value: counted)
     }
 
     private var furnitureList: some View {
@@ -229,7 +306,7 @@ struct ResultView: View {
                 Text("Фото нет. Выберите снимок комнаты, чтобы ИИ показал ремонт.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
-            Button { camera = true } label: {
+            Button { hub.pause(); camera = true } label: {
                 Label("Снять фото камерой", systemImage: "camera")
             }
             PhotosPicker(selection: $pickerItem, matching: .images) {
@@ -252,7 +329,17 @@ struct ResultView: View {
         result.photo = jpeg
         // новое фото нужно заново отправить в бот
         sent = false
+        scanId = nil
         designURL = nil
+        store.update(savedID, result: result, resend: true)
+    }
+
+    private func sharePDF() {
+        if let url = PlanPDF.room(result) {
+            share = ShareFile(url: url)
+        } else {
+            note = "Не получилось собрать PDF."
+        }
     }
 
     private func shareScanFile() {
@@ -270,38 +357,70 @@ struct ResultView: View {
 
     /// Номер скана в боте; если скан ещё не отправлен (или fresh) — отправляет молча
     private func ensureScanId(fresh: Bool) async throws -> Int {
-        if !fresh, sent, let id = link.lastScanId { return id }
+        if !fresh, sent, let id = scanId { return id }
         guard link.connected else { throw LinkError.message("Подключите бота на главном экране.") }
         guard let id = try await link.sendScan(result) else {
             throw LinkError.message("Сервер ответил странно. Попробуйте ещё раз.")
         }
         sent = true
+        scanId = id
+        store.setSent(savedID, botScanId: id, server: link.server)
         if lookChanged { try? await link.saveLook(scanId: id, look: look.json) }
         return id
     }
 
     // MARK: - Отправка
 
+    private var pending: Bool { store.scan(savedID)?.pending ?? false }
+
     private var sendButton: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                Task {
-                    sent = await link.send(result)
-                    if sent, lookChanged, let id = link.lastScanId { try? await link.saveLook(scanId: id, look: look.json) }
-                }
-            } label: {
+            Button { Task { await send() } } label: {
                 Group {
-                    if link.busy { ProgressView() }
-                    else { Label(sent ? "Отправлено в СтройБот" : "Отправить в СтройБот", systemImage: sent ? "checkmark" : "paperplane.fill") }
+                    if sending { ProgressView() }
+                    else if sent { Label("Отправлено в СтройБот", systemImage: "checkmark") }
+                    else if pending { Label("Ждёт связи с ботом", systemImage: "clock.arrow.circlepath") }
+                    else { Label("Отправить в СтройБот", systemImage: "paperplane.fill") }
                 }
                 .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
-                .background(Palette.signal, in: RoundedRectangle(cornerRadius: 16))
+                .background(pending && !sent ? Color.orange.opacity(0.25) : Palette.signal, in: RoundedRectangle(cornerRadius: 16))
                 .foregroundStyle(Palette.ink)
             }
-            .disabled(!link.connected || link.busy)
-            if !link.connected {
-                Text("Сначала подключите бота на главном экране.").font(.footnote).foregroundStyle(.secondary)
+            .disabled(sending)
+            if pending && !sent {
+                Text("Скан в очереди: уйдёт в бот сам, как только появится связь. Нажмите, чтобы попробовать сейчас.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else if !link.connected {
+                Text("Бот не подключён — скан встанет в очередь и уйдёт, когда подключите.").font(.footnote).foregroundStyle(.secondary)
             }
+        }
+        .onChange(of: store.scan(savedID)?.botScanId) { id in
+            // ушёл из очереди, пока экран открыт
+            if let id, !sent, store.scan(savedID)?.botServer == link.server { scanId = id; sent = true }
+        }
+    }
+
+    /// Отправить; нет связи — в очередь, уйдёт сам
+    private func send() async {
+        guard link.connected else {
+            store.setPending(savedID, true)
+            note = "Скан в очереди: уйдёт в бот, когда подключите бота."
+            return
+        }
+        sending = true
+        defer { sending = false }
+        do {
+            guard let id = try await link.sendScan(result) else { throw LinkError.message("Сервер ответил странно. Попробуйте ещё раз.") }
+            scanId = id
+            sent = true
+            store.setSent(savedID, botScanId: id, server: link.server)
+            if lookChanged { try? await link.saveLook(scanId: id, look: look.json) }
+            note = "Скан отправлен в бот."
+        } catch LinkError.offline(let why) {
+            store.setPending(savedID, true)
+            note = "\(why)\n\nСкан в очереди: уйдёт в бот сам, как только бот станет доступен."
+        } catch {
+            note = LinkError.describe(error)
         }
     }
 

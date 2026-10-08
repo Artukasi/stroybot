@@ -11,7 +11,13 @@ struct RoomScanner: UIViewRepresentable {
     @ObservedObject var controller: ScanController
 
     func makeUIView(context: Context) -> RoomCaptureView {
-        let view = RoomCaptureView(frame: .zero)
+        let view: RoomCaptureView
+        // общий ARSession: «доснять» и комнаты квартиры остаются в одних координатах
+        if #available(iOS 17.0, *), let ar = controller.arSession {
+            view = RoomCaptureView(frame: .zero, arSession: ar)
+        } else {
+            view = RoomCaptureView(frame: .zero)
+        }
         controller.start(in: view)
         return view
     }
@@ -65,10 +71,41 @@ enum Torch {
     }
 }
 
+/// Что снимаем: новую комнату, досъёмку к уже снятой (её прошлые сканы) или квартиру по комнатам
+enum ScanMode {
+    case room
+    case more([CapturedRoom])
+    case flat
+}
+
+/// Итог съёмки: одна комната или комнаты квартиры
+struct ScanOutcome {
+    var rooms: [RoomResult]
+    /// Сканы каждой комнаты в координатах этой съёмки — для «доснять»
+    var captured: [[CapturedRoom]]
+    /// Квартира, снятая за один раз: контур пола каждой комнаты в общих координатах
+    var outlines: [[[Double]]]?
+    /// Что сказать человеку (досъёмка не совместилась и т.п.)
+    var note: String?
+    var flat = false
+}
+
 final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate {
     weak var view: RoomCaptureView?
     let watcher = LiveWatcher()
-    @Published var result: RoomResult?
+    let mode: ScanMode
+    let arSession: ARSession?
+    @Published var outcome: ScanOutcome?
+    /// Квартира: сколько комнат уже снято и идёт ли переход к следующей
+    @Published var flatDone = 0
+    @Published var nextRoomBusy = false
+    private var flatRooms: [RoomResult] = []
+    private var flatCaptured: [CapturedRoom] = []
+    private var flatOutlines: [[[Double]]] = []
+    private var continueFlat = false
+    /// Каждый запуск сессии — свой номер: итог одной комнаты приходит дважды (от сессии и от вида)
+    private var serial = 0
+    private var handled = -1
     @Published var failed: String?
     @Published var finishing = false
     /// Подсказка поверх камеры и важная ли она
@@ -126,14 +163,29 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         "Держитесь в 1–3 метрах от стен",
     ]
 
-    override init() {
+    init(mode: ScanMode = .room, arSession: ARSession? = nil) {
+        self.mode = mode
+        self.arSession = arSession
         super.init()
         listen()
     }
     // RoomCaptureViewDelegate требует NSCoding
     required init?(coder: NSCoder) {
+        mode = .room
+        arSession = nil
         super.init()
         listen()
+    }
+
+    /// Прошлые сканы этой комнаты (досъёмка)
+    private var previous: [CapturedRoom] {
+        if case .more(let old) = mode { return old }
+        return []
+    }
+
+    var isFlat: Bool {
+        if case .flat = mode { return true }
+        return false
     }
     func encode(with coder: NSCoder) {}
 
@@ -155,6 +207,7 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         running = true
         // скан идёт минуту-две без касаний: экран не должен гаснуть и блокироваться
         UIApplication.shared.isIdleTimerDisabled = true
+        serial += 1
         view.captureSession.run(configuration: RoomCaptureSession.Configuration())
     }
 
@@ -177,8 +230,37 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         UIApplication.shared.isIdleTimerDisabled = false
         guard running else { return }
         running = false
-        session?.stop()
+        // камера и место в комнате остаются: можно доснять или снять следующую комнату в тех же координатах
+        if #available(iOS 17.0, *), arSession != nil || isFlat {
+            session?.stop(pauseARSession: cancelled)
+        } else {
+            session?.stop()
+        }
     }
+
+    /// Квартира: эта комната готова, снимаем следующую, не выключая камеру
+    func nextRoom() {
+        guard isFlat, !finishing, !nextRoomBusy else { return }
+        continueFlat = true
+        nextRoomBusy = true
+        finish()
+    }
+
+    /// Квартира: «Готово» сразу после перехода — новую комнату почти не снимали, её не считаем
+    private var currentIsEmpty: Bool { (latest?.walls.count ?? 0) < 2 }
+
+    func finishFlat() {
+        guard isFlat else { return }
+        if currentIsEmpty && !flatRooms.isEmpty {
+            finishing = true
+            cancelledCurrent = true
+            stop()
+            complete()
+        } else {
+            finish()
+        }
+    }
+    private var cancelledCurrent = false
 
     func toggleTorch() { setTorch(!torchOn) }
 
@@ -204,16 +286,18 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     private func redraw() {
         guard let room = latest, !finishing, !cancelled else { return }
         drawnAt = Date()
-        let rect = RoomResult.rectify(room, prev: gridAngle)
+        // досъёмка: прошлый скан и новый вместе — мини-план и подсказки по всей комнате
+        let parts = ScanParts(previous + [room])
+        let rect = RoomResult.rectify(parts, prev: gridAngle)
         gridAngle = rect.angle
         self.rect = rect
-        plan = LivePlan(rect, room)
+        plan = LivePlan(rect, parts)
         marks = rect.walls.count >= 3 ? RoomResult.liveMarks(rect) : []
-        extras = RoomResult.liveExtras(room)
+        extras = RoomResult.liveExtras(parts)
         marked = Set(marks.flatMap { ScanController.samples($0.path) }.compactMap(ScanController.cell))
         looked = looked.filter { marked.contains($0.key) }
-        let windows = room.windows.count, doors = room.doors.count + room.openings.count
-        counts = "Стен: \(rect.wallCount) · окон: \(windows) · дверей: \(doors) · мебели: \(room.objects.count)"
+        let windows = parts.windows.count, doors = parts.doors.count + parts.openings.count
+        counts = "Стен: \(rect.wallCount) · окон: \(windows) · дверей: \(doors) · мебели: \(parts.objects.count)"
     }
 
     /// Где телефон и куда смотрит — для мини-плана и подсказок (несколько раз в секунду)
@@ -398,32 +482,138 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     /// Скан закончился: данные приходят и от сессии, и от вида RoomPlan — собираем один раз
     private func ended(_ data: CapturedRoomData, _ error: Error?) {
         UIApplication.shared.isIdleTimerDisabled = false
-        guard !cancelled, !building else { return }
+        guard !cancelled, !building, handled != serial else { return }
+        handled = serial
+        if cancelledCurrent { return }
         building = true
         running = false
         // RoomPlan мог остановиться сам (телефон перегрелся, камера потерялась) — собираем, что успели
         finishing = true
         let photo = self.photo
+        let mode = self.mode
+        let number = flatRooms.count + 1
         Task {
             do {
                 let room = try await RoomBuilder(options: [.beautifyObjects]).capturedRoom(from: data)
-                let result = ScanController.build(room, photo: photo)
-                await MainActor.run { self.done(result) }
+                switch mode {
+                case .room:
+                    let result = ScanController.build([room], photo: photo, usdz: room)
+                    await MainActor.run { self.done(ScanOutcome(rooms: [result], captured: [[room]])) }
+                case .more(let old):
+                    if ScanParts.fits(old, room) {
+                        let result = ScanController.build(old + [room], photo: photo, usdz: room)
+                        await MainActor.run { self.done(ScanOutcome(rooms: [result], captured: [old + [room]])) }
+                    } else {
+                        // телефон потерял место в комнате: склеить нельзя. Целый новый скан — берём его
+                        let result = ScanController.build([room], photo: photo, usdz: room)
+                        if result.walls.count >= 3 {
+                            let note = "Не получилось совместить с прошлым сканом, поэтому взял новый скан комнаты целиком."
+                            await MainActor.run { self.done(ScanOutcome(rooms: [result], captured: [[room]], note: note)) }
+                        } else {
+                            await MainActor.run {
+                                self.fail("Не получилось совместить досъёмку с прошлым сканом: телефон потерял место в комнате. Переснимите комнату целиком.")
+                            }
+                        }
+                    }
+                case .flat:
+                    var result = ScanController.build([room], photo: photo, usdz: room)
+                    result.room = "Комната \(number)"
+                    let outline = ScanController.outline(room)
+                    await MainActor.run { self.roomDone(result, room, outline) }
+                }
             } catch let built {
                 let text = ScanController.failText(error ?? built)
-                await MainActor.run { self.fail(text) }
+                await MainActor.run {
+                    if self.isFlat && !self.flatRooms.isEmpty {
+                        // комната квартиры не собралась — остальные не теряем
+                        self.roomFailed(text)
+                    } else {
+                        self.fail(text)
+                    }
+                }
             }
         }
     }
 
-    /// Итог скана: размеры по выпрямленным стенам, фото и файл 3D-модели
-    private static func build(_ room: CapturedRoom, photo: Data?) -> RoomResult {
-        var result = RoomResult(room)
+    /// Итог скана: размеры по выпрямленным стенам, фото и файл 3D-модели (последнего скана)
+    private static func build(_ rooms: [CapturedRoom], photo: Data?, usdz room: CapturedRoom) -> RoomResult {
+        var result = RoomResult(ScanParts(rooms))
         result.photo = photo
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Комната.usdz")
-        try? FileManager.default.removeItem(at: url)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Комната-\(UUID().uuidString.prefix(8)).usdz")
         if (try? room.export(to: url)) != nil { result.usdz = url }
         return result
+    }
+
+    /// Контур пола комнаты в координатах съёмки, [[x, z]]
+    private static func outline(_ room: CapturedRoom) -> [[Double]] {
+        let parts = ScanParts(room)
+        let rect = RoomResult.rectify(parts)
+        var pts = rect.loop
+        if pts.count < 3 { pts = parts.floorPolygon }
+        if pts.count < 3 { pts = RoomResult.convexHull(rect.walls.flatMap { [$0.a, $0.b] }) }
+        return pts.map { [$0.x, $0.y] }
+    }
+
+    // MARK: - Квартира
+
+    private func roomDone(_ r: RoomResult, _ room: CapturedRoom, _ outline: [[Double]]) {
+        guard !cancelled else { return }
+        building = false
+        if !r.walls.isEmpty {
+            flatRooms.append(r)
+            flatCaptured.append(room)
+            flatOutlines.append(outline)
+            flatDone = flatRooms.count
+        }
+        if continueFlat { restartForNextRoom() } else { complete() }
+    }
+
+    private func roomFailed(_ text: String) {
+        building = false
+        if continueFlat {
+            restartForNextRoom()
+            hint = "Прошлая комната не собралась — снимите её ещё раз"
+            hintWarn = true
+        } else {
+            complete()
+        }
+    }
+
+    /// Та же камера и те же координаты — новая комната
+    private func restartForNextRoom() {
+        continueFlat = false
+        nextRoomBusy = false
+        finishing = false
+        photo = nil
+        latest = nil
+        rect = nil
+        gridAngle = nil
+        plan = LivePlan()
+        marks = []
+        extras = []
+        looked = [:]
+        marked = []
+        counts = ""
+        guard let view, !cancelled else { return }
+        running = true
+        UIApplication.shared.isIdleTimerDisabled = true
+        serial += 1
+        view.captureSession.run(configuration: RoomCaptureSession.Configuration())
+    }
+
+    /// Квартира готова: все снятые комнаты
+    private func complete() {
+        guard !cancelled else { return }
+        finishing = false
+        nextRoomBusy = false
+        setTorch(false)
+        if flatRooms.isEmpty {
+            failed = "Не нашёл стен. Пройдите по комнате медленнее и снимите все углы."
+            return
+        }
+        var shared: [[[Double]]]?
+        if #available(iOS 17.0, *) { shared = flatOutlines }
+        outcome = ScanOutcome(rooms: flatRooms, captured: flatCaptured.map { [$0] }, outlines: shared, flat: true)
     }
 
     private static func failText(_ error: Error) -> String {
@@ -440,11 +630,15 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         return false
     }
 
-    private func done(_ r: RoomResult) {
+    private func done(_ o: ScanOutcome) {
         guard !cancelled else { return }
         finishing = false
         setTorch(false)
-        if r.walls.isEmpty { failed = "Не нашёл стен. Пройдите по комнате медленнее и снимите все углы." } else { result = r }
+        if o.rooms.first?.walls.isEmpty ?? true {
+            failed = "Не нашёл стен. Пройдите по комнате медленнее и снимите все углы."
+        } else {
+            outcome = o
+        }
     }
 
     private func fail(_ text: String) {
@@ -533,10 +727,16 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
 }
 
 struct ScanScreen: View {
-    @StateObject private var controller = ScanController()
+    @StateObject private var controller: ScanController
     @Environment(\.dismiss) private var dismiss
     @State private var askFinish = false
-    let onResult: (RoomResult) -> Void
+    @State private var askCancel = false
+    let onDone: (ScanOutcome) -> Void
+
+    init(mode: ScanMode = .room, arSession: ARSession? = nil, onDone: @escaping (ScanOutcome) -> Void) {
+        _controller = StateObject(wrappedValue: ScanController(mode: mode, arSession: arSession))
+        self.onDone = onDone
+    }
     private let tick = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
     private let fast = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
@@ -545,7 +745,9 @@ struct ScanScreen: View {
             RoomScanner(controller: controller).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    Button("Отмена") { controller.cancel(); dismiss() }
+                    Button("Отмена") {
+                        if controller.isFlat && controller.flatDone > 0 { askCancel = true } else { controller.cancel(); dismiss() }
+                    }
                         .padding(.horizontal, 16).padding(.vertical, 10)
                         .background(.ultraThinMaterial, in: Capsule())
                     Spacer()
@@ -561,7 +763,13 @@ struct ScanScreen: View {
                         .accessibilityLabel(controller.torchOn ? "Выключить фонарик" : "Включить фонарик")
                     }
                     Button {
-                        if controller.checkFinish().isEmpty { controller.finish() } else { askFinish = true }
+                        if controller.isFlat {
+                            controller.finishFlat()
+                        } else if controller.checkFinish().isEmpty {
+                            controller.finish()
+                        } else {
+                            askFinish = true
+                        }
                     } label: {
                         Text(controller.finishing ? "Считаю…" : "Готово").bold()
                             .padding(.horizontal, 18).padding(.vertical, 10)
@@ -569,6 +777,14 @@ struct ScanScreen: View {
                             .foregroundStyle(Palette.ink)
                     }
                     .disabled(controller.finishing)
+                }
+                if controller.isFlat {
+                    Text(controller.nextRoomBusy ? "Сохраняю комнату \(controller.flatDone + 1)…"
+                         : "Квартира · комната \(controller.flatDone + 1)")
+                        .font(.subheadline.bold())
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Palette.signal, in: Capsule())
+                        .foregroundStyle(Palette.ink)
                 }
                 if let hint = controller.hint, !controller.finishing {
                     HStack(alignment: .top, spacing: 8) {
@@ -602,8 +818,29 @@ struct ScanScreen: View {
             }
             .padding()
         }
+        .overlay(alignment: .bottom) {
+            if controller.isFlat && !controller.finishing {
+                Button { controller.nextRoom() } label: {
+                    Label("Следующая комната", systemImage: "arrow.right.doc.on.clipboard")
+                        .font(.headline)
+                        .padding(.horizontal, 22).padding(.vertical, 14)
+                        .background(Palette.signal, in: Capsule())
+                        .foregroundStyle(Palette.ink)
+                }
+                .padding(.bottom, 36)
+            }
+        }
         .overlay {
-            if controller.finishing {
+            if controller.nextRoomBusy {
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text("Сохраняю комнату \(controller.flatDone + 1)").font(.headline).foregroundStyle(.white)
+                    Text("Идите в следующую комнату, камеру не выключайте").font(.subheadline).foregroundStyle(.white.opacity(0.8))
+                }
+                .multilineTextAlignment(.center)
+                .padding(24)
+                .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 20))
+            } else if controller.finishing {
                 VStack(spacing: 12) {
                     ProgressView().tint(.white)
                     Text("Собираю комнату…").font(.headline).foregroundStyle(.white)
@@ -617,10 +854,17 @@ struct ScanScreen: View {
         .onDisappear {
             controller.setTorch(false)
             UIApplication.shared.isIdleTimerDisabled = false
-            if controller.result == nil { controller.cancel() }
+            if controller.outcome == nil { controller.cancel() }
         }
-        .onChange(of: controller.result != nil) { ready in
-            if ready, let r = controller.result { onResult(r); dismiss() }
+        .onChange(of: controller.outcome != nil) { ready in
+            if ready, let o = controller.outcome { onDone(o); dismiss() }
+        }
+        .alert("Выйти без сохранения?", isPresented: $askCancel) {
+            Button("Снимать дальше", role: .cancel) {}
+            Button("Сохранить снятые комнаты") { controller.finishFlat() }
+            Button("Выйти, не сохранять", role: .destructive) { controller.cancel(); dismiss() }
+        } message: {
+            Text("Снято комнат: \(controller.flatDone).")
         }
         .alert("Ещё не всё снято", isPresented: $askFinish) {
             Button("Доснять", role: .cancel) {}

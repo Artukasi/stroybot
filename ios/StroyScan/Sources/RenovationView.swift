@@ -325,9 +325,12 @@ struct Renovation3DView: View {
 
 struct EditPanel: View {
     @ObservedObject var editor: RenoEditor
+    @EnvironmentObject var hub: ScanHub
     let pick: RenoEditor.Pick
     /// Сообщение на экране ремонта (вещь не помещается и т.п.)
     @Binding var alert: String?
+    /// Поставить вещь в настоящую комнату через камеру
+    @State private var arPiece: ARPiece?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -344,6 +347,18 @@ struct EditPanel: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground))
+        .fullScreenCover(item: $arPiece) { ARFurnitureView(piece: $0) }
+    }
+
+    /// Кнопка «В комнате через камеру»
+    private func arButton(title: String, kind: String, variant: String, color: String, w: Double, d: Double, h: Double) -> some View {
+        Button {
+            hub.pause()
+            arPiece = ARPiece(title: title, kind: kind, variant: variant, color: color, width: w, depth: d, height: h,
+                              palette: editor.look.palette)
+        } label: {
+            Label("Поставить в комнате через камеру", systemImage: "arkit").font(.subheadline.bold())
+        }
     }
 
     private var title: String {
@@ -410,8 +425,12 @@ struct EditPanel: View {
             Swatches(colors: LookOptions.colors(kind: item.kind, variant: variant), selected: editor.color(ofItem: i)) {
                 editor.setObject(i, color: $0)
             }
-            Button(role: .destructive) { editor.hideObject(i) } label: {
-                Label("Убрать", systemImage: "trash").font(.subheadline.bold())
+            HStack(spacing: 16) {
+                arButton(title: item.title, kind: item.kind, variant: variant, color: editor.color(ofItem: i),
+                         w: item.width, d: item.depth, h: item.height)
+                Button(role: .destructive) { editor.hideObject(i) } label: {
+                    Label("Убрать", systemImage: "trash").font(.subheadline.bold())
+                }
             }
         }
     }
@@ -440,6 +459,8 @@ struct EditPanel: View {
                     Label("Убрать", systemImage: "trash").font(.subheadline.bold())
                 }
             }
+            arButton(title: RoomResult.itemTitle(a.kind), kind: a.kind, variant: a.variant, color: a.color,
+                     w: a.width, d: a.depth, h: a.height)
         }
     }
 

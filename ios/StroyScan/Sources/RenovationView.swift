@@ -41,6 +41,7 @@ struct EditorScene: UIViewRepresentable {
 struct Renovation3DView: View {
     @EnvironmentObject var link: BotLink
     @EnvironmentObject var hub: ScanHub
+    @EnvironmentObject var tiles: TileLibrary
     @StateObject private var editor: RenoEditor
     @Binding var look: Look
     /// Электрика и сантехника комнаты
@@ -49,6 +50,8 @@ struct Renovation3DView: View {
     var liveScan = false
     /// Отдельный экран «Электрика» или «Сантехника»: голая комната, только этот режим
     var fixedMode: EngMode? = nil
+    /// Плитка комнаты (если экран может её сохранить)
+    var tiling: Binding<Tiling>? = nil
     @State private var scanningPipe = false
     /// Отправить скан в бот (true — заново) и вернуть его номер
     let ensureScanId: (Bool) async throws -> Int
@@ -61,14 +64,17 @@ struct Renovation3DView: View {
     @State private var share: ShareFile?
 
     init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false,
-         fixedMode: EngMode? = nil, scanId: Int?, ensureScanId: @escaping (Bool) async throws -> Int) {
+         fixedMode: EngMode? = nil, tiling: Binding<Tiling>? = nil, scanId: Int?,
+         ensureScanId: @escaping (Bool) async throws -> Int) {
         var r = result
         r.engineering = engineering.wrappedValue
+        if let tiling { r.tiling = tiling.wrappedValue }
         _editor = StateObject(wrappedValue: RenoEditor(result: r, look: look.wrappedValue))
         _look = look
         _engineering = engineering
         self.liveScan = liveScan
         self.fixedMode = fixedMode
+        self.tiling = tiling
         _scanId = State(initialValue: scanId)
         self.ensureScanId = ensureScanId
     }
@@ -105,7 +111,13 @@ struct Renovation3DView: View {
                     }
                 }
             }
-            if editor.engMode != .off {
+            if editor.engMode == .tile {
+                TilePanel(editor: editor)
+                realButton
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .background(Color(.secondarySystemGroupedBackground))
+            } else if editor.engMode != .off {
                 EngPanel(editor: editor) { scanningPipe = true }
             } else if !editor.bare {
                 if let pick = editor.pick {
@@ -114,7 +126,8 @@ struct Renovation3DView: View {
                 bottomBar
             }
         }
-        .navigationTitle(fixedMode == .electric ? "Электрика" : fixedMode == .plumbing ? "Сантехника" : "Ремонт в 3D")
+        .navigationTitle(fixedMode == .electric ? "Электрика" : fixedMode == .plumbing ? "Сантехника"
+                         : fixedMode == .tile ? "Плитка" : "Ремонт в 3D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -132,12 +145,15 @@ struct Renovation3DView: View {
         .onAppear {
             if let fixedMode {
                 editor.setBare(true)
-                // мебель не мешает видеть стены; вернуть — кнопкой справа
-                if !editor.furnitureHidden { editor.setFurnitureHidden(true) }
+                // мебель не мешает видеть стены; вернуть — кнопкой справа. Для плитки мебель видна: так понятнее дизайн
+                if fixedMode != .tile && !editor.furnitureHidden { editor.setFurnitureHidden(true) }
                 if editor.engMode != fixedMode { editor.setEngMode(fixedMode) }
             }
+            editor.setTileItems(tiles.tiles)
             editor.start()
         }
+        .onReceive(tiles.$tiles) { editor.setTileItems($0) }
+        .onReceive(editor.$tiling.dropFirst()) { t in tiling?.wrappedValue = t }
         .onDisappear { editor.stop() }
         .task { await syncLook() }
         .onReceive(editor.$look.dropFirst()) { new in
@@ -281,6 +297,20 @@ struct Renovation3DView: View {
         .buttonStyle(.plain)
     }
 
+    /// «Как в жизни» на экране плитки: ИИ дорисует комнату с этой плиткой до фото
+    private var realButton: some View {
+        Button { Task { await makeReal() } } label: {
+            HStack(spacing: 8) {
+                if rendering { ProgressView() } else { Image(systemName: "camera.filters") }
+                Text(rendering ? "Рисую, до 3 минут…" : "Нейросеть: как будет в жизни").bold()
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 12)
+            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 14))
+            .foregroundStyle(.white)
+        }
+        .disabled(rendering || !editor.ready || editor.tiling.isEmpty)
+    }
+
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
@@ -380,6 +410,11 @@ struct Renovation3DView: View {
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
         let before = editor.snapshot()
+        // экран плитки: возвращаемся к голой комнате с плиткой
+        if let fixedMode {
+            editor.setBare(true)
+            editor.setEngMode(fixedMode)
+        }
         guard let jpeg = RoomResult.jpeg(before) else {
             alert = "Не получилось снять 3D. Попробуйте ещё раз."
             return

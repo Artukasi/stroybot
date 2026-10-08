@@ -396,6 +396,7 @@ final class ScanStore: ObservableObject {
             addedFlats += 1
         }
         persist()
+        TileFiles.importFrom(dir)
         return (rooms, addedFlats)
     }
 
@@ -418,6 +419,7 @@ extension RoomResult {
         d["item_bottoms"] = items.map { ($0.bottom * 1000).rounded() / 1000 }
         d["weak_walls"] = Array(quality.weakWalls).sorted()
         d["engineering"] = engineering.json
+        d["tiling"] = tiling.json
         d["defects"] = defects.map(\.json)
         if let f = worldFrame { d["world_frame"] = [f.x, f.y, f.z, f.w] }
         return d
@@ -461,6 +463,7 @@ extension RoomResult {
         quality.weakWalls = Set((d["weak_walls"] as? [Any] ?? []).compactMap { ($0 as? NSNumber)?.intValue })
         if let p = d["photo"] as? String { photo = Data(base64Encoded: p) }
         if let e = d["engineering"] as? [String: Any] { engineering = Engineering(json: e) }
+        if let t = d["tiling"] as? [String: Any] { tiling = Tiling(json: t) }
         defects = (d["defects"] as? [[String: Any]] ?? []).prefix(Defect.max).compactMap(Defect.init(json:))
         if let f = (d["world_frame"] as? [Any])?.compactMap(num), f.count == 4 { worldFrame = SIMD4(f[0], f[1], f[2], f[3]) }
     }

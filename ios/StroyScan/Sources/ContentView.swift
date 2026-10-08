@@ -146,6 +146,8 @@ struct ContentView: View {
                             .compactMap { $0 }.joined(separator: "\n\n")
                     }
                 }
+                // плитка: стены при досъёмке те же — переносим как есть
+                if case .more = req.mode, let prev = store.result(target), !prev.tiling.isEmpty { r.tiling = prev.tiling }
                 store.update(target, result: r, resend: true, archive: archive)
                 hub.keep(o.captured.first ?? [], for: target)
             } else {

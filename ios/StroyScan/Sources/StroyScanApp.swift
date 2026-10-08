@@ -6,6 +6,7 @@ struct StroyScanApp: App {
     @StateObject private var store = ScanStore()
     @StateObject private var hub = ScanHub()
     @StateObject private var backup = Backup()
+    @StateObject private var tiles = TileLibrary()
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +15,7 @@ struct StroyScanApp: App {
                 .environmentObject(store)
                 .environmentObject(hub)
                 .environmentObject(backup)
+                .environmentObject(tiles)
                 .tint(Palette.signal)
                 // ссылка из бота: stroyscan://pair?server=https://…&code=ABCD2345
                 .onOpenURL { url in

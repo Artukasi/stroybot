@@ -2,9 +2,9 @@ import SceneKit
 import SwiftUI
 import simd
 
-/// Режим 3D-редактора: ремонт, электрика или сантехника
+/// Режим 3D-редактора: ремонт, электрика, сантехника или плитка
 enum EngMode: Equatable {
-    case off, electric, plumbing
+    case off, electric, plumbing, tile
 }
 
 /// Что ставим нажатием: точку (розетку, вывод), трубу или провод (по точкам)

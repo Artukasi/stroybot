@@ -61,6 +61,8 @@ struct RoomResult {
     var quality = Quality()
     /// Электрика и сантехника, которые расставили в 3D
     var engineering = Engineering()
+    /// Плитка на полу и стенах (Tiles.swift)
+    var tiling = Tiling()
     /// Дефекты, отмеченные на плане
     var defects: [Defect] = []
     /// Как мировые координаты съёмки переводятся в план: угол поворота, сдвиг x, сдвиг y, уровень пола (y)

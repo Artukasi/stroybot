@@ -358,6 +358,13 @@ final class RenoEditor: NSObject, ObservableObject {
     @Published var engHint: String?
     let engHolder = SCNNode()
     let defectHolder = SCNNode()
+    /// Плитка (Tiles.swift): где лежит, плитки из библиотеки, какую кладём и какая зона выбрана
+    @Published var tiling: Tiling
+    var tileItems: [UUID: TileItem] = [:]
+    @Published var tileTool: UUID?
+    @Published var tileSelected: UUID?
+    let tileHolder = SCNNode()
+    var tileMats: [String: SCNMaterial] = [:]
     var engWallOf: [UUID: Int] = [:]
 
     let result: RoomResult
@@ -406,6 +413,7 @@ final class RenoEditor: NSObject, ObservableObject {
         self.look = look
         self.shown = look
         self.eng = result.engineering
+        self.tiling = result.tiling
         self.view = SCNView(frame: .zero)
         super.init()
         setupScene()
@@ -751,7 +759,8 @@ final class RenoEditor: NSObject, ObservableObject {
         ceilingHolder.name = "ceiling"
         lampHolder.name = "lamps"
         engHolder.name = "eng"
-        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder, defectHolder] {
+        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder, defectHolder,
+                  tileHolder] {
             scene.rootNode.addChildNode(n)
         }
         orbitCamera.camera = RenoEditor.camera(room: false)
@@ -905,6 +914,7 @@ final class RenoEditor: NSObject, ObservableObject {
         buildLights()
         buildEngineering()
         buildDefects()
+        buildTiles()
         highlight()
         applyVisibility()
     }
@@ -1111,6 +1121,7 @@ final class RenoEditor: NSObject, ObservableObject {
         wallHolder.addChildNode(node)
         wallNodes[pos] = node
         outsideNodes[pos] = outside
+        buildTiles()
     }
 
     private func surface(forWall i: Int) -> Look.Finish {
@@ -1662,6 +1673,10 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     @objc private func onTap(_ g: UITapGestureRecognizer) {
+        if engMode == .tile {
+            tileTap(at: g.location(in: view))
+            return
+        }
         if engMode != .off {
             engTap(at: g.location(in: view))
             return

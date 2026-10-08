@@ -98,7 +98,7 @@ struct ResultView: View {
                 if !result.wallLines.isEmpty {
                     NavigationLink {
                         Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
-                                         scanId: sent ? scanId : nil) { fresh in
+                                         tiling: $result.tiling, scanId: sent ? scanId : nil) { fresh in
                             try await ensureScanId(fresh: fresh)
                         }
                     } label: {
@@ -134,6 +134,9 @@ struct ResultView: View {
                         }
                     }
                     if !result.wallLines.isEmpty {
+                        NavigationLink { engineeringScreen(.tile) } label: {
+                            tool("Плитка", "square.grid.2x2.fill", "своя плитка, дизайн, расчёт")
+                        }
                         NavigationLink { engineeringScreen(.electric) } label: {
                             tool("Электрика", "bolt.fill", "вырезы и провода в 3D")
                         }
@@ -193,6 +196,7 @@ struct ResultView: View {
         .onChange(of: result.room) { _ in store.update(savedID, result: result) }
         .onChange(of: result.engineering) { _ in store.update(savedID, result: result) }
         .onChange(of: result.defects) { _ in store.update(savedID, result: result) }
+        .onChange(of: result.tiling) { _ in store.update(savedID, result: result) }
         .fullScreenCover(isPresented: $camera) {
             PhotoCameraView { data in usePhoto(data) }
         }
@@ -294,7 +298,7 @@ struct ResultView: View {
     /// «Электрика» и «Сантехника»: голая 3D-модель скана, ставим вырезы, ведём провода и трубы
     private func engineeringScreen(_ mode: EngMode) -> some View {
         Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
-                         fixedMode: mode, scanId: sent ? scanId : nil) { fresh in
+                         fixedMode: mode, tiling: $result.tiling, scanId: sent ? scanId : nil) { fresh in
             try await ensureScanId(fresh: fresh)
         }
     }

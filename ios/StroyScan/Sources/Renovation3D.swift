@@ -342,6 +342,12 @@ final class RenoEditor: NSObject, ObservableObject {
     @Published private(set) var bare = false
     /// Яркость картинки: −1 темнее … +1 светлее (экспозиция камеры)
     @Published private(set) var brightness: Float = 0
+    /// Мебель убрана с модели (чтобы видеть стены и вести провода и трубы)
+    @Published private(set) var furnitureHidden = false
+    /// Вид сверху строго вниз — как план
+    @Published private(set) var topView = false
+    /// Откуда смотрим на комнату снаружи: угол вокруг середины комнаты
+    private var orbitYaw: Float = atan2(0.5, 0.8)
     /// Что ставим по нажатию: вид точки или вид трубы
     @Published var engTool: EngTool?
     @Published var engSelected: UUID?
@@ -656,9 +662,47 @@ final class RenoEditor: NSObject, ObservableObject {
             control.interactionMode = .orbitTurntable
             control.inertiaEnabled = true
             control.target = SCNVector3(room.centroid.x, 0.6, room.centroid.y)
+            // не уходим под пол и не переворачиваемся через верх
+            control.minimumVerticalAngle = 5
+            control.maximumVerticalAngle = 89.5
             chainGestures()
         }
         applyVisibility()
+    }
+
+    func setFurnitureHidden(_ on: Bool) {
+        furnitureHidden = on
+        if pick != nil { select(nil) }
+        itemHolder.isHidden = on
+        addedHolder.isHidden = on || bare
+    }
+
+    /// Повернуть комнату на четверть оборота (кнопками — без возни пальцами)
+    func turnOrbit(_ quarters: Int) {
+        if inside { setInside(false) }
+        if let p = view.pointOfView?.simdWorldPosition {
+            // продолжаем от того места, куда человек уже повернул пальцем
+            let c = room.centroid
+            let v = SIMD2(p.x - c.x, p.z - c.y)
+            if simd_length(v) > 0.3 && !topView { orbitYaw = atan2(v.x, v.y) }
+        }
+        orbitYaw += Float(quarters) * .pi / 2
+        topView = false
+        placeOrbit(animated: true)
+    }
+
+    func setTopView(_ on: Bool) {
+        if inside { setInside(false) }
+        topView = on
+        placeOrbit(animated: true)
+    }
+
+    /// Вся комната целиком, вид по умолчанию
+    func resetView() {
+        if inside { setInside(false) }
+        topView = false
+        orbitYaw = atan2(0.5, 0.8)
+        placeOrbit(animated: true)
     }
 
     func setBare(_ on: Bool) {
@@ -759,11 +803,31 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     private func resetOrbit() {
+        placeOrbit(animated: false)
+    }
+
+    /// Камера снаружи: под углом orbitYaw или строго сверху; комната целиком в кадре
+    private func placeOrbit(animated: Bool) {
         let c = room.centroid
         let span = max(room.hi.x - room.lo.x, room.hi.y - room.lo.y, 2.5)
         let d = span * 1.1 + 1.5
-        orbitCamera.simdPosition = SIMD3(c.x + d * 0.5, d * 0.95 + room.height * 0.3, c.y + d * 0.8)
-        orbitCamera.simdLook(at: SIMD3(c.x, 0.6, c.y))
+        let target = SIMD3(c.x, topView ? 0 : 0.6, c.y)
+        let pos: SIMD3<Float>
+        if topView {
+            pos = SIMD3(c.x, room.height + span * 1.25 + 1, c.y + 0.001)
+        } else {
+            let r = d * 0.94
+            pos = SIMD3(c.x + sin(orbitYaw) * r, d * 0.95 + room.height * 0.3, c.y + cos(orbitYaw) * r)
+        }
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = animated ? 0.6 : 0
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        orbitCamera.simdPosition = pos
+        orbitCamera.simdLook(at: target, up: topView ? SIMD3(0, 0, -1) : SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
+        SCNTransaction.commit()
+        if view.pointOfView === orbitCamera {
+            view.defaultCameraController.target = SCNVector3(target.x, target.y, target.z)
+        }
     }
 
     private func goToViewpoint() {
@@ -951,6 +1015,31 @@ final class RenoEditor: NSObject, ObservableObject {
     /// Солнце через главное окно (с тенями) и мягкий дневной свет от окон
     private func buildLights() {
         lightHolder.childNodes.forEach { $0.removeFromParentNode() }
+        // голая комната — ровный свет без бликов и тёмных углов: всё видно с любой стороны
+        for cam in [orbitCamera.camera, roomCamera.camera] {
+            cam?.vignettingIntensity = bare ? 0 : (cam === roomCamera.camera ? 0.3 : 0.15)
+            cam?.screenSpaceAmbientOcclusionIntensity = bare ? 0.5 : (cam === roomCamera.camera ? 1.0 : 0.8)
+            cam?.wantsExposureAdaptation = !bare && cam === roomCamera.camera
+        }
+        if bare {
+            let amb = SCNLight()
+            amb.type = .ambient
+            amb.intensity = 650
+            amb.temperature = 5500
+            let a = SCNNode()
+            a.light = amb
+            lightHolder.addChildNode(a)
+            let top = SCNLight()
+            top.type = .directional
+            top.intensity = 450
+            top.castsShadow = false
+            let t = SCNNode()
+            t.light = top
+            t.simdPosition = SIMD3(room.centroid.x, 10, room.centroid.y)
+            t.simdLook(at: SIMD3(room.centroid.x + 1.5, 0, room.centroid.y + 2.5))
+            lightHolder.addChildNode(t)
+            return
+        }
         var windows: [(WallGeo, OpeningGeo)] = []
         for (pos, list) in room.openings.enumerated() {
             for o in list where o.kind == "window" { windows.append((room.walls[pos], o)) }
@@ -1238,6 +1327,7 @@ final class RenoEditor: NSObject, ObservableObject {
 
     private func buildItems() {
         itemHolder.childNodes.forEach { $0.removeFromParentNode() }
+        itemHolder.isHidden = furnitureHidden
         itemNodes = [:]
         for i in result.items.indices { rebuildItem(i) }
     }
@@ -1321,7 +1411,7 @@ final class RenoEditor: NSObject, ObservableObject {
     private func buildAdded() {
         addedHolder.childNodes.forEach { $0.removeFromParentNode() }
         // добавленная мебель — часть ремонта, в комнате «как есть» её нет
-        addedHolder.isHidden = bare
+        addedHolder.isHidden = bare || furnitureHidden
         addedNodes = shown.added.indices.map { makeAdded($0) }
         addedNodes.forEach { addedHolder.addChildNode($0) }
     }

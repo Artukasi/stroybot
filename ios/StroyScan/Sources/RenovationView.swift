@@ -92,6 +92,11 @@ struct Renovation3DView: View {
                         .padding()
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
+                if editor.ready && !editor.inside {
+                    viewButtons
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                        .padding(.trailing, 10)
+                }
                 VStack(spacing: 0) {
                     modeBar
                     Spacer()
@@ -127,6 +132,8 @@ struct Renovation3DView: View {
         .onAppear {
             if let fixedMode {
                 editor.setBare(true)
+                // мебель не мешает видеть стены; вернуть — кнопкой справа
+                if !editor.furnitureHidden { editor.setFurnitureHidden(true) }
                 if editor.engMode != fixedMode { editor.setEngMode(fixedMode) }
             }
             editor.start()
@@ -204,9 +211,38 @@ struct Renovation3DView: View {
         .padding(10)
     }
 
+    /// Кнопки справа: повернуть, сверху, вся комната, мебель
+    private var viewButtons: some View {
+        VStack(spacing: 10) {
+            roundButton("rotate.left", "Повернуть влево") { editor.turnOrbit(-1) }
+            roundButton("rotate.right", "Повернуть вправо") { editor.turnOrbit(1) }
+            roundButton(editor.topView ? "cube" : "square.dashed", editor.topView ? "Вид сбоку" : "Вид сверху",
+                        on: editor.topView) { editor.setTopView(!editor.topView) }
+            roundButton("arrow.up.left.and.arrow.down.right", "Вся комната") { editor.resetView() }
+            if editor.bare || editor.engMode != .off {
+                roundButton(editor.furnitureHidden ? "sofa" : "sofa.fill",
+                            editor.furnitureHidden ? "Показать мебель" : "Убрать мебель",
+                            on: editor.furnitureHidden) { editor.setFurnitureHidden(!editor.furnitureHidden) }
+            }
+        }
+    }
+
+    private func roundButton(_ icon: String, _ label: String, on: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(on ? AnyShapeStyle(Palette.signal) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
+                .foregroundStyle(Palette.ink)
+                .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
     /// Комната «как есть»: что это и куда идти за электрикой
     private var bareBar: some View {
-        Text("Комната как после скана: голые стены, мебель — коробками. Розетки и провода — кнопкой «Электрика» под планом, трубы — «Сантехника».")
+        Text("Комната как после скана: голые стены, мебель — коробками (убрать — кнопкой с диваном справа). Розетки и провода — кнопкой «Электрика» под планом, трубы — «Сантехника».")
             .font(.footnote)
             .fixedSize(horizontal: false, vertical: true)
             .padding(10)

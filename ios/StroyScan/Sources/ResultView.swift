@@ -125,6 +125,9 @@ struct ResultView: View {
                     NavigationLink { ClientDocView(scanID: savedID, result: result) } label: {
                         tool("Клиенту", "signature", "смета, план, подпись")
                     }
+                    NavigationLink { EstimateCheckView(result: result) } label: {
+                        tool("Проверить смету", "magnifyingglass.circle", "найти завышения")
+                    }
                     if result.plan.count > 2 {
                         NavigationLink { TileLayoutView(result: result) } label: {
                             tool("Раскладка", "square.grid.3x3", "плитка и ламинат")

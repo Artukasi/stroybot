@@ -27,6 +27,8 @@ struct ContentView: View {
     @State private var showTips = false
     @State private var flatness = false
     @State private var brand = false
+    @State private var addingPlace = false
+    @State private var newPlace = ""
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -245,24 +247,89 @@ struct ContentView: View {
     // MARK: - Мои комнаты
 
     @ViewBuilder private var history: some View {
-        if !store.flats.isEmpty || !store.singles.isEmpty {
+        if !store.flats.isEmpty || !store.singles.isEmpty || !store.places.isEmpty {
+            let place = store.currentPlace
+            let flats = store.flats.filter { place == nil || $0.place == place }.sorted { $0.created > $1.created }
+            let singles = store.singles.filter { place == nil || $0.place == place }
             VStack(alignment: .leading, spacing: 10) {
                 Text("Мои комнаты").font(.title3.bold())
-                ForEach(store.flats.sorted { $0.created > $1.created }) { f in
+                placeChips
+                ForEach(flats) { f in
                     NavigationLink(value: Route.flat(f.id)) { flatRow(f) }
                         .buttonStyle(.plain)
                         .contextMenu {
+                            moveMenu(f.place) { store.move(flat: f.id, to: $0) }
                             Button(role: .destructive) { store.deleteFlat(f.id) } label: { Label("Удалить квартиру", systemImage: "trash") }
                         }
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
                 }
-                ForEach(store.singles) { s in
+                ForEach(singles) { s in
                     NavigationLink(value: Route.room(s.id)) { ScanRow(scan: s) }
                         .buttonStyle(.plain)
                         .contextMenu {
+                            moveMenu(s.place) { store.move(scan: s.id, to: $0) }
                             Button(role: .destructive) { hub.forget(s.id); store.delete(s.id) } label: { Label("Удалить", systemImage: "trash") }
                         }
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
                 }
-                Text("Удалить — долгое нажатие на карточку.").font(.caption).foregroundStyle(.secondary)
+                if flats.isEmpty && singles.isEmpty, let place {
+                    Text("В объекте «\(place)» пока пусто. Новые сканы попадут сюда.").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Text("Перенести в объект или удалить — долгое нажатие на карточку.").font(.caption).foregroundStyle(.secondary)
+            }
+            .animation(.spring(response: 0.35), value: place)
+        }
+    }
+
+    /// Объекты по адресам: «Все», адреса, «+ Объект»
+    private var placeChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip("Все", on: store.currentPlace == nil) { store.currentPlace = nil }
+                ForEach(store.places, id: \.self) { p in
+                    chip(p, on: store.currentPlace == p) { store.currentPlace = p }
+                        .contextMenu {
+                            Button(role: .destructive) { store.removePlace(p) } label: {
+                                Label("Убрать объект (сканы останутся)", systemImage: "folder.badge.minus")
+                            }
+                        }
+                }
+                Button { newPlace = ""; addingPlace = true } label: {
+                    Label("Объект", systemImage: "plus").font(.subheadline.bold())
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .overlay(Capsule().stroke(Palette.draft, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
+                        .foregroundStyle(Palette.draft)
+                }
+            }
+        }
+        .alert("Новый объект", isPresented: $addingPlace) {
+            TextField("ул. Ленина 5, кв. 12", text: $newPlace)
+            Button("Добавить") { store.addPlace(newPlace) }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Адрес или имя клиента. Новые сканы попадут в этот объект.")
+        }
+    }
+
+    private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.subheadline.bold()).lineLimit(1)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(on ? Palette.ink : Color(.secondarySystemGroupedBackground), in: Capsule())
+                .foregroundStyle(on ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private func moveMenu(_ current: String?, _ move: @escaping (String?) -> Void) -> some View {
+        if !store.places.isEmpty {
+            Menu {
+                ForEach(store.places, id: \.self) { p in
+                    Button { move(p) } label: { Label(p, systemImage: current == p ? "checkmark" : "folder") }
+                }
+                if current != nil { Button { move(nil) } label: { Label("Без объекта", systemImage: "tray") } }
+            } label: {
+                Label("Перенести в объект", systemImage: "folder")
             }
         }
     }
@@ -352,6 +419,9 @@ struct ScanRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 3) {
                 Text(scan.room).font(.headline)
+                if let place = scan.place {
+                    Label(place, systemImage: "mappin").font(.caption).foregroundStyle(Palette.draft).lineLimit(1)
+                }
                 Text("пол \(fmt(scan.floorArea)) м² · стены \(fmt(scan.wallArea)) м²")
                     .font(.subheadline).foregroundStyle(.secondary)
                 HStack(spacing: 6) {

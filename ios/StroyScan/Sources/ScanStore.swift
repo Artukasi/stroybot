@@ -23,6 +23,8 @@ struct SavedScan: Identifiable, Codable, Equatable {
     var look: Data?
     /// Растёт при пересъёмке и досъёмке: экран комнаты открывается заново
     var revision = 0
+    /// Объект (адрес), к которому относится комната
+    var place: String?
 }
 
 /// Квартира: комнаты, снятые подряд. Если снимали за один раз (iOS 17), у комнат общие координаты
@@ -33,6 +35,7 @@ struct SavedFlat: Identifiable, Codable, Equatable {
     var rooms: [UUID] = []
     /// Контур пола каждой комнаты в общих координатах квартиры, метры (пусто — комнаты снимали по отдельности)
     var outlines: [UUID: [[Double]]] = [:]
+    var place: String?
 }
 
 /// История сканов и очередь отправки в бот. Всё хранится в телефоне, в папке приложения.
@@ -63,6 +66,55 @@ final class ScanStore: ObservableObject {
         }
     }
 
+    // MARK: - Объекты (адреса)
+
+    /// Выбранный объект на главном: новые сканы попадают в него; nil — все
+    @Published var currentPlace: String? = UserDefaults.standard.string(forKey: "place.current") {
+        didSet { UserDefaults.standard.set(currentPlace, forKey: "place.current") }
+    }
+
+    /// Все объекты: из сканов и добавленные вручную (пока пустые)
+    var places: [String] {
+        let manual = UserDefaults.standard.stringArray(forKey: "place.list") ?? []
+        let used = scans.compactMap(\.place) + flats.compactMap(\.place)
+        var seen = Set<String>()
+        return (manual + used).filter { seen.insert($0).inserted }
+    }
+
+    func addPlace(_ name: String) {
+        let n = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard !n.isEmpty else { return }
+        var list = UserDefaults.standard.stringArray(forKey: "place.list") ?? []
+        if !list.contains(n) { list.append(n) }
+        UserDefaults.standard.set(list, forKey: "place.list")
+        currentPlace = n
+        objectWillChange.send()
+    }
+
+    func removePlace(_ name: String) {
+        var list = UserDefaults.standard.stringArray(forKey: "place.list") ?? []
+        list.removeAll { $0 == name }
+        UserDefaults.standard.set(list, forKey: "place.list")
+        for i in scans.indices where scans[i].place == name { scans[i].place = nil }
+        for i in flats.indices where flats[i].place == name { flats[i].place = nil }
+        if currentPlace == name { currentPlace = nil }
+        persist()
+    }
+
+    /// Перенести комнату в объект (комнаты квартиры переносятся вместе с ней)
+    func move(scan id: UUID, to place: String?) {
+        guard let i = scans.firstIndex(where: { $0.id == id }) else { return }
+        scans[i].place = place
+        persist()
+    }
+
+    func move(flat id: UUID, to place: String?) {
+        guard let i = flats.firstIndex(where: { $0.id == id }) else { return }
+        flats[i].place = place
+        for r in flats[i].rooms { if let j = scans.firstIndex(where: { $0.id == r }) { scans[j].place = place } }
+        persist()
+    }
+
     var pendingCount: Int { scans.filter(\.pending).count }
 
     /// Комнаты без квартиры, новые сверху
@@ -79,6 +131,7 @@ final class ScanStore: ObservableObject {
     func add(_ result: RoomResult, flat: UUID? = nil) -> SavedScan {
         var s = SavedScan(room: result.room, floorArea: result.floorArea, wallArea: result.wallArea,
                           score: result.quality.score, flat: flat)
+        s.place = currentPlace
         write(result, to: s.id)
         s.updated = Date()
         scans.append(s)
@@ -151,6 +204,7 @@ final class ScanStore: ObservableObject {
 
     func addFlat(name: String, rooms: [(RoomResult, [[Double]]?)]) -> SavedFlat {
         var f = SavedFlat(name: name)
+        f.place = currentPlace
         for (result, outline) in rooms {
             let s = add(result, flat: f.id)
             f.rooms.append(s.id)

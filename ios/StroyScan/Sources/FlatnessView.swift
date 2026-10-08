@@ -302,6 +302,7 @@ struct FlatnessView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var photo: SnapPhoto?
     @State private var reveal = false
+    @State private var leveling = false
 
     var body: some View {
         ZStack {
@@ -343,6 +344,9 @@ struct FlatnessView: View {
             .padding()
         }
         .sheet(item: $photo) { SnapPhotoView(photo: $0) }
+        .sheet(isPresented: $leveling) {
+            if let r = checker.result { LevelingCalc(result: r) }
+        }
         .onAppear { checker.run() }
         .onDisappear { checker.stop() }
     }
@@ -402,6 +406,10 @@ struct FlatnessView: View {
             Label(verdict.0, systemImage: range <= 6 ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                 .font(.subheadline.bold()).foregroundStyle(verdict.1)
             legend
+            Button { leveling = true } label: {
+                Label("Сколько смеси, чтобы выровнять", systemImage: "shippingbox")
+                    .font(.subheadline.bold())
+            }
             Text("Точность лидара около ±3 мм. Для финишной отделки норма — 2–3 мм на 2 м, её проверяют правилом.")
                 .font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 10) {
@@ -466,5 +474,83 @@ struct FlatnessView: View {
             .offset(y: 16)
         }
         .padding(.bottom, 16)
+    }
+}
+
+/// Сколько смеси выровнять по карте ровности: слой — от самого высокого места плюс минимальный слой смеси
+struct LevelingCalc: View {
+    let result: FlatnessChecker.Result
+    @Environment(\.dismiss) private var dismiss
+    @State private var area: Double
+    @State private var mix = 0
+
+    struct Mix {
+        let title: String
+        /// Минимальный слой, мм
+        let minLayer: Double
+        /// Расход, кг на 1 м² на 1 мм
+        let rate: Double
+        let bag: Double
+    }
+
+    private var mixes: [Mix] {
+        result.surface == "Стена" || result.surface == "Потолок"
+            ? [Mix(title: "Гипсовая штукатурка", minLayer: 5, rate: 0.9, bag: 30),
+               Mix(title: "Цементная штукатурка", minLayer: 6, rate: 1.6, bag: 25),
+               Mix(title: "Шпаклёвка (до 3 мм)", minLayer: 1, rate: 1.1, bag: 20)]
+            : [Mix(title: "Наливной пол", minLayer: 5, rate: 1.6, bag: 25),
+               Mix(title: "Стяжка (ЦПС)", minLayer: 30, rate: 2.0, bag: 40),
+               Mix(title: "Финишный наливной (до 10 мм)", minLayer: 2, rate: 1.5, bag: 20)]
+    }
+
+    init(result: FlatnessChecker.Result) {
+        self.result = result
+        _area = State(initialValue: max(1, (result.area * 10).rounded() / 10))
+    }
+
+    var body: some View {
+        let m = mixes[min(mix, mixes.count - 1)]
+        // средний слой: выводим всё к самой высокой точке, плюс минимальный слой смеси
+        let mean = result.cells.map(\.dev).reduce(0, +) / Double(max(result.cells.count, 1))
+        let layer = (result.bump - mean) * 1000 + m.minLayer
+        let kg = area * layer * m.rate
+        let bags = Int((kg / m.bag * 1.05).rounded(.up))
+        return NavigationStack {
+            Form {
+                Section {
+                    Picker("Смесь", selection: $mix) {
+                        ForEach(mixes.indices, id: \.self) { Text(mixes[$0].title).tag($0) }
+                    }
+                    HStack {
+                        Text("Площадь, м²")
+                        Spacer()
+                        TextField("", value: $area, format: .number).keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing).frame(width: 90).textFieldStyle(.roundedBorder)
+                    }
+                } footer: {
+                    Text("Проверили \(fmt((result.area * 100).rounded() / 100)) м². Поставьте площадь всего пола или стены — перепад считаем таким же.")
+                }
+                Section("Нужно") {
+                    row("Средний слой", "\(Int(layer.rounded())) мм")
+                    row("Смеси", "\(Int(kg.rounded())) кг")
+                    row("Мешков по \(Int(m.bag)) кг (+5%)", "\(bags)").bold()
+                }
+                Section {
+                    Text("Слой: от самого высокого места (+\(Int((result.bump * 1000).rounded())) мм) и минимум \(Int(m.minLayer)) мм смеси. Расход \(fmt(m.rate)) кг на 1 м² на 1 мм — как у большинства производителей; точный — на мешке.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Сколько смеси")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
+        }
+    }
+
+    private func row(_ t: String, _ v: String) -> some View {
+        HStack {
+            Text(t)
+            Spacer()
+            Text(v).monospacedDigit()
+        }
     }
 }

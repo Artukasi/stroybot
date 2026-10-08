@@ -118,16 +118,32 @@ struct ResultView: View {
                         .foregroundStyle(Palette.ink)
                 }
 
-                HStack(spacing: 10) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                     NavigationLink { EstimateView(result: result) } label: {
                         tool("Смета", "rublesign.circle", "материалы и работы")
+                    }
+                    NavigationLink { ClientDocView(scanID: savedID, result: result) } label: {
+                        tool("Клиенту", "signature", "смета, план, подпись")
+                    }
+                    if result.plan.count > 2 {
+                        NavigationLink { TileLayoutView(result: result) } label: {
+                            tool("Раскладка", "square.grid.3x3", "плитка и ламинат")
+                        }
+                        NavigationLink { WarmFloorView(result: result) } label: {
+                            tool("Тёплый пол", "thermometer.sun", "кабель, мат, вода")
+                        }
+                    }
+                    if !result.wallLines.isEmpty {
+                        NavigationLink { KitchenView(result: result) } label: {
+                            tool("Кухня", "cooktop", "модули по размерам")
+                        }
                     }
                     if versionCount > 0 {
                         NavigationLink { CompareView(id: savedID, now: result) } label: {
                             tool("Было — стало", "clock.arrow.2.circlepath", versionCount == 1 ? "прошлая съёмка" : "съёмок: \(versionCount)")
                         }
                     } else {
-                        Button { shareDXF() } label: { tool("Чертёж DXF", "pencil.and.ruler", "для AutoCAD и дизайнера") }
+                        Button { shareDXF() } label: { tool("Чертёж DXF", "pencil.and.ruler", "для AutoCAD") }
                     }
                 }
                 .buttonStyle(PressStyle())

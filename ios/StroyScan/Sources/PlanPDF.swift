@@ -147,6 +147,99 @@ enum PlanPDF {
         footer()
     }
 
+    // MARK: - Документ для клиента
+
+    /// План, смета по своим ценам, фото, дефекты и подпись клиента — одним PDF
+    static func clientDoc(_ r: RoomResult, client: String, address: String, withPlan: Bool, withEstimate: Bool,
+                          withPhoto: Bool, withDefects: Bool, signature: UIImage?, photos: @escaping (UUID) -> UIImage?) -> URL? {
+        let rows = Estimate.rows(for: r).filter { Estimate.isOn($0) }
+        let total = rows.reduce(0) { $0 + Estimate.cost($1, Estimate.price($1)) }
+        return render(name: "Смета \(r.room)" + (client.isEmpty ? "" : " — \(client)")) { ctx in
+            ctx.beginPage()
+            var y = header(title: "Смета и план", subtitle: r.room)
+            let info = [("Заказчик", client), ("Адрес", address), ("Дата", Date().formatted(date: .long, time: .omitted)),
+                        ("Помещение", "\(r.room): пол \(fmt(r.floorArea)) м², стены \(fmt(r.wallArea)) м², высота \(fmt(r.height)) м")]
+            for (t, v) in info where !v.isEmpty {
+                text(t, at: CGPoint(x: margin, y: y), size: 10, color: grey)
+                text(v, at: CGPoint(x: margin + 110, y: y), size: 11, bold: true, width: page.width - 2 * margin - 110)
+                y += 22
+            }
+            if withEstimate {
+                y += 8
+                let band = CGRect(x: margin, y: y, width: page.width - 2 * margin, height: 54)
+                let p = UIBezierPath(roundedRect: band, cornerRadius: 12)
+                ink.setFill()
+                p.fill()
+                text("ИТОГО ПО СМЕТЕ", at: CGPoint(x: band.minX + 16, y: band.minY + 10), size: 9, bold: true, color: signal)
+                text(Estimate.money(total), at: CGPoint(x: band.minX + 16, y: band.minY + 22), size: 20, bold: true, color: .white)
+                y = band.maxY + 18
+                y = estimateTable(rows, from: y, ctx: ctx, room: r.room)
+            }
+            if withPhoto, let data = r.photo, let img = UIImage(data: data) {
+                if y > page.height - 300 { footer(); ctx.beginPage(); y = header(title: r.room, subtitle: "Фото помещения") }
+                let box = CGRect(x: margin, y: y + 6, width: page.width - 2 * margin, height: min(260, page.height - 140 - y))
+                let g = UIGraphicsGetCurrentContext()
+                g?.saveGState()
+                UIBezierPath(roundedRect: box, cornerRadius: 12).addClip()
+                let k = max(box.width / img.size.width, box.height / img.size.height)
+                let sz = CGSize(width: img.size.width * k, height: img.size.height * k)
+                img.draw(in: CGRect(x: box.midX - sz.width / 2, y: box.midY - sz.height / 2, width: sz.width, height: sz.height))
+                g?.restoreGState()
+                y = box.maxY + 14
+            }
+            if y > page.height - 200 { footer(); ctx.beginPage(); y = header(title: r.room, subtitle: "Подписи") }
+            signatures(at: max(y + 10, page.height - 190), signature: signature, client: client)
+            footer()
+            if withPlan {
+                roomPage(r, ctx)
+                if !r.engineering.isEmpty { engineeringPage(r, ctx) }
+            }
+            if withDefects && !r.defects.isEmpty { defectsPages(r, photos: photos, ctx) }
+        }
+    }
+
+    private static func estimateTable(_ rows: [Estimate.Row], from start: CGFloat, ctx: UIGraphicsPDFRendererContext, room: String) -> CGFloat {
+        var y = start
+        let widths: [CGFloat] = [245, 80, 90, 100]
+        for section in Estimate.Section.allCases {
+            let list = rows.filter { $0.section == section }
+            guard !list.isEmpty else { continue }
+            if y > page.height - 120 { footer(); ctx.beginPage(); y = header(title: room, subtitle: "Смета (продолжение)") }
+            text(section.rawValue, at: CGPoint(x: margin, y: y), size: 12, bold: true)
+            y += 18
+            y = tableRow(["Наименование", "Кол-во", "Цена", "Сумма"], widths, y: y, bold: true)
+            var sum = 0.0
+            for row in list {
+                if y > page.height - 70 { footer(); ctx.beginPage(); y = header(title: room, subtitle: "Смета (продолжение)") }
+                let price = Estimate.price(row), cost = Estimate.cost(row, price)
+                sum += cost
+                y = tableRow([row.title, "\(Estimate.qty(row.qty, row.unit)) \(row.unit)", Estimate.money(price), Estimate.money(cost)], widths, y: y)
+            }
+            y = tableRow(["Итого: \(section.rawValue.lowercased())", "", "", Estimate.money(sum)], widths, y: y, bold: true)
+            y += 10
+        }
+        return y
+    }
+
+    private static func signatures(at y: CGFloat, signature: UIImage?, client: String) {
+        let w = (page.width - 2 * margin - 30) / 2
+        let brand = Brand.current
+        for (i, who) in ["Исполнитель", "Заказчик"].enumerated() {
+            let x = margin + CGFloat(i) * (w + 30)
+            text(who, at: CGPoint(x: x, y: y), size: 10, bold: true)
+            if i == 1, let signature {
+                let h: CGFloat = 70
+                let sw = min(w, h * signature.size.width / max(signature.size.height, 1))
+                signature.draw(in: CGRect(x: x, y: y + 18, width: sw, height: h))
+            }
+            line(from: CGPoint(x: x, y: y + 92), to: CGPoint(x: x + w, y: y + 92), color: ink, width: 0.8)
+            let name = i == 0 ? [brand.name, brand.phone].filter { !$0.isEmpty }.joined(separator: ", ") : client
+            text(name.isEmpty ? "подпись, ФИО" : name, at: CGPoint(x: x, y: y + 96), size: 8.5, color: grey, width: w)
+        }
+        text("С объёмами и ценами согласен. Объёмы посчитаны по скану лидаром; перед закупкой материалов ключевые размеры проверяются рулеткой.",
+             at: CGPoint(x: margin, y: y + 124), size: 8, color: grey, width: page.width - 2 * margin)
+    }
+
     // MARK: - Дефекты
 
     /// План с номерами, дальше карточки: фото, что, где, заметка, исправлено ли

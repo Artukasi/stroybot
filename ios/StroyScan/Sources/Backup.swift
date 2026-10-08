@@ -13,7 +13,7 @@ final class Backup: ObservableObject {
     @Published private(set) var offer: Date?
     @Published var message: String?
 
-    nonisolated static let settingPrefixes = ["brand.", "price.", "on."]
+    nonisolated static let settingPrefixes = ["brand.", "price.", "on.", "place.list", "tile.", "lam."]
 
     /// Сохранить копию. auto — тихо, раз в 10 минут и только если что-то поменялось
     func save(_ store: ScanStore, _ link: BotLink, auto: Bool = false, throttle: Bool = true) async {
@@ -91,7 +91,7 @@ final class Backup: ObservableObject {
         }
         var settings: [String: Any] = [:]
         for (k, v) in UserDefaults.standard.dictionaryRepresentation() where settingPrefixes.contains(where: { k.hasPrefix($0) }) {
-            if v is String || v is NSNumber { settings[k] = v }
+            if v is String || v is NSNumber || v is [String] { settings[k] = v }
         }
         let json = try JSONSerialization.data(withJSONObject: settings)
         try json.write(to: copy.appendingPathComponent("settings.json"))

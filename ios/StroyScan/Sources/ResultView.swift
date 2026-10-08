@@ -122,8 +122,8 @@ struct ResultView: View {
                     NavigationLink { EstimateView(result: result) } label: {
                         tool("Смета", "rublesign.circle", "материалы и работы")
                     }
-                    NavigationLink { ClientDocView(scanID: savedID, result: result) } label: {
-                        tool("Клиенту", "signature", "смета, план, подпись")
+                    NavigationLink { ClientDocView(scanID: savedID, result: result, look: look) } label: {
+                        tool("Клиенту", "signature", "PDF и страница с 3D")
                     }
                     NavigationLink { EstimateCheckView(result: result) } label: {
                         tool("Проверить смету", "magnifyingglass.circle", "найти завышения")

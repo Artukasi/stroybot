@@ -3,8 +3,11 @@ import SwiftUI
 /// Документ для клиента: смета по вашим ценам, план, фото, дефекты и подпись клиента пальцем — одним PDF
 struct ClientDocView: View {
     @EnvironmentObject var store: ScanStore
+    @EnvironmentObject var tiles: TileLibrary
     let scanID: UUID
     let result: RoomResult
+    /// Ремонт из 3D — для файла-страницы с 3D
+    var look = Look()
     @AppStorage("doc.client") private var client = ""
     @State private var address = ""
     @State private var withPlan = true
@@ -45,6 +48,14 @@ struct ClientDocView: View {
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
             }
+            Section {
+                Button { makeWeb() } label: {
+                    Label("Файл-страница: 3D, план и смета", systemImage: "globe")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                }
+            } footer: {
+                Text("Один файл .html — отправьте клиенту в Telegram, WhatsApp или почтой. Открывается в любом браузере без интернета и программ: комнату можно крутить пальцем. На iPhone клиенту лучше открыть файл через Safari или Chrome — в простом просмотре файлов 3D не крутится, но план и смета видны.")
+            }
         }
         .navigationTitle("Документ для клиента")
         .navigationBarTitleDisplayMode(.inline)
@@ -52,7 +63,27 @@ struct ClientDocView: View {
             if address.isEmpty { address = store.scan(scanID)?.place ?? "" }
         }
         .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
-        .alert("Не получилось собрать PDF", isPresented: $failed) { Button("OK", role: .cancel) {} }
+        .alert("Не получилось собрать файл", isPresented: $failed) { Button("OK", role: .cancel) {} }
+    }
+
+    private func makeWeb() {
+        var extra = ClientWeb.Extra()
+        extra.client = client.trimmingCharacters(in: .whitespaces)
+        extra.address = address.trimmingCharacters(in: .whitespaces)
+        extra.withEstimate = withEstimate
+        extra.withDefects = withDefects
+        if !result.tiling.zones.isEmpty {
+            let items = Dictionary(tiles.tiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            extra.finishing = TileCalc.text(TileCalc.total(result.tiling, items: items, room: Room3D(result)), room: result.room)
+        }
+        let id = scanID
+        let s = store
+        extra.defectPhoto = { s.defectPhoto(id, $0) }
+        if let url = ClientWeb.file(result, look: look, extra: extra) {
+            share = ShareFile(url: url)
+        } else {
+            failed = true
+        }
     }
 
     private func make() {

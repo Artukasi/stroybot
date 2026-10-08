@@ -117,10 +117,29 @@ struct ResultView: View {
                         .foregroundStyle(Palette.ink)
                 }
 
+                HStack(spacing: 10) {
+                    NavigationLink { EstimateView(result: result) } label: {
+                        tool("Смета", "rublesign.circle", "материалы и работы")
+                    }
+                    if versionCount > 0 {
+                        NavigationLink { CompareView(id: savedID, now: result) } label: {
+                            tool("Было — стало", "clock.arrow.2.circlepath", versionCount == 1 ? "прошлая съёмка" : "съёмок: \(versionCount)")
+                        }
+                    } else {
+                        Button { shareDXF() } label: { tool("Чертёж DXF", "pencil.and.ruler", "для AutoCAD и дизайнера") }
+                    }
+                }
+                .buttonStyle(PressStyle())
+
                 sendButton
                 if sent, let scanId { designSection(scanId) }
                 Button { sharePDF() } label: {
                     Label("План в PDF — для клиента или магазина", systemImage: "doc.richtext")
+                }
+                if versionCount > 0 {
+                    Button { shareDXF() } label: {
+                        Label("Чертёж DXF — для AutoCAD и дизайнера", systemImage: "pencil.and.ruler")
+                    }
                 }
                 Button { shareScanFile() } label: {
                     Label("Файл скана для бота", systemImage: "doc.badge.arrow.up")
@@ -367,6 +386,27 @@ struct ResultView: View {
             share = ShareFile(url: url)
         } else {
             note = "Не получилось собрать PDF."
+        }
+    }
+
+    private var versionCount: Int { store.versionCount(savedID) }
+
+    private func tool(_ title: String, _ icon: String, _ sub: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: icon).font(.title2).foregroundStyle(Palette.signal)
+            Text(title).font(.headline).foregroundStyle(.white)
+            Text(sub).font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func shareDXF() {
+        if let url = PlanDXF.room(result) {
+            share = ShareFile(url: url)
+        } else {
+            note = "Не получилось собрать чертёж."
         }
     }
 

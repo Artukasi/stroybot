@@ -205,6 +205,8 @@ struct MeasureView: View {
     @StateObject private var ruler = Ruler()
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var photo: SnapPhoto?
+    @State private var flash = false
 
     var body: some View {
         ZStack {
@@ -234,7 +236,9 @@ struct MeasureView: View {
             }
             .padding()
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: ruler.live != nil)
+            Color.white.opacity(flash ? 0.85 : 0).ignoresSafeArea().allowsHitTesting(false)
         }
+        .sheet(item: $photo) { SnapPhotoView(photo: $0) }
         .onAppear { ruler.run() }
         .onDisappear { ruler.stop() }
     }
@@ -255,6 +259,15 @@ struct MeasureView: View {
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(.ultraThinMaterial, in: Capsule())
             Spacer()
+            if !ruler.list.isEmpty {
+                Button { snap() } label: {
+                    Image(systemName: "camera.fill").font(.title3).frame(width: 44, height: 44)
+                        .background(Palette.signal, in: Circle())
+                        .foregroundStyle(Palette.ink)
+                }
+                .accessibilityLabel("Фото с размерами")
+                .transition(.scale.combined(with: .opacity))
+            }
             if ruler.hasTorch {
                 Button { ruler.setTorch(!ruler.torch) } label: {
                     Image(systemName: ruler.torch ? "flashlight.on.fill" : "flashlight.off.fill")
@@ -266,6 +279,18 @@ struct MeasureView: View {
                 .accessibilityLabel(ruler.torch ? "Выключить фонарик" : "Включить фонарик")
             }
         }
+    }
+
+    /// Снимок камеры с линиями и цифрами + полоса внизу: размеры, дата, бригада
+    private func snap() {
+        let shot = ruler.view.snapshot()
+        let sizes = ruler.list.reversed().enumerated().map { "\($0.offset + 1). \(Ruler.text($0.element.meters))" }
+        withAnimation(.easeOut(duration: 0.08)) { flash = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.easeIn(duration: 0.35)) { flash = false }
+        }
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        photo = SnapPhoto(image: SnapPhoto.compose(shot, sizes: sizes))
     }
 
     private var controls: some View {
@@ -318,5 +343,76 @@ struct MeasureView: View {
             .accessibilityLabel("Скопировать размеры")
         }
         .onChange(of: ruler.list.count) { _ in copied = false }
+    }
+}
+
+/// Фото с размерами
+struct SnapPhoto: Identifiable {
+    let id = UUID()
+    let image: UIImage
+
+    static func compose(_ shot: UIImage, sizes: [String]) -> UIImage {
+        let w = shot.size.width
+        let brand = Brand.current
+        let footer = [brand.name, brand.phone].filter { !$0.isEmpty }.joined(separator: " · ")
+        let band: CGFloat = footer.isEmpty ? 64 : 84
+        let size = CGSize(width: w, height: shot.size.height + band)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            shot.draw(at: .zero)
+            UIColor(Palette.ink).setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: shot.size.height, width: w, height: band)).fill()
+            UIColor(Palette.signal).setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: shot.size.height, width: w, height: 3)).fill()
+            let big: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 17, weight: .heavy), .foregroundColor: UIColor.white]
+            let small: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11, weight: .medium),
+                                                        .foregroundColor: UIColor.white.withAlphaComponent(0.7)]
+            (sizes.joined(separator: "   ") as NSString)
+                .draw(with: CGRect(x: 14, y: shot.size.height + 12, width: w - 28, height: 24),
+                      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: big, context: nil)
+            let date = Date().formatted(date: .long, time: .shortened)
+            let line = [date, footer, "СтройСкан, замер лидаром"].filter { !$0.isEmpty }.joined(separator: "\n")
+            (line as NSString).draw(with: CGRect(x: 14, y: shot.size.height + 36, width: w - 28, height: band - 38),
+                                    options: [.usesLineFragmentOrigin], attributes: small, context: nil)
+        }
+    }
+}
+
+struct SnapPhotoView: View {
+    let photo: SnapPhoto
+    @Environment(\.dismiss) private var dismiss
+    @State private var saved = false
+    @State private var sharing = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Image(uiImage: photo.image).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .shadow(radius: 10)
+                HStack(spacing: 12) {
+                    Button {
+                        UIImageWriteToSavedPhotosAlbum(photo.image, nil, nil, nil)
+                        withAnimation(.spring()) { saved = true }
+                    } label: {
+                        Label(saved ? "В «Фото»" : "Сохранить", systemImage: saved ? "checkmark" : "square.and.arrow.down")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
+                            .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
+                            .foregroundStyle(Palette.ink)
+                    }
+                    .disabled(saved)
+                    Button { sharing = true } label: {
+                        Label("Отправить", systemImage: "square.and.arrow.up")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
+                            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 14))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding()
+            .navigationTitle("Фото с размерами")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
+            .sheet(isPresented: $sharing) { ActivitySheet(items: [photo.image]) }
+        }
     }
 }

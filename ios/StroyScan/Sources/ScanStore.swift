@@ -87,8 +87,9 @@ final class ScanStore: ObservableObject {
     }
 
     /// Скан изменился (название, фото, пересъёмка). Отправленный в бот надо будет отправить заново
-    func update(_ id: UUID, result: RoomResult, resend: Bool = false) {
+    func update(_ id: UUID, result: RoomResult, resend: Bool = false, archive: Bool = false) {
         guard let i = scans.firstIndex(where: { $0.id == id }) else { return }
+        if archive { keepVersion(id) }
         write(result, to: id)
         scans[i].room = result.room
         scans[i].floorArea = result.floorArea
@@ -199,6 +200,56 @@ final class ScanStore: ObservableObject {
     func photo(_ id: UUID) -> UIImage? {
         UIImage(contentsOfFile: folder(id).appendingPathComponent("photo.jpg").path)
     }
+
+    // MARK: - Прошлые съёмки (прогресс стройки)
+
+    /// Прошлая съёмка комнаты: когда снята и что было
+    struct Version: Identifiable {
+        let id: String
+        let date: Date
+        let result: RoomResult
+    }
+
+    static let maxVersions = 10
+
+    /// Пересъёмка: прежний скан и фото уходят в «versions/<время>», чтобы сравнить «было — стало»
+    private func keepVersion(_ id: UUID) {
+        let dir = folder(id)
+        let scan = dir.appendingPathComponent("scan.json")
+        guard FileManager.default.fileExists(atPath: scan.path) else { return }
+        let date = scans.first { $0.id == id }?.updated ?? Date()
+        let v = dir.appendingPathComponent("versions/\(Int(date.timeIntervalSince1970))", isDirectory: true)
+        try? FileManager.default.createDirectory(at: v, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: v.appendingPathComponent("scan.json"))
+        try? FileManager.default.copyItem(at: scan, to: v.appendingPathComponent("scan.json"))
+        let photo = dir.appendingPathComponent("photo.jpg")
+        if FileManager.default.fileExists(atPath: photo.path) {
+            try? FileManager.default.removeItem(at: v.appendingPathComponent("photo.jpg"))
+            try? FileManager.default.copyItem(at: photo, to: v.appendingPathComponent("photo.jpg"))
+        }
+        // старые съёмки сверх десяти — удаляем
+        let all = versionFolders(id)
+        for old in all.dropLast(Self.maxVersions) { try? FileManager.default.removeItem(at: old) }
+    }
+
+    private func versionFolders(_ id: UUID) -> [URL] {
+        let dir = folder(id).appendingPathComponent("versions", isDirectory: true)
+        let list = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return list.filter { Int($0.lastPathComponent) != nil }.sorted { Int($0.lastPathComponent)! < Int($1.lastPathComponent)! }
+    }
+
+    /// Прошлые съёмки, старые сначала
+    func versions(_ id: UUID) -> [Version] {
+        versionFolders(id).compactMap { v in
+            guard let data = try? Data(contentsOf: v.appendingPathComponent("scan.json")),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  var r = RoomResult(stored: json), let t = Int(v.lastPathComponent) else { return nil }
+            r.photo = try? Data(contentsOf: v.appendingPathComponent("photo.jpg"))
+            return Version(id: v.lastPathComponent, date: Date(timeIntervalSince1970: TimeInterval(t)), result: r)
+        }
+    }
+
+    func versionCount(_ id: UUID) -> Int { versionFolders(id).count }
 
     // MARK: - Очередь отправки
 

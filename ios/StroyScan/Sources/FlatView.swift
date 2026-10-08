@@ -34,6 +34,13 @@ struct FlatView: View {
                     roomList
                     sendButton
                     Button { sharePDF() } label: { Label("План квартиры в PDF", systemImage: "doc.richtext") }
+                    Button {
+                        if let url = PlanDXF.flat(name: flat?.name ?? "Квартира", rooms: rooms.map { $0.1 }, outlines: outlines) {
+                            share = ShareFile(url: url)
+                        } else {
+                            note = "Не получилось собрать чертёж."
+                        }
+                    } label: { Label("Чертёж квартиры DXF — для AutoCAD", systemImage: "pencil.and.ruler") }
                     if let model = store.flatModel(id) {
                         ShareLink(item: model) { Label("3D-модель квартиры (USDZ)", systemImage: "cube") }
                     }

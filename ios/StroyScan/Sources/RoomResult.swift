@@ -72,6 +72,14 @@ struct RoomResult {
         return SIMD3(x * c - z * s - f.y, x * s + z * c - f.z, Double(w.y) - f.w)
     }
 
+    /// План (x, y) и высота от пола → точка мира (ARKit); обратное к toPlan
+    func toWorld(_ p: SIMD3<Double>) -> SIMD3<Float>? {
+        guard let f = worldFrame else { return nil }
+        let c = cos(-f.x), s = sin(-f.x)
+        let x1 = p.x + f.y, z1 = p.y + f.z
+        return SIMD3(Float(x1 * c + z1 * s), Float(p.z + f.w), Float(-x1 * s + z1 * c))
+    }
+
     var perimeter: Double {
         guard plan.count > 2 else { return walls.reduce(0) { $0 + $1.length } }
         return zip(plan, plan.dropFirst() + [plan[0]]).reduce(0) { $0 + simd_distance($1.0, $1.1) }

@@ -73,6 +73,41 @@ struct Engineering: Equatable {
         }
     }
 
+    /// Досъёмка в том же сеансе: план мог повернуться — переносим точки и трубы через мировые координаты.
+    /// nil — координаты съёмок не общие
+    func moved(from old: RoomResult, to new: RoomResult) -> Engineering? {
+        guard old.worldFrame != nil, new.worldFrame != nil else { return nil }
+        let move = { (p: SIMD3<Double>) -> SIMD3<Double>? in
+            guard let w = old.toWorld(p), let q = new.toPlan(w) else { return nil }
+            return SIMD3(q.x, q.y, max(0, q.z))
+        }
+        var out = Engineering()
+        for p in points {
+            guard let q = move(SIMD3(p.x, p.y, p.height)) else { return nil }
+            var n = p
+            n.x = q.x
+            n.y = q.y
+            n.height = q.z
+            if p.wall != nil {
+                if let near = new.nearestWall(SIMD2(q.x, q.y)), near.distance < 0.35 {
+                    n.wall = near.wall
+                    n.offset = near.offset
+                } else {
+                    continue   // стену при досъёмке убрали — точку не на что вешать
+                }
+            }
+            out.points.append(n)
+        }
+        for p in pipes {
+            let pts = p.points.compactMap(move)
+            guard pts.count == p.points.count else { return nil }
+            var n = p
+            n.points = pts
+            out.pipes.append(n)
+        }
+        return out
+    }
+
     // MARK: Подсчёты
 
     /// Кабель: от каждой точки вверх в штробу под потолком (15 см), по стене до крайней точки на ней,

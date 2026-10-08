@@ -53,6 +53,8 @@ struct AssembleView: View {
 struct CountUp: View, Animatable {
     var value: Double
     var digits = 2
+    /// Рубли: «12 400 ₽»
+    var money = false
     var animatableData: Double {
         get { value }
         set { value = newValue }
@@ -60,7 +62,7 @@ struct CountUp: View, Animatable {
 
     var body: some View {
         let k = pow(10, Double(digits))
-        Text(fmt((value * k).rounded() / k)).monospacedDigit()
+        Text(money ? Estimate.money(value) : fmt((value * k).rounded() / k)).monospacedDigit()
     }
 }
 

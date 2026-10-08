@@ -24,12 +24,15 @@ struct ContentView: View {
     @State private var showPair = false
     @State private var measuring = false
     @State private var showTips = false
+    @State private var flatness = false
+    @State private var brand = false
 
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HeroCard()
+                    SigningBanner()
                     if !RoomCaptureSession.isSupported {
                         card {
                             Text("На этом iPhone нет лидара").font(.headline)
@@ -65,6 +68,8 @@ struct ContentView: View {
             .onDisappear { hub.scanClosed() }
         }
         .fullScreenCover(isPresented: $measuring) { MeasureView() }
+        .fullScreenCover(isPresented: $flatness) { FlatnessView() }
+        .sheet(isPresented: $brand) { BrandView() }
         .sheet(isPresented: $showPair) { PairView() }
         .alert(link.message ?? "", isPresented: Binding(get: { link.message != nil }, set: { if !$0 { link.message = nil } })) {
             Button("OK", role: .cancel) {}
@@ -89,6 +94,7 @@ struct ContentView: View {
     }
 
     private func done(_ o: ScanOutcome, _ req: ScanRequest) {
+        var extra: String?
         if o.flat {
             let rooms = o.rooms.enumerated().map { i, r in (r, o.outlines.map { $0[i] }) }
             let f = store.addFlat(name: "Квартира", rooms: rooms)
@@ -101,7 +107,18 @@ struct ContentView: View {
                 r.room = old.room
                 // досъёмка с другого места — фото комнаты оставляем прежнее
                 if case .more = req.mode, let photo = store.result(target)?.photo { r.photo = photo }
-                store.update(target, result: r, resend: true)
+                var archive = false
+                if case .room = req.mode { archive = true }
+                // электрика и сантехника: при досъёмке переносим, при пересъёмке они остаются в прошлой съёмке
+                if let prev = store.result(target), !prev.engineering.isEmpty {
+                    if case .more = req.mode, let moved = prev.engineering.moved(from: prev, to: r) {
+                        r.engineering = moved
+                    } else {
+                        archive = true
+                        extra = "Электрику и сантехнику расставьте заново: прежняя расстановка сохранилась в прошлой съёмке («Было — стало»)."
+                    }
+                }
+                store.update(target, result: r, resend: true, archive: archive)
                 hub.keep(o.captured.first ?? [], for: target)
             } else {
                 let s = store.add(r)
@@ -109,7 +126,8 @@ struct ContentView: View {
                 path.append(Route.room(s.id))
             }
         }
-        if let note = o.note { link.message = note }
+        let notes = [o.note, extra].compactMap { $0 }
+        if !notes.isEmpty { link.message = notes.joined(separator: "\n\n") }
     }
 
     /// Квартира, снятая за один раз: общая 3D-модель от Apple (iOS 17)
@@ -143,9 +161,18 @@ struct ContentView: View {
                 tile("Квартира целиком", "square.split.2x2", "комнаты подряд, общий план") {
                     request = ScanRequest(mode: .flat)
                 }
-                tile("Рулетка", "ruler", "замер одной линией") {
+                tile("Рулетка", "ruler", "замер и фото с размерами") {
                     hub.pause()
                     measuring = true
+                }
+            }
+            HStack(spacing: 10) {
+                tile("Ровность", "square.grid.3x3.middle.filled", "горбы и ямы пола и стен") {
+                    hub.pause()
+                    flatness = true
+                }
+                tile("Моя бригада", "person.crop.rectangle", "логотип и телефон в PDF") {
+                    brand = true
                 }
             }
         }

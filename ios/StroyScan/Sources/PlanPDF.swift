@@ -245,8 +245,8 @@ enum PlanPDF {
     /// План с номерами, дальше карточки: фото, что, где, заметка, исправлено ли
     private static func defectsPages(_ r: RoomResult, photos: (UUID) -> UIImage?, _ ctx: UIGraphicsPDFRendererContext) {
         ctx.beginPage()
-        let open = r.defects.filter { !$0.fixed }.count
-        var y = header(title: r.room, subtitle: "Дефекты · \(r.defects.count) шт, не исправлено \(open)")
+        let open = r.defects.filter { !$0.fixed && $0.kind != "note" }.count
+        var y = header(title: r.room, subtitle: "Дефекты и заметки · \(r.defects.count) шт, не исправлено \(open)")
         let planBox = CGRect(x: margin, y: y, width: page.width - 2 * margin, height: 250)
         roundedBox(planBox)
         let inner = planBox.insetBy(dx: 34, dy: 26)
@@ -273,7 +273,7 @@ enum PlanPDF {
             if y + cardH > page.height - 50 {
                 footer()
                 ctx.beginPage()
-                y = header(title: r.room, subtitle: "Дефекты (продолжение)")
+                y = header(title: r.room, subtitle: "Дефекты и заметки (продолжение)")
             }
             let card = CGRect(x: margin, y: y, width: page.width - 2 * margin, height: cardH - 10)
             roundedBox(card)

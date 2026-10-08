@@ -13,6 +13,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Чтобы превратить голосовую заметку в текст.</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arkit</string>

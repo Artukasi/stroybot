@@ -42,7 +42,7 @@ struct Defect: Equatable, Identifiable {
         self.y = y
         height = num(d["height"]) ?? 0
         wall = (d["wall"] as? NSNumber)?.intValue
-        note = String((d["note"] as? String ?? "").prefix(500))
+        note = String((d["note"] as? String ?? "").prefix(1000))
         id = (d["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
         created = num(d["created"]).map { Date(timeIntervalSince1970: $0) } ?? Date()
         fixed = d["fixed"] as? Bool ?? false
@@ -70,6 +70,7 @@ struct DefectKind: Identifiable {
         DefectKind(id: "plumbing", title: "Сантехника", icon: "spigot"),
         DefectKind(id: "window", title: "Окно, дверь", icon: "window.casement"),
         DefectKind(id: "other", title: "Другое", icon: "exclamationmark.bubble"),
+        DefectKind(id: "note", title: "Заметка", icon: "mic.fill"),
     ]
 
     static func find(_ id: String) -> DefectKind? { all.first { $0.id == id } }
@@ -157,15 +158,16 @@ struct DefectsSection: View {
     let scanID: UUID
     @Binding var result: RoomResult
     @State private var adding = false
+    @State private var voice = false
     @State private var open: Defect?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Дефекты", systemImage: "exclamationmark.triangle").font(.headline)
+                Label("Дефекты и заметки", systemImage: "exclamationmark.triangle").font(.headline)
                 Spacer()
-                if !result.defects.isEmpty {
-                    let left = result.defects.filter { !$0.fixed }.count
+                if result.defects.contains(where: { $0.kind != "note" }) {
+                    let left = result.defects.filter { !$0.fixed && $0.kind != "note" }.count
                     Text(left == 0 ? "все исправлены" : "открыто: \(left)").font(.caption.bold())
                         .foregroundStyle(left == 0 ? Color.green : Color.red)
                 }
@@ -173,22 +175,30 @@ struct DefectsSection: View {
             ForEach(Array(result.defects.enumerated()), id: \.element.id) { i, d in
                 Button { open = d } label: { row(i, d) }.buttonStyle(.plain)
             }
-            Button { adding = true } label: {
-                Label("Отметить дефект", systemImage: "plus.viewfinder")
-                    .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
-                    .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-                    .foregroundStyle(.red)
+            HStack(spacing: 10) {
+                Button { voice = false; adding = true } label: {
+                    Label("Дефект", systemImage: "plus.viewfinder")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                        .foregroundStyle(.red)
+                }
+                Button { voice = true; adding = true } label: {
+                    Label("Голосом", systemImage: "mic.fill")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                        .background(Palette.draft.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+                        .foregroundStyle(Palette.draft)
+                }
             }
             .disabled(result.defects.count >= Defect.max || result.plan.count < 3)
             if result.defects.isEmpty {
-                Text("Трещина, протечка, кривой угол: место на плане, фото и заметка. Потом — отчёт в PDF.")
+                Text("Трещина, протечка, кривой угол — или просто заметка голосом к стене («тут розетка выше», «здесь штробить»). Место на плане, фото, текст — всё попадёт в PDF.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
         .sheet(isPresented: $adding) {
-            DefectEditor(scanID: scanID, result: result, defect: nil) { d in
+            DefectEditor(scanID: scanID, result: result, defect: nil, voice: voice) { d in
                 withAnimation(.spring(response: 0.4)) { result.defects.append(d) }
             } onDelete: {}
         }
@@ -232,8 +242,13 @@ struct DefectEditor: View {
     let scanID: UUID
     let result: RoomResult
     let defect: Defect?
+    /// Сразу заметка голосом: вид «Заметка» и включённый микрофон
+    var voice = false
     let onSave: (Defect) -> Void
     let onDelete: () -> Void
+    @StateObject private var dictation = Dictation()
+    /// Текст заметки до начала диктовки — надиктованное дописываем к нему
+    @State private var noteBase = ""
 
     @State private var kind = "crack"
     @State private var note = ""
@@ -289,7 +304,8 @@ struct DefectEditor: View {
                         }
                     }
                     TextField("Заметка: размер, когда появилось, что делать", text: $note, axis: .vertical)
-                        .lineLimit(2...5)
+                        .lineLimit(2...8)
+                    DictateButton(dictation: dictation)
                 }
                 Section("Фото") {
                     if let img = photo.flatMap(UIImage.init(data:)) ?? oldPhoto {
@@ -309,7 +325,7 @@ struct DefectEditor: View {
                     }
                 }
             }
-            .navigationTitle(defect == nil ? "Новый дефект" : "Дефект")
+            .navigationTitle(kind == "note" ? "Заметка" : defect == nil ? "Новый дефект" : "Дефект")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
@@ -324,6 +340,12 @@ struct DefectEditor: View {
                 Task { if let d = try? await item?.loadTransferable(type: Data.self) { photo = d } }
             }
             .onAppear(perform: load)
+            .onChange(of: dictation.running) { on in if on { noteBase = note } }
+            .onChange(of: dictation.text) { said in
+                guard !said.isEmpty else { return }
+                note = noteBase.isEmpty ? said : noteBase + " " + said
+            }
+            .onDisappear { dictation.stop() }
         }
     }
 
@@ -360,6 +382,10 @@ struct DefectEditor: View {
     }
 
     private func load() {
+        if defect == nil && voice && spot == nil {
+            kind = "note"
+            Task { await dictation.start() }
+        }
         guard let d = defect, spot == nil else { return }
         kind = d.kind
         note = d.note
@@ -373,7 +399,7 @@ struct DefectEditor: View {
         guard let spot else { return }
         var d = defect ?? Defect(kind: kind, x: spot.x, y: spot.y, height: height, wall: nil)
         d.kind = kind
-        d.note = String(note.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        d.note = String(note.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
         d.x = spot.x
         d.y = spot.y
         d.height = height

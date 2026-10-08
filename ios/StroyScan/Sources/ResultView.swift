@@ -143,6 +143,9 @@ struct ResultView: View {
                         NavigationLink { engineeringScreen(.plumbing) } label: {
                             tool("Сантехника", "drop.fill", "выводы и трубы в 3D")
                         }
+                        NavigationLink { LightingView(result: result, engineering: $result.engineering) } label: {
+                            tool("Свет", "lightbulb.2.fill", "сколько светильников")
+                        }
                         NavigationLink { KitchenView(result: result) } label: {
                             tool("Кухня", "cooktop", "модули по размерам")
                         }

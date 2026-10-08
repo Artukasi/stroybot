@@ -125,6 +125,9 @@ struct ResultView: View {
                     NavigationLink { ClientDocView(scanID: savedID, result: result, look: look) } label: {
                         tool("Клиенту", "signature", "PDF и страница с 3D")
                     }
+                    NavigationLink { AIView(room: result) } label: {
+                        tool("Нейросети", "sparkles", "смета, КП, дизайн по фото")
+                    }
                     NavigationLink { EstimateCheckView(result: result) } label: {
                         tool("Проверить смету", "magnifyingglass.circle", "найти завышения")
                     }

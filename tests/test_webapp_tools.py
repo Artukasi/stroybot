@@ -345,3 +345,32 @@ def test_scan_backup(fresh_db):
             assert await (await c.get("/scan/backup", headers=a)).read() == b"PK\x03\x04second"
             assert (await c.get("/scan/backup", headers=b)).status == 404
     asyncio.run(run())
+
+
+def test_app_uses_ai_by_token(fresh_db, ai):
+    """Приложение на iPhone зовёт платные функции по ключу из /scanner: те же кредиты, только свои функции."""
+    object.__setattr__(config, "bot_token", TOKEN)
+    bot = FakeBot()
+
+    async def run():
+        async with TestClient(TestServer(create_app(bot))) as c:
+            h = {"X-Telegram-Init-Data": sign({"id": 41})}
+            code = (await (await c.post("/api/scan-code", headers=h)).json())["code"]
+            token = (await (await c.post("/scan/pair", json={"code": code})).json())["token"]
+            app = {"Authorization": f"Bearer {token}"}
+            before = (await (await c.get("/api/profile", headers=app)).json())["credits"]
+            r = await c.post("/api/ai/text", json={"kind": "estimate", "text": "ванная 4 м²"}, headers=app)
+            assert r.status == 200 and "<b>Ответ</b>" in (await r.json())["html"]
+            assert (await r.json())["credits"] == before - PRICES["estimate"]
+            r = await c.post("/api/ai/check", data=photo_form(note="шов"), headers=app)
+            assert r.status == 200
+            r = await c.post("/api/invoice", json={"pack": __import__("bot.config", fromlist=["PACKS"]).PACKS[0][0]}, headers=app)
+            assert (await r.json())["link"].startswith("https://t.me/")
+            # объекты и сканы Mini App ключом приложения не открыть, чужой ключ не подходит
+            assert (await c.get("/api/objects/archived", headers=app)).status == 401
+            assert (await c.get("/api/scans", headers=app)).status == 401
+            assert (await c.get("/api/profile", headers={"Authorization": "Bearer nope"})).status == 401
+            # кредиты общие с ботом
+            assert (await (await c.get("/api/profile", headers=h)).json())["credits"] == \
+                (await (await c.get("/api/profile", headers=app)).json())["credits"]
+    asyncio.run(run())

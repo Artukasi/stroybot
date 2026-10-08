@@ -5,6 +5,7 @@ import SwiftUI
 enum Route: Hashable {
     case room(UUID)
     case flat(UUID)
+    case ai
 }
 
 /// Запуск съёмки: что снимаем и какую запись обновить (пересъёмка и досъёмка)
@@ -62,6 +63,8 @@ struct ContentView: View {
                         .id("\(id)-\(store.scan(id)?.revision ?? 0)")
                 case .flat(let id):
                     FlatView(id: id) { path.append(Route.room($0)) }
+                case .ai:
+                    AIView()
                 }
             }
         }
@@ -185,6 +188,22 @@ struct ContentView: View {
                     .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 18)
                     .background(Palette.signal, in: RoundedRectangle(cornerRadius: 18))
                     .foregroundStyle(Palette.ink)
+            }
+            .buttonStyle(PressStyle())
+            Button { path.append(Route.ai) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles").font(.title2).foregroundStyle(Palette.signal)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Нейросети").font(.headline).foregroundStyle(.white)
+                        Text("дизайн по фото, консультант, смета, КП, проверка, отчёт").font(.caption)
+                            .foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(14)
+                .background(LinearGradient(colors: [Palette.ink, Palette.draft], startPoint: .leading, endPoint: .trailing),
+                            in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(PressStyle())
             HStack(spacing: 10) {

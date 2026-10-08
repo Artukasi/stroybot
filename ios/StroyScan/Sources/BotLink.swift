@@ -129,14 +129,42 @@ final class BotLink: ObservableObject {
         try await call("GET", server + "/scan/backup", body: nil, timeout: 180)
     }
 
+    // MARK: Нейросети бота (те же, что в чате и Mini App; кредиты общие)
+
+    /// JSON-запрос к /api/… бота; ответ — словарь
+    func api(_ method: String, _ path: String, json: [String: Any]? = nil, timeout: TimeInterval = 120) async throws -> [String: Any] {
+        let data = try await call(method, server + path, body: json, timeout: timeout, design: true)
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    }
+
+    /// Форма с фото: поля и файлы (имя поля, jpeg). Одинаковые имена — несколько файлов
+    func apiForm(_ path: String, fields: [(String, String)], files: [(String, Data)], timeout: TimeInterval = 240) async throws -> [String: Any] {
+        let boundary = "stroyscan-\(UUID().uuidString)"
+        var body = Data()
+        func add(_ s: String) { body.append(s.data(using: .utf8)!) }
+        for (k, v) in fields {
+            add("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n\(v)\r\n")
+        }
+        for (i, (k, d)) in files.enumerated() {
+            add("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"; filename=\"photo\(i).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+            body.append(d)
+            add("\r\n")
+        }
+        add("--\(boundary)--\r\n")
+        let data = try await call("POST", server + path, body: nil, timeout: timeout, design: true,
+                                  raw: body, contentType: "multipart/form-data; boundary=\(boundary)")
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    }
+
     private func call(_ method: String, _ url: String, body: Any?, auth: Bool = true,
-                      timeout: TimeInterval = 30, design: Bool = false, raw: Data? = nil) async throws -> Data {
+                      timeout: TimeInterval = 30, design: Bool = false, raw: Data? = nil,
+                      contentType: String = "application/zip") async throws -> Data {
         guard let u = URL(string: url) else { throw LinkError.message("Неверный адрес сервера.") }
         var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = method
         if auth, let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let raw {
-            req.setValue("application/zip", forHTTPHeaderField: "Content-Type")
+            req.setValue(contentType, forHTTPHeaderField: "Content-Type")
             req.httpBody = raw
         }
         if let body {
@@ -159,7 +187,7 @@ final class BotLink: ObservableObject {
         let code = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String
         switch status {
         case 401: disconnect(); throw LinkError.message("Подключение сброшено. Получите новый код командой /scanner в боте.")
-        case 402: throw LinkError.message("Не хватает кредитов. Пополните в боте.")
+        case 402: throw LinkError.credits
         case 403: throw LinkError.message("Код не подошёл или устарел. Получите новый командой /scanner в боте.")
         case 404 where code == "scan": throw LinkError.scanMissing
         case 404 where code == "no backup": throw LinkError.message("В боте ещё нет копии.")
@@ -183,9 +211,12 @@ enum LinkError: Error {
     case offline(String)
     /// Скана нет в боте (удалили или другой аккаунт) — надо отправить заново
     case scanMissing
+    /// Не хватает кредитов — можно пополнить прямо из приложения
+    case credits
 
     var text: String {
         switch self {
+        case .credits: return "Не хватает кредитов. Пополните — кнопка «Пополнить» в «Нейросетях»."
         case .message(let t), .offline(let t): return t
         case .scanMissing: return "Скан не найден в боте. Отправьте его ещё раз."
         }

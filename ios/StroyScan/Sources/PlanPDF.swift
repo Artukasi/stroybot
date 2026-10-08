@@ -498,6 +498,58 @@ enum PlanPDF {
         if labels { scaleBar(k: k, at: CGPoint(x: box.minX - 20, y: box.maxY + 12)) }
     }
 
+    // MARK: - Бланк замера окон и дверей
+
+    static func openingsForm(_ r: RoomResult) -> URL? {
+        let lines = OrderSizes.lines(r)
+        let meta: [String: Any] = [kCGPDFContextCreator as String: "СтройСкан", kCGPDFContextTitle as String: "Замер — \(r.room)"]
+        let format = UIGraphicsPDFRendererFormat()
+        format.documentInfo = meta
+        let renderer = UIGraphicsPDFRenderer(bounds: page, format: format)
+        let safe = r.room.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Замер окон и дверей — \(safe).pdf")
+        let widths: [CGFloat] = [62, 36, 92, 52, 120, 78, 75]
+        func head() -> CGFloat {
+            var y = header(title: "Замер окон и дверей", subtitle: r.room)
+            text("Адрес: ______________________________________________   Дата замера: ____________",
+                 at: CGPoint(x: margin, y: y), size: 10)
+            y += 26
+            return tableRow(["Что", "Стена", "Проём по скану, мм", "Низ, мм", "Заказ (ориентир)", "Рулеткой Ш×В", "Стена, мм"],
+                            widths, y: y, bold: true)
+        }
+        do {
+            try renderer.writePDF(to: url) { ctx in
+                ctx.beginPage()
+                var y = head()
+                for l in lines {
+                    if y > page.height - 190 {
+                        footer()
+                        ctx.beginPage()
+                        y = head()
+                    }
+                    y = tableRow([l.title, l.wall.map { "\($0 + 1)" } ?? "—", "\(l.width) × \(l.height)",
+                                  l.kind == "window" ? "\(l.bottom)" : "0", l.order, "____ × ____", "______"], widths, y: y)
+                    text(l.note, at: CGPoint(x: margin + 8, y: y + 8), size: 7.5, color: grey, width: page.width - 2 * margin - 16)
+                    y += 40
+                }
+                y += 10
+                let tips = """
+                Как мерить: ширину проёма — в трёх местах (верх, середина, низ), высоту — слева, посередине и справа; в бланк — меньшее. \
+                Толщину стены — у каждого проёма (нужна для подоконника, откосов и доборов). \
+                Размеры «по скану» сняты лидаром iPhone, точность ±1–2 см; заказ — только по замеру рулеткой.
+                """
+                text(tips, at: CGPoint(x: margin, y: y), size: 9, color: ink, width: page.width - 2 * margin)
+                y += 64
+                text("Замерщик: ____________________   Подпись: ____________     Заказчик: ____________________   Подпись: ____________",
+                     at: CGPoint(x: margin, y: min(y, page.height - 70)), size: 9)
+                footer()
+            }
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Мелочи
 
     @discardableResult

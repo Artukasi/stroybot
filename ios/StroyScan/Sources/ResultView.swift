@@ -147,6 +147,11 @@ struct ResultView: View {
                             tool("Кухня", "cooktop", "модули по размерам")
                         }
                     }
+                    if !result.openings.isEmpty {
+                        NavigationLink { OpeningsView(result: result) } label: {
+                            tool("Окна и двери", "door.left.hand.open", "размеры на заказ")
+                        }
+                    }
                     if versionCount > 0 {
                         NavigationLink { CompareView(id: savedID, now: result) } label: {
                             tool("Было — стало", "clock.arrow.2.circlepath", versionCount == 1 ? "прошлая съёмка" : "съёмок: \(versionCount)")

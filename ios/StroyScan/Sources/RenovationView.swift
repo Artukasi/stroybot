@@ -40,8 +40,14 @@ struct EditorScene: UIViewRepresentable {
 /// Ремонт в 3D по скану: крутить, смотреть из комнаты, менять отделку, свет, шторы и мебель.
 struct Renovation3DView: View {
     @EnvironmentObject var link: BotLink
+    @EnvironmentObject var hub: ScanHub
     @StateObject private var editor: RenoEditor
     @Binding var look: Look
+    /// Электрика и сантехника комнаты
+    @Binding var engineering: Engineering
+    /// Телефон ещё в координатах скана: трубу со скана камерой можно поставить сразу на место
+    var liveScan = false
+    @State private var scanningPipe = false
     /// Отправить скан в бот (true — заново) и вернуть его номер
     let ensureScanId: (Bool) async throws -> Int
     @State private var scanId: Int?
@@ -52,16 +58,29 @@ struct Renovation3DView: View {
     @State private var shot: RenderShot?
     @State private var share: ShareFile?
 
-    init(result: RoomResult, look: Binding<Look>, scanId: Int?, ensureScanId: @escaping (Bool) async throws -> Int) {
-        _editor = StateObject(wrappedValue: RenoEditor(result: result, look: look.wrappedValue))
+    init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false, scanId: Int?,
+         ensureScanId: @escaping (Bool) async throws -> Int) {
+        var r = result
+        r.engineering = engineering.wrappedValue
+        _editor = StateObject(wrappedValue: RenoEditor(result: r, look: look.wrappedValue))
         _look = look
+        _engineering = engineering
+        self.liveScan = liveScan
         _scanId = State(initialValue: scanId)
         self.ensureScanId = ensureScanId
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            styleChips
+            Picker("Режим", selection: Binding(get: { editor.engMode }, set: { editor.setEngMode($0) })) {
+                Text("Ремонт").tag(EngMode.off)
+                Text("Электрика").tag(EngMode.electric)
+                Text("Сантехника").tag(EngMode.plumbing)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 8)
+            if editor.engMode == .off { styleChips }
             ZStack {
                 EditorScene(editor: editor)
                 if !editor.ready {
@@ -72,13 +91,17 @@ struct Renovation3DView: View {
                 VStack(spacing: 0) {
                     modeBar
                     Spacer()
-                    if editor.pick == nil && editor.ready { hintBar }
+                    if editor.pick == nil && editor.ready && editor.engMode == .off { hintBar }
                 }
             }
-            if let pick = editor.pick {
-                EditPanel(editor: editor, pick: pick, alert: $alert)
+            if editor.engMode != .off {
+                EngPanel(editor: editor) { scanningPipe = true }
+            } else {
+                if let pick = editor.pick {
+                    EditPanel(editor: editor, pick: pick, alert: $alert)
+                }
+                bottomBar
             }
-            bottomBar
         }
         .navigationTitle("Ремонт в 3D")
         .navigationBarTitleDisplayMode(.inline)
@@ -101,6 +124,12 @@ struct Renovation3DView: View {
         .onReceive(editor.$look.dropFirst()) { new in
             look = new
             scheduleSave(new)
+        }
+        .onReceive(editor.$eng.dropFirst()) { engineering = $0 }
+        .fullScreenCover(isPresented: $scanningPipe) {
+            PipeScanView(result: editor.result, arSession: liveScan ? hub.session() : nil) { pipe, anchored in
+                editor.addScannedPipe(pipe, anchored: anchored)
+            }
         }
         .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
         .fullScreenCover(item: $shot) { RenderResultView(shot: $0) }
@@ -271,6 +300,7 @@ struct Renovation3DView: View {
         }
         rendering = true
         defer { rendering = false }
+        editor.setEngMode(.off)
         editor.select(nil)
         if !editor.inside {
             editor.setInside(true)

@@ -334,6 +334,19 @@ final class RenoEditor: NSObject, ObservableObject {
     /// Камера в комнате на уровне глаз (иначе — сверху)
     @Published private(set) var inside = false
     @Published private(set) var ready = false
+    /// Электрика и сантехника (см. EngineeringEditor.swift)
+    @Published var eng: Engineering
+    @Published var engMode: EngMode = .off
+    /// Что ставим по нажатию: вид точки или вид трубы
+    @Published var engTool: EngTool?
+    @Published var engSelected: UUID?
+    /// Труба, которую сейчас проводят нажатиями
+    @Published var route: [SIMD3<Double>] = []
+    /// Труба из скана камерой, которую надо привязать к стене
+    @Published var pendingPipe: Engineering.Pipe?
+    @Published var engHint: String?
+    let engHolder = SCNNode()
+    var engWallOf: [UUID: Int] = [:]
 
     let result: RoomResult
     let room: Room3D
@@ -349,7 +362,7 @@ final class RenoEditor: NSObject, ObservableObject {
     private let itemHolder = SCNNode()
     private let addedHolder = SCNNode()
     private let lightHolder = SCNNode()
-    private var wallNodes: [SCNNode] = []
+    private(set) var wallNodes: [SCNNode] = []
     /// Вид за окнами и коридоры за проёмами — только для вида из комнаты
     private var outsideNodes: [[SCNNode]] = []
     private var itemNodes: [Int: SCNNode] = [:]
@@ -380,6 +393,7 @@ final class RenoEditor: NSObject, ObservableObject {
         self.room = Room3D(result)
         self.look = look
         self.shown = look
+        self.eng = result.engineering
         self.view = SCNView(frame: .zero)
         super.init()
         setupScene()
@@ -672,7 +686,8 @@ final class RenoEditor: NSObject, ObservableObject {
         floorHolder.name = "floor"
         ceilingHolder.name = "ceiling"
         lampHolder.name = "lamps"
-        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder] {
+        engHolder.name = "eng"
+        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder] {
             scene.rootNode.addChildNode(n)
         }
         orbitCamera.camera = RenoEditor.camera(room: false)
@@ -778,6 +793,7 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         if !orbit { wallNodes.forEach { $0.isHidden = false } }
         updateCutaway()
+        syncEngVisibility()
     }
 
     private func updateCutaway() {
@@ -787,6 +803,7 @@ final class RenoEditor: NSObject, ObservableObject {
             let hide = simd_dot(c - g.mid, g.normal) < -0.05
             if wallNodes[pos].isHidden != hide { wallNodes[pos].isHidden = hide }
         }
+        syncEngVisibility()
     }
 
     private func buildAll() {
@@ -797,6 +814,7 @@ final class RenoEditor: NSObject, ObservableObject {
         buildAdded()
         buildLamps()
         buildLights()
+        buildEngineering()
         highlight()
         applyVisibility()
     }
@@ -1494,6 +1512,10 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     @objc private func onTap(_ g: UITapGestureRecognizer) {
+        if engMode != .off {
+            engTap(at: g.location(in: view))
+            return
+        }
         select(hitPick(at: g.location(in: view)))
     }
 

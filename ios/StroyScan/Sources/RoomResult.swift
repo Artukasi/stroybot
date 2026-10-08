@@ -59,6 +59,18 @@ struct RoomResult {
     /// Фото комнаты (JPEG) для ИИ-ремонта
     var photo: Data?
     var quality = Quality()
+    /// Электрика и сантехника, которые расставили в 3D
+    var engineering = Engineering()
+    /// Как мировые координаты съёмки переводятся в план: угол поворота, сдвиг x, сдвиг y, уровень пола (y)
+    var worldFrame: SIMD4<Double>?
+
+    /// Точка мира (ARKit) → план (x, y) и высота от пола
+    func toPlan(_ w: SIMD3<Float>) -> SIMD3<Double>? {
+        guard let f = worldFrame else { return nil }
+        let c = cos(-f.x), s = sin(-f.x)
+        let x = Double(w.x), z = Double(w.z)
+        return SIMD3(x * c - z * s - f.y, x * s + z * c - f.z, Double(w.y) - f.w)
+    }
 
     var perimeter: Double {
         guard plan.count > 2 else { return walls.reduce(0) { $0 + $1.length } }
@@ -305,6 +317,7 @@ extension RoomResult {
             width = min(maxX - minX, maxY - minY)
         }
         let toPlan = { (p: SIMD2<Double>) -> SIMD2<Double> in rotate(p) - shift }
+        worldFrame = SIMD4(a, shift.x, shift.y, floorY)
 
         // стены на плане: два конца в тех же координатах, что и контур пола
         wallLines = rw.map { w in

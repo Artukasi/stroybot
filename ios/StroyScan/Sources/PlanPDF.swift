@@ -16,6 +16,7 @@ enum PlanPDF {
     static func room(_ r: RoomResult) -> URL? {
         render(name: r.room) { ctx in
             roomPage(r, ctx)
+            if !r.engineering.isEmpty { engineeringPage(r, ctx) }
         }
     }
 
@@ -23,7 +24,10 @@ enum PlanPDF {
     static func flat(name: String, rooms: [RoomResult], outlines: [[[Double]]]?) -> URL? {
         render(name: name) { ctx in
             flatPage(name: name, rooms: rooms, outlines: outlines, ctx)
-            for r in rooms { roomPage(r, ctx) }
+            for r in rooms {
+                roomPage(r, ctx)
+                if !r.engineering.isEmpty { engineeringPage(r, ctx) }
+            }
         }
     }
 
@@ -100,6 +104,47 @@ enum PlanPDF {
         footer()
     }
 
+    // MARK: - Электрика и сантехника
+
+    private static func engineeringPage(_ r: RoomResult, _ ctx: UIGraphicsPDFRendererContext) {
+        ctx.beginPage()
+        var y = header(title: r.room, subtitle: "Электрика и сантехника")
+        let planBox = CGRect(x: margin, y: y, width: page.width - 2 * margin, height: 300)
+        roundedBox(planBox)
+        drawRoom(r, in: planBox.insetBy(dx: 34, dy: 30), labels: true, furniture: false, starts: true)
+        y = planBox.maxY + 16
+
+        // итоги
+        let rows = r.engineering.summary(ceiling: r.height, wallLines: r.wallLines)
+        let colW = (page.width - 2 * margin - 16) / 2
+        for (i, row) in rows.enumerated() {
+            let x = margin + CGFloat(i % 2) * (colW + 16)
+            let ry = y + CGFloat(i / 2) * 20
+            text(row.title, at: CGPoint(x: x, y: ry), size: 9.5, color: grey, width: colW - 60)
+            text(row.value, at: CGPoint(x: x, y: ry), size: 10, bold: true, width: colW, align: .right)
+        }
+        y += CGFloat((rows.count + 1) / 2) * 20 + 12
+
+        // где стоит каждая точка
+        text("Где ставить: отступ — от угла, где у стены жёлтый треугольник ▶ на плане", at: CGPoint(x: margin, y: y), size: 11, bold: true)
+        y += 18
+        let widths: [CGFloat] = [36, 185, 70, 110, 114]
+        y = tableRow(["Знак", "Что", "Стена", "От угла, см", "От пола, см"], widths, y: y, bold: true)
+        let pts = r.engineering.points.sorted { ($0.wall ?? 999, $0.offset) < ($1.wall ?? 999, $1.offset) }
+        let cm = { (v: Double) in "\(Int((v * 100).rounded()))" }
+        for p in pts {
+            if y > page.height - 70 {
+                text("…и ещё \(pts.count - (pts.firstIndex(where: { $0.id == p.id }) ?? 0)) — смотрите план в приложении",
+                     at: CGPoint(x: margin, y: y), size: 9, color: grey)
+                break
+            }
+            guard let k = EngKind.find(p.kind) else { continue }
+            let wall = p.wall.map { "№\($0 + 1)" } ?? "потолок"
+            y = tableRow([k.short, k.title, wall, p.wall == nil ? "—" : cm(p.offset), p.wall == nil ? "—" : cm(p.height)], widths, y: y)
+        }
+        footer()
+    }
+
     // MARK: - Страница квартиры
 
     private static func flatPage(name: String, rooms: [RoomResult], outlines: [[[Double]]]?, _ ctx: UIGraphicsPDFRendererContext) {
@@ -155,7 +200,7 @@ enum PlanPDF {
 
     // MARK: - Чертёж комнаты
 
-    static func drawRoom(_ r: RoomResult, in box: CGRect, labels: Bool) {
+    static func drawRoom(_ r: RoomResult, in box: CGRect, labels: Bool, furniture: Bool = true, starts: Bool = false) {
         let lines = r.wallLines
         let all = r.plan + lines.flatMap { [SIMD2($0.x, $0.y), SIMD2($0.z, $0.w)] }
         guard let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(),
@@ -175,7 +220,7 @@ enum PlanPDF {
             floor.fill()
         }
         // мебель
-        for it in r.items {
+        for it in r.items where furniture {
             let w = CGFloat(it.width) * k, d = CGFloat(it.depth) * k
             let c = map(SIMD2(it.x, it.y))
             let t = CGAffineTransform(translationX: c.x, y: c.y).rotated(by: CGFloat(it.angle))
@@ -230,6 +275,50 @@ enum PlanPDF {
                 line(from: p1, to: p2, color: signal, width: 2)
             }
         }
+        // начало каждой стены — от него отсчитываются отступы точек
+        if starts {
+            for (i, l) in lines.enumerated() where r.engineering.points.contains(where: { $0.wall == i }) {
+                let a = map(SIMD2(l.x, l.y)), b = map(SIMD2(l.z, l.w))
+                let len = max(hypot(b.x - a.x, b.y - a.y), 1)
+                let u = CGPoint(x: (b.x - a.x) / len, y: (b.y - a.y) / len)
+                var n = CGPoint(x: -u.y, y: u.x)
+                if (center.x - a.x) * n.x + (center.y - a.y) * n.y < 0 { n = CGPoint(x: -n.x, y: -n.y) }
+                let base = CGPoint(x: a.x + u.x * 4 + n.x * 8, y: a.y + u.y * 4 + n.y * 8)
+                let tri = UIBezierPath()
+                tri.move(to: CGPoint(x: base.x + u.x * 9, y: base.y + u.y * 9))
+                tri.addLine(to: CGPoint(x: base.x + n.x * 4, y: base.y + n.y * 4))
+                tri.addLine(to: CGPoint(x: base.x - n.x * 4, y: base.y - n.y * 4))
+                tri.close()
+                signal.setFill()
+                tri.fill()
+                ink.setStroke()
+                tri.lineWidth = 0.6
+                tri.stroke()
+            }
+        }
+        // трубы и точки электрики и сантехники
+        for p in r.engineering.pipes {
+            guard let first = p.points.first, let kind = PipeKind.find(p.kind) else { continue }
+            let path = UIBezierPath()
+            path.move(to: map(SIMD2(first.x, first.y)))
+            for q in p.points.dropFirst() { path.addLine(to: map(SIMD2(q.x, q.y))) }
+            path.lineWidth = 2.2
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            kind.color.setStroke()
+            path.stroke()
+        }
+        for p in r.engineering.points {
+            guard let kind = EngKind.find(p.kind) else { continue }
+            let c = map(SIMD2(p.x, p.y))
+            let dot = UIBezierPath(ovalIn: CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12))
+            kind.color.setFill()
+            dot.fill()
+            UIColor.white.setStroke()
+            dot.lineWidth = 1
+            dot.stroke()
+            text(kind.short, at: CGPoint(x: c.x - 6, y: c.y - 3.6), size: 5.5, bold: true, color: .white, width: 12, align: .center)
+        }
         if labels { scaleBar(k: k, at: CGPoint(x: box.minX - 20, y: box.maxY + 12)) }
     }
 
@@ -243,10 +332,30 @@ enum PlanPDF {
         signal.setFill()
         UIBezierPath(rect: CGRect(x: 0, y: 74, width: page.width, height: 4)).fill()
         text(subtitle.uppercased(), at: CGPoint(x: margin, y: 18), size: 9, bold: true, color: signal)
-        text(title, at: CGPoint(x: margin, y: 32), size: 22, bold: true, color: .white)
+        text(title, at: CGPoint(x: margin, y: 32), size: 22, bold: true, color: .white, width: page.width / 2 - margin)
         let date = Date().formatted(date: .long, time: .omitted)
-        text("СтройСкан\n\(date)", at: CGPoint(x: page.width - margin - 160, y: 26), size: 9, color: UIColor(white: 1, alpha: 0.7),
-             width: 160, align: .right)
+        let brand = Brand.current
+        if brand.isEmpty {
+            text("СтройСкан\n\(date)", at: CGPoint(x: page.width - margin - 160, y: 26), size: 9, color: UIColor(white: 1, alpha: 0.7),
+                 width: 160, align: .right)
+        } else {
+            // логотип и контакты бригады справа
+            var right = page.width - margin
+            if let logo = Brand.logo {
+                let h: CGFloat = 46
+                let w = min(90, h * logo.size.width / max(logo.size.height, 1))
+                let r = CGRect(x: right - w, y: 14, width: w, height: h)
+                UIBezierPath(roundedRect: r.insetBy(dx: -3, dy: -3), cornerRadius: 6).addClip()
+                UIColor.white.setFill()
+                UIBezierPath(rect: r.insetBy(dx: -3, dy: -3)).fill()
+                logo.draw(in: r)
+                UIGraphicsGetCurrentContext()?.resetClip()
+                right = r.minX - 10
+            }
+            let lines = [brand.name, brand.phone, brand.note, date].filter { !$0.isEmpty }
+            text(lines.joined(separator: "\n"), at: CGPoint(x: right - 190, y: 14), size: 8.5, color: UIColor(white: 1, alpha: 0.85),
+                 width: 190, align: .right)
+        }
         return 96
     }
 

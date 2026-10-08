@@ -90,12 +90,14 @@ struct ResultView: View {
                 .pickerStyle(.menu)
 
                 statsGrid
+                if !result.engineering.isEmpty { engineeringCard }
                 if !result.items.isEmpty { furnitureList }
                 photoSection
 
                 if !result.wallLines.isEmpty {
                     NavigationLink {
-                        Renovation3DView(result: result, look: $look, scanId: sent ? scanId : nil) { fresh in
+                        Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
+                                         scanId: sent ? scanId : nil) { fresh in
                             try await ensureScanId(fresh: fresh)
                         }
                     } label: {
@@ -147,6 +149,7 @@ struct ResultView: View {
             if loadedLook { store.setLook(savedID, l) }
         }
         .onChange(of: result.room) { _ in store.update(savedID, result: result) }
+        .onChange(of: result.engineering) { _ in store.update(savedID, result: result) }
         .fullScreenCover(isPresented: $camera) {
             PhotoCameraView { data in usePhoto(data) }
         }
@@ -213,10 +216,35 @@ struct ResultView: View {
             .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls)
                 .opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanEngineering(eng: result.engineering, points: result.plan).opacity(drawn >= 1 ? 1 : 0))
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
             .onAppear { withAnimation(.easeOut(duration: 1.4)) { drawn = 1 } }
+    }
+
+    // MARK: - Электрика и сантехника
+
+    private var engineeringCard: some View {
+        let rows = result.engineering.summary(ceiling: result.height, wallLines: result.wallLines)
+        return VStack(alignment: .leading, spacing: 8) {
+            Label("Электрика и сантехника", systemImage: "bolt.horizontal.circle").font(.headline)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack {
+                    Circle().fill(row.group == .electric ? Color(EngKind.electricColor) : Color(EngKind.coldColor))
+                        .frame(width: 8, height: 8)
+                    Text(row.title)
+                    Spacer()
+                    Text(row.value).bold().monospacedDigit()
+                }
+                .font(.subheadline)
+            }
+            Text("Расставляется в «Ремонт в 3D» → Электрика / Сантехника. Кабель и трубы — оценка с запасом.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
     }
 
     // MARK: - Цифры

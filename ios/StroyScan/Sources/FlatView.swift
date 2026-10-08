@@ -76,14 +76,14 @@ struct FlatView: View {
     // MARK: - План
 
     private var planCard: some View {
-        FlatPlanView(rooms: rooms.map(\.1), outlines: outlines, progress: shown ? 1 : 0)
+        FlatPlanView(rooms: rooms.map { $0.1 }, outlines: outlines, progress: shown ? 1 : 0)
             .frame(height: 300)
             .padding(16)
             .background(Palette.ink, in: RoundedRectangle(cornerRadius: 22))
     }
 
     private var totals: some View {
-        let r = rooms.map(\.1)
+        let r = rooms.map { $0.1 }
         let floor = r.reduce(0) { $0 + $1.floorArea }
         let walls = r.reduce(0) { $0 + $1.wallArea }
         let skirting = r.reduce(0) { $0 + $1.skirting }
@@ -121,7 +121,7 @@ struct FlatView: View {
             Text("Комнаты").font(.title3.bold())
             Text("Откройте комнату, чтобы дать ей название, сделать ремонт в 3D или доснять.")
                 .font(.caption).foregroundStyle(.secondary)
-            ForEach(Array(rooms.enumerated()), id: \.element.0) { i, item in
+            ForEach(Array(rooms.enumerated()), id: \.offset) { i, item in
                 if let s = store.scan(item.0) {
                     Button { open(item.0) } label: {
                         HStack(spacing: 10) {
@@ -189,7 +189,7 @@ struct FlatView: View {
     }
 
     private func sharePDF() {
-        if let url = PlanPDF.flat(name: flat?.name ?? "Квартира", rooms: rooms.map(\.1), outlines: outlines) {
+        if let url = PlanPDF.flat(name: flat?.name ?? "Квартира", rooms: rooms.map { $0.1 }, outlines: outlines) {
             share = ShareFile(url: url)
         } else {
             note = "Не получилось собрать PDF."

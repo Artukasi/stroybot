@@ -19,6 +19,7 @@ enum PlanDXF {
         Layer(name: "ELEKTRIKA", color: 30),
         Layer(name: "SANTEHNIKA", color: 4),
         Layer(name: "TRUBY", color: 150),
+        Layer(name: "PROVODA", color: 30),
         Layer(name: "PODPISI", color: 7),
     ]
 
@@ -86,6 +87,13 @@ enum PlanDXF {
             if let first = p.points.first, let k = PipeKind.find(p.kind) {
                 d.text("\(k.title) Ø\(p.diameter)", at: mm(SIMD2(first.x, first.y)) + SIMD2(0, 120), height: 60, angle: 0,
                        layer: "TRUBY")
+            }
+        }
+        for p in r.engineering.wires {
+            d.polyline(p.points.map { mm(SIMD2($0.x, $0.y)) }, closed: false, layer: "PROVODA", color: 30)
+            if let first = p.points.first, let k = WireKind.find(p.kind) {
+                d.text("\(k.title) \(k.cable)", at: mm(SIMD2(first.x, first.y)) + SIMD2(0, -120), height: 60, angle: 0,
+                       layer: "PROVODA")
             }
         }
         d.text("\(r.room) · пол \(fmt(r.floorArea)) м2 · h=\(Int((r.height * 1000).rounded()))", at: mm(center), height: 160,

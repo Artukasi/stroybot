@@ -139,6 +139,11 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     /// Места живого скана, которые стоит доснять, и что ещё не видно (дверь, мебель)
     private var marks: [RoomResult.LiveMark] = []
     private var extras: [String] = []
+    /// С какого момента предмет снят не полностью и где он (мировые x, z), чтобы не дёргать человека зря
+    private var lowSince: [UUID: (since: Date, at: SIMD2<Double>, kind: String)] = [:]
+    /// Прошлое положение камеры и когда телефон в последний раз вели слишком быстро
+    private var lastPose: (pos: SIMD3<Float>, fwd: SIMD3<Float>, at: Date)?
+    private var fastAt = Date.distantPast
     /// Сколько секунд камера смотрела на клетки пола у мест «доснять» (0,5 × 0,5 м). Место снято — счёт с нуля
     private var looked: [SIMD2<Int32>: Double] = [:]
     private var marked = Set<SIMD2<Int32>>()
@@ -294,6 +299,13 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         plan = LivePlan(rect, parts)
         marks = rect.walls.count >= 3 ? RoomResult.liveMarks(rect) : []
         extras = RoomResult.liveExtras(parts)
+        let now = Date()
+        var low: [UUID: (since: Date, at: SIMD2<Double>, kind: String)] = [:]
+        for o in parts.objects where o.confidence == .low {
+            let at = SIMD2(Double(o.transform.columns.3.x), Double(o.transform.columns.3.z))
+            low[o.identifier] = (lowSince[o.identifier]?.since ?? now, at, RoomResult.kind(of: o.category))
+        }
+        lowSince = low
         marked = Set(marks.flatMap { ScanController.samples($0.path) }.compactMap(ScanController.cell))
         looked = looked.filter { marked.contains($0.key) }
         let windows = parts.windows.count, doors = parts.doors.count + parts.openings.count
@@ -303,6 +315,19 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     /// Где телефон и куда смотрит — для мини-плана и подсказок (несколько раз в секунду)
     func trackCamera() {
         guard !finishing, let t = frame?.camera.transform else { return }
+        // слишком быстро ведут или крутят телефон — RoomPlan не успевает, линии съезжают со стен
+        let now = Date()
+        let p3 = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        let f3 = -SIMD3(t.columns.2.x, t.columns.2.y, t.columns.2.z)
+        if let last = lastPose {
+            let dt = Float(now.timeIntervalSince(last.at))
+            if dt > 0.05 && dt < 1 {
+                let speed = simd_distance(p3, last.pos) / dt
+                let turn = acos(max(-1, min(1, simd_dot(simd_normalize(f3), simd_normalize(last.fwd))))) / dt
+                if speed > 0.75 || turn > 1.2 { fastAt = now }
+            }
+        }
+        lastPose = (p3, f3, now)
         let pos = SIMD2(Double(t.columns.3.x), Double(t.columns.3.z))
         let f = SIMD2(Double(-t.columns.2.x), Double(-t.columns.2.z))
         // смотрит в пол или потолок — направление оставляем прежним
@@ -433,6 +458,19 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         let meters = placeMeters.flatMap { abs(d - Double($0)) <= 0.8 ? $0 : nil } ?? max(1, Int(d.rounded()))
         placeMeters = meters
         return "\(side.word), \(meters) м"
+    }
+
+    /// Чего ещё не видно: дверь — сразу; мебель — только если она так и не снялась за 8 секунд,
+    /// с названием и где она, и спокойно (не жёлтым): пока камера на ней, RoomPlan её ещё уточняет
+    private func extraHint() -> (String, Bool)? {
+        if let door = extras.first(where: { $0.hasPrefix("Не видно двери") }) { return (door, true) }
+        let now = Date()
+        let stuck = lowSince.values.filter { now.timeIntervalSince($0.since) > 8 }
+        guard let me else { return nil }
+        let here = SIMD2(me.x, me.y)
+        guard let item = stuck.min(by: { simd_distance($0.at, here) < simd_distance($1.at, here) }) else { return nil }
+        let title = RoomResult.itemTitle(item.kind).lowercasedFirst
+        return ("Обойдите \(title) с другой стороны — \(steadyPlace(item.at, from: me))", false)
     }
 
     /// Подсказка про места «доснять». Пока комнату обходят — куда идти дальше. Предупреждение — только когда
@@ -679,7 +717,14 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
             hintWarn = warn
             return
         }
-        if text == nil, settled, let first = extras.first { text = first }
+        if text == nil, Date().timeIntervalSince(fastAt) < 1.5 {
+            text = "Медленнее — так линии лягут точно по стенам и мебели"
+        }
+        if text == nil, settled, let say = extraHint() {
+            hint = say.0
+            hintWarn = say.1
+            return
+        }
         if let text {
             hint = text
             hintWarn = true

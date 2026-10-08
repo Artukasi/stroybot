@@ -134,6 +134,12 @@ struct ResultView: View {
                         }
                     }
                     if !result.wallLines.isEmpty {
+                        NavigationLink { engineeringScreen(.electric) } label: {
+                            tool("Электрика", "bolt.fill", "вырезы и провода в 3D")
+                        }
+                        NavigationLink { engineeringScreen(.plumbing) } label: {
+                            tool("Сантехника", "drop.fill", "выводы и трубы в 3D")
+                        }
                         NavigationLink { KitchenView(result: result) } label: {
                             tool("Кухня", "cooktop", "модули по размерам")
                         }
@@ -277,12 +283,20 @@ struct ResultView: View {
                 }
                 .font(.subheadline)
             }
-            Text("Расставляется в «Ремонт в 3D» → Электрика / Сантехника. Кабель и трубы — оценка с запасом.")
+            Text("Расставляется кнопками «Электрика» и «Сантехника» ниже. Длины — с запасом 10%.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    /// «Электрика» и «Сантехника»: голая 3D-модель скана, ставим вырезы, ведём провода и трубы
+    private func engineeringScreen(_ mode: EngMode) -> some View {
+        Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
+                         fixedMode: mode, scanId: sent ? scanId : nil) { fresh in
+            try await ensureScanId(fresh: fresh)
+        }
     }
 
     // MARK: - Цифры

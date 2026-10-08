@@ -32,11 +32,14 @@ struct Engineering: Equatable {
 
     var points: [Point] = []
     var pipes: [Pipe] = []
+    /// Провода, которые провели сами: kind — вид кабеля (WireKind), диаметр не нужен
+    var wires: [Pipe] = []
 
-    var isEmpty: Bool { points.isEmpty && pipes.isEmpty }
+    var isEmpty: Bool { points.isEmpty && pipes.isEmpty && wires.isEmpty }
 
     static let maxPoints = 120
     static let maxPipes = 40
+    static let maxWires = 80
 
     // MARK: JSON
 
@@ -50,7 +53,10 @@ struct Engineering: Equatable {
         let pipesJSON: [[String: Any]] = pipes.map { p in
             ["kind": p.kind, "diameter": p.diameter, "points": p.points.map { [r($0.x), r($0.y), r($0.z)] }]
         }
-        return ["points": pts, "pipes": pipesJSON]
+        let wiresJSON: [[String: Any]] = wires.map { p in
+            ["kind": p.kind, "points": p.points.map { [r($0.x), r($0.y), r($0.z)] }]
+        }
+        return ["points": pts, "pipes": pipesJSON, "wires": wiresJSON]
     }
 
     init() {}
@@ -70,6 +76,15 @@ struct Engineering: Equatable {
             }
             guard pts.count >= 2 else { return nil }
             return Pipe(kind: kind, diameter: (d["diameter"] as? NSNumber)?.intValue ?? PipeKind.find(kind)?.diameter ?? 20, points: pts)
+        }
+        wires = (json["wires"] as? [[String: Any]] ?? []).prefix(Engineering.maxWires).compactMap { d in
+            guard let kind = d["kind"] as? String, WireKind.find(kind) != nil else { return nil }
+            let pts = (d["points"] as? [[Any]] ?? []).compactMap { a -> SIMD3<Double>? in
+                let v = a.compactMap(num)
+                return v.count == 3 ? SIMD3(v[0], v[1], v[2]) : nil
+            }
+            guard pts.count >= 2 else { return nil }
+            return Pipe(kind: kind, diameter: 0, points: pts)
         }
     }
 
@@ -105,6 +120,13 @@ struct Engineering: Equatable {
             n.points = pts
             out.pipes.append(n)
         }
+        for p in wires {
+            let pts = p.points.compactMap(move)
+            guard pts.count == p.points.count else { return nil }
+            var n = p
+            n.points = pts
+            out.wires.append(n)
+        }
         return out
     }
 
@@ -113,6 +135,10 @@ struct Engineering: Equatable {
     /// Кабель: от каждой точки вверх в штробу под потолком (15 см), по стене до крайней точки на ней,
     /// от стены до распаечной коробки — 1 м, на подключение — 30 см на точку. Свет на потолке — 1,5 м.
     func cableMeters(ceiling: Double, wallLines: [SIMD4<Double>]) -> Double {
+        // провода провели сами — считаем по ним (10% и по 30 см на подключение точки)
+        if !wires.isEmpty {
+            return wireMeters.reduce(0) { $0 + $1.1 } + Double(count(.electric)) * 0.3
+        }
         let top = max(ceiling - 0.15, 1.8)
         var total = 0.0
         var byWall: [Int: [Double]] = [:]
@@ -138,7 +164,9 @@ struct Engineering: Equatable {
             let n = points.filter { $0.kind == k.id }.count
             if n > 0 { out.append((k.group, k.title, "\(n) шт")) }
         }
-        if count(.electric) > 0 {
+        if !wires.isEmpty {
+            for (k, m) in wireMeters { out.append((.electric, "\(k.title) \(k.cable)", "\(Int(m.rounded(.up))) м")) }
+        } else if count(.electric) > 0 {
             let cable = cableMeters(ceiling: ceiling, wallLines: wallLines)
             out.append((.electric, "Кабель (примерно)", "\(Int(cable.rounded(.up))) м"))
         }
@@ -154,6 +182,14 @@ struct Engineering: Equatable {
 
     func count(_ group: EngKind.Group) -> Int {
         points.filter { EngKind.find($0.kind)?.group == group }.count
+    }
+
+    /// Длина проводов по видам, метры (с запасом 10%)
+    var wireMeters: [(WireKind, Double)] {
+        WireKind.all.compactMap { k in
+            let m = wires.filter { $0.kind == k.id }.reduce(0) { $0 + $1.length }
+            return m > 0 ? (k, m * 1.1) : nil
+        }
     }
 
     /// Длина труб по видам, метры (с запасом на подключение 10%)
@@ -241,6 +277,23 @@ struct PipeKind: Identifiable {
     ]
 
     static func find(_ id: String) -> PipeKind? { all.first { $0.id == id } }
+}
+
+/// Провода, которые ведут сами по стенам (штробы)
+struct WireKind: Identifiable {
+    let id: String
+    let title: String
+    let cable: String
+    let color: UIColor
+
+    static let all: [WireKind] = [
+        WireKind(id: "sockets", title: "Провод розеток", cable: "ВВГнг 3×2,5", color: UIColor(red: 0.96, green: 0.62, blue: 0.09, alpha: 1)),
+        WireKind(id: "light", title: "Провод света", cable: "ВВГнг 3×1,5", color: UIColor(red: 0.98, green: 0.84, blue: 0.20, alpha: 1)),
+        WireKind(id: "power", title: "Силовой провод", cable: "ВВГнг 3×6", color: UIColor(red: 0.86, green: 0.22, blue: 0.18, alpha: 1)),
+        WireKind(id: "lan", title: "Слаботочка", cable: "UTP / ТВ", color: UIColor(red: 0.35, green: 0.55, blue: 0.95, alpha: 1)),
+    ]
+
+    static func find(_ id: String) -> WireKind? { all.first { $0.id == id } }
 }
 
 // MARK: - 3D
@@ -392,19 +445,54 @@ enum Eng3D {
         return n
     }
 
-    /// Кабель: тонкая оранжевая линия (только в режиме электрики)
-    static func cable(_ pts: [SIMD3<Float>]) -> SCNNode {
+    /// Кабель: тонкая линия (только в режиме электрики). Провод, проведённый самим, — толще и в цвет вида
+    static func cable(_ pts: [SIMD3<Float>], color: UIColor = EngKind.electricColor, radius: CGFloat = 0.004) -> SCNNode {
         let n = SCNNode()
-        let m = mat(EngKind.electricColor, rough: 0.6, glow: EngKind.electricColor.withAlphaComponent(0.4))
+        let m = mat(color, rough: 0.6, glow: color.withAlphaComponent(0.4))
         for (a, b) in zip(pts, pts.dropFirst()) {
             let len = simd_distance(a, b)
             guard len > 0.001 else { continue }
-            let g = SCNCylinder(radius: 0.004, height: CGFloat(len))
+            let g = SCNCylinder(radius: radius, height: CGFloat(len))
             g.firstMaterial = m
             let seg = SCNNode(geometry: g)
             seg.simdPosition = (a + b) / 2
             seg.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: (b - a) / len)
             n.addChildNode(seg)
+        }
+        if radius > 0.005 {
+            for q in pts {
+                let s = SCNSphere(radius: radius * 1.3)
+                s.firstMaterial = m
+                let j = SCNNode(geometry: s)
+                j.simdPosition = q
+                n.addChildNode(j)
+            }
+        }
+        return n
+    }
+
+    /// Вырез в голой стене под подрозетник или коробку: тёмный круг (у двойной — два), локальная +z — в комнату
+    static func cutout(_ kind: EngKind) -> SCNNode {
+        let n = SCNNode()
+        let hole = mat(UIColor(white: 0.18, alpha: 1), rough: 0.9)
+        let rim = mat(kind.color, rough: 0.5, glow: kind.color.withAlphaComponent(0.35))
+        let xs: [Float]
+        switch kind.id {
+        case "socket2": xs = [-0.036, 0.036]
+        case "panel":
+            n.addChildNode(box(0.32, 0.44, 0.004, hole, z: 0.002))
+            n.addChildNode(box(0.34, 0.46, 0.002, rim, z: 0.001))
+            return n
+        default: xs = [0]
+        }
+        for x in xs {
+            let t = SCNTube(innerRadius: 0.034, outerRadius: 0.041, height: 0.004)
+            t.firstMaterial = rim
+            let r = SCNNode(geometry: t)
+            r.eulerAngles.x = .pi / 2
+            r.simdPosition = SIMD3(x, 0, 0.002)
+            n.addChildNode(r)
+            n.addChildNode(stub(0.034, 0.003, hole, z: 0.0015, x: x))
         }
         return n
     }
@@ -428,6 +516,14 @@ struct PlanEngineering: View {
                 for q in p.points.dropFirst() { path.addLine(to: map(q.x, q.y)) }
                 ctx.stroke(path, with: .color(Color(PipeKind.find(p.kind)?.color ?? .gray)),
                            style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            }
+            for p in eng.wires {
+                guard let first = p.points.first else { continue }
+                var path = Path()
+                path.move(to: map(first.x, first.y))
+                for q in p.points.dropFirst() { path.addLine(to: map(q.x, q.y)) }
+                ctx.stroke(path, with: .color(Color(WireKind.find(p.kind)?.color ?? .orange)),
+                           style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: [5, 3]))
             }
             for p in eng.points {
                 guard let k = EngKind.find(p.kind) else { continue }

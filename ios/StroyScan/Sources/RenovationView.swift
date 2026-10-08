@@ -47,6 +47,8 @@ struct Renovation3DView: View {
     @Binding var engineering: Engineering
     /// Телефон ещё в координатах скана: трубу со скана камерой можно поставить сразу на место
     var liveScan = false
+    /// Отдельный экран «Электрика» или «Сантехника»: голая комната, только этот режим
+    var fixedMode: EngMode? = nil
     @State private var scanningPipe = false
     /// Отправить скан в бот (true — заново) и вернуть его номер
     let ensureScanId: (Bool) async throws -> Int
@@ -58,29 +60,31 @@ struct Renovation3DView: View {
     @State private var shot: RenderShot?
     @State private var share: ShareFile?
 
-    init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false, scanId: Int?,
-         ensureScanId: @escaping (Bool) async throws -> Int) {
+    init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false,
+         fixedMode: EngMode? = nil, scanId: Int?, ensureScanId: @escaping (Bool) async throws -> Int) {
         var r = result
         r.engineering = engineering.wrappedValue
         _editor = StateObject(wrappedValue: RenoEditor(result: r, look: look.wrappedValue))
         _look = look
         _engineering = engineering
         self.liveScan = liveScan
+        self.fixedMode = fixedMode
         _scanId = State(initialValue: scanId)
         self.ensureScanId = ensureScanId
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Режим", selection: Binding(get: { editor.engMode }, set: { editor.setEngMode($0) })) {
-                Text("Ремонт").tag(EngMode.off)
-                Text("Электрика").tag(EngMode.electric)
-                Text("Сантехника").tag(EngMode.plumbing)
+            if fixedMode == nil {
+                Picker("Комната", selection: Binding(get: { editor.bare }, set: { editor.setBare($0) })) {
+                    Text("С ремонтом").tag(false)
+                    Text("Как есть").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 8)
+                if !editor.bare { styleChips }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.top, 8)
-            if editor.engMode == .off { styleChips }
             ZStack {
                 EditorScene(editor: editor)
                 if !editor.ready {
@@ -91,19 +95,21 @@ struct Renovation3DView: View {
                 VStack(spacing: 0) {
                     modeBar
                     Spacer()
-                    if editor.pick == nil && editor.ready && editor.engMode == .off { hintBar }
+                    if editor.pick == nil && editor.ready && editor.engMode == .off {
+                        if editor.bare { bareBar } else { hintBar }
+                    }
                 }
             }
             if editor.engMode != .off {
                 EngPanel(editor: editor) { scanningPipe = true }
-            } else {
+            } else if !editor.bare {
                 if let pick = editor.pick {
                     EditPanel(editor: editor, pick: pick, alert: $alert)
                 }
                 bottomBar
             }
         }
-        .navigationTitle("Ремонт в 3D")
+        .navigationTitle(fixedMode == .electric ? "Электрика" : fixedMode == .plumbing ? "Сантехника" : "Ремонт в 3D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -118,7 +124,13 @@ struct Renovation3DView: View {
                 .accessibilityLabel("Поделиться")
             }
         }
-        .onAppear { editor.start() }
+        .onAppear {
+            if let fixedMode {
+                editor.setBare(true)
+                if editor.engMode != fixedMode { editor.setEngMode(fixedMode) }
+            }
+            editor.start()
+        }
         .onDisappear { editor.stop() }
         .task { await syncLook() }
         .onReceive(editor.$look.dropFirst()) { new in
@@ -177,8 +189,29 @@ struct Renovation3DView: View {
                 .buttonStyle(.plain)
             }
             Spacer(minLength: 0)
+            Menu {
+                Button { editor.setBrightness(editor.brightness - 0.35) } label: { Label("Темнее", systemImage: "sun.min") }
+                Button { editor.setBrightness(0) } label: { Label("Как было", systemImage: "circle.lefthalf.filled") }
+                Button { editor.setBrightness(editor.brightness + 0.35) } label: { Label("Светлее", systemImage: "sun.max") }
+            } label: {
+                Image(systemName: "sun.max")
+                    .font(.footnote.bold())
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("Яркость")
         }
         .padding(10)
+    }
+
+    /// Комната «как есть»: что это и куда идти за электрикой
+    private var bareBar: some View {
+        Text("Комната как после скана: голые стены, мебель — коробками. Розетки и провода — кнопкой «Электрика» под планом, трубы — «Сантехника».")
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(10)
     }
 
     private var hintBar: some View {
@@ -301,6 +334,7 @@ struct Renovation3DView: View {
         rendering = true
         defer { rendering = false }
         editor.setEngMode(.off)
+        editor.setBare(false)
         editor.select(nil)
         if !editor.inside {
             editor.setInside(true)

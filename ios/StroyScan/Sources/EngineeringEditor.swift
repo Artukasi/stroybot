@@ -7,10 +7,19 @@ enum EngMode: Equatable {
     case off, electric, plumbing
 }
 
-/// Что ставим нажатием: точку (розетку, вывод) или трубу (по точкам)
+/// Что ставим нажатием: точку (розетку, вывод), трубу или провод (по точкам)
 enum EngTool: Equatable {
     case point(String)
     case pipe(String, Int)
+    case wire(String)
+
+    /// Трасса нажатиями: труба или провод
+    var isRoute: Bool {
+        switch self {
+        case .point: return false
+        case .pipe, .wire: return true
+        }
+    }
 }
 
 /// Электрика и сантехника в 3D: нажали на стену — там розетка или вывод воды; трубы — нажатиями по стенам.
@@ -26,7 +35,7 @@ extension RenoEditor {
     }
 
     func setTool(_ t: EngTool?) {
-        if case .pipe? = engTool, t != engTool { route = [] }
+        if engTool?.isRoute == true, t != engTool { route = [] }
         engTool = t
         engSelected = nil
         switch t {
@@ -35,6 +44,8 @@ extension RenoEditor {
             engHint = k?.place == .ceiling ? "Нажмите на пол там, где под ним будет свет" : "Нажмите на стену, где поставить: \(k?.title.lowercased() ?? "точку")"
         case .pipe?:
             engHint = "Нажимайте по стенам и полу вдоль трассы трубы, потом «Готово»"
+        case .wire?:
+            engHint = "Ведите провод: нажимайте по стенам от щитка или коробки до точки, потом «Готово»"
         case nil:
             engHint = nil
         }
@@ -43,6 +54,7 @@ extension RenoEditor {
 
     var selectedPoint: Engineering.Point? { eng.points.first { $0.id == engSelected } }
     var selectedPipe: Engineering.Pipe? { eng.pipes.first { $0.id == engSelected } }
+    var selectedWire: Engineering.Pipe? { eng.wires.first { $0.id == engSelected } }
 
     // MARK: Правки
 
@@ -62,6 +74,7 @@ extension RenoEditor {
     func removeSelected() {
         eng.points.removeAll { $0.id == engSelected }
         eng.pipes.removeAll { $0.id == engSelected }
+        eng.wires.removeAll { $0.id == engSelected }
         engSelected = nil
         buildEngineering()
     }
@@ -74,6 +87,16 @@ extension RenoEditor {
 
     /// Труба проведена: в список
     func finishRoute() {
+        if case .wire(let kind)? = engTool {
+            if route.count >= 2, eng.wires.count < Engineering.maxWires {
+                let wire = Engineering.Pipe(kind: kind, diameter: 0, points: route)
+                eng.wires.append(wire)
+                engSelected = wire.id
+            }
+            route = []
+            buildEngineering()
+            return
+        }
         guard case .pipe(let kind, let d)? = engTool, route.count >= 2, eng.pipes.count < Engineering.maxPipes else {
             route = []
             buildEngineering()
@@ -182,7 +205,7 @@ extension RenoEditor {
             eng.points.append(point)
             engSelected = point.id
             buildEngineering()
-        case .pipe?:
+        case .pipe?, .wire?:
             // трасса у стены: точку прижимаем к стене, на полу — как есть
             var q = SIMD3(plan.x, plan.y, max(0, h))
             if let w = wall, let found = result.nearestWall(plan), found.wall == w, let at = result.wallPoint(w, offset: found.offset) {
@@ -233,7 +256,8 @@ extension RenoEditor {
                 node.simdPosition = SIMD3(Float(p.x), top, Float(p.y))
             } else {
                 guard let w = p.wall, let n = normals[w], let ang = angles[w] else { continue }
-                node = Eng3D.point(kind)
+                // на голых стенах — вырез под подрозетник, а не готовая розетка
+                node = bare && kind.group == .electric && kind.id != "sconce" ? Eng3D.cutout(kind) : Eng3D.point(kind)
                 node.simdPosition = SIMD3(Float(p.x) + n.x * 0.003, Float(p.height), Float(p.y) + n.y * 0.003)
                 node.eulerAngles.y = ang
                 engWallOf[p.id] = w
@@ -269,7 +293,35 @@ extension RenoEditor {
             }
         }
         if engMode == .electric {
-            for c in cables() { engHolder.addChildNode(Eng3D.cable(c)) }
+            let onWall = { (q: SIMD3<Double>) -> SIMD3<Float> in
+                var n = SIMD2<Float>(0, 0)
+                if let w = self.result.nearestWall(SIMD2(q.x, q.y)), w.distance < 0.15, let nn = normals[w.wall] { n = nn * 0.008 }
+                return SIMD3(Float(q.x) + n.x, Float(q.z), Float(q.y) + n.y)
+            }
+            for p in eng.wires {
+                let node = Eng3D.cable(p.points.map(onWall), color: WireKind.find(p.kind)?.color ?? EngKind.electricColor, radius: 0.009)
+                node.name = "eng:\(p.id.uuidString)"
+                if p.id == engSelected, let first = p.points.first {
+                    let ring = Self.ring(false)
+                    ring.simdPosition = onWall(first)
+                    node.addChildNode(ring)
+                }
+                engHolder.addChildNode(node)
+            }
+            if !route.isEmpty, case .wire(let kind)? = engTool {
+                let pts = route.count == 1 ? [route[0], route[0] + SIMD3(0, 0, 0.01)] : route
+                let preview = Eng3D.cable(pts.map(onWall), color: WireKind.find(kind)?.color ?? EngKind.electricColor, radius: 0.009)
+                preview.opacity = 0.75
+                engHolder.addChildNode(preview)
+            }
+            // своих проводов нет — бледная примерная схема (вверх в штробу под потолком и вдоль стены)
+            if eng.wires.isEmpty {
+                for c in cables() {
+                    let node = Eng3D.cable(c)
+                    node.opacity = 0.4
+                    engHolder.addChildNode(node)
+                }
+            }
         }
         syncEngVisibility()
     }
@@ -348,6 +400,8 @@ struct EngPanel: View {
                 selectedPoint(p, k)
             } else if let pipe = editor.selectedPipe {
                 selectedPipe(pipe)
+            } else if let wire = editor.selectedWire {
+                selectedWire(wire)
             } else {
                 tools
             }
@@ -369,6 +423,18 @@ struct EngPanel: View {
                 }
             }
         }
+        if editor.engMode == .electric {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(WireKind.all) { k in
+                        let on = editor.engTool == .wire(k.id)
+                        chip(k.title, "point.topleft.down.to.point.bottomright.curvepath", on) {
+                            editor.setTool(on ? nil : .wire(k.id))
+                        }
+                    }
+                }
+            }
+        }
         if editor.engMode == .plumbing {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -381,19 +447,21 @@ struct EngPanel: View {
                     chip("Скан трубы камерой", "camera.viewfinder", false) { hub.pause(); scanPipe() }
                 }
             }
-            if case .pipe? = editor.engTool {
-                HStack(spacing: 16) {
-                    Button { editor.finishRoute() } label: { Label("Готово", systemImage: "checkmark") }
-                        .disabled(editor.route.count < 2)
-                    Button { editor.undoRoutePoint() } label: { Label("Убрать точку", systemImage: "arrow.uturn.backward") }
-                        .disabled(editor.route.isEmpty)
-                    Text("точек: \(editor.route.count)").font(.caption).foregroundStyle(.secondary)
-                }
-                .font(.subheadline.bold())
+        }
+        if editor.engTool?.isRoute == true {
+            HStack(spacing: 16) {
+                Button { editor.finishRoute() } label: { Label("Готово", systemImage: "checkmark") }
+                    .disabled(editor.route.count < 2)
+                Button { editor.undoRoutePoint() } label: { Label("Убрать точку", systemImage: "arrow.uturn.backward") }
+                    .disabled(editor.route.isEmpty)
+                Text("точек: \(editor.route.count)").font(.caption).foregroundStyle(.secondary)
             }
+            .font(.subheadline.bold())
         }
         if editor.engTool == nil {
-            Text("Выберите, что ставить, и нажмите на стену. Нажмите на поставленное, чтобы поменять высоту или убрать.")
+            Text(editor.engMode == .electric
+                 ? "Вырезы: выберите розетку или выключатель и нажмите на стену. Провода: выберите провод и ведите нажатиями по стенам. Нажмите на поставленное, чтобы поменять или убрать."
+                 : "Выберите, что ставить, и нажмите на стену. Трубы ведите нажатиями по стенам и полу. Нажмите на поставленное, чтобы поменять или убрать.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -446,12 +514,34 @@ struct EngPanel: View {
         }
     }
 
+    private func selectedWire(_ p: Engineering.Pipe) -> some View {
+        let k = WireKind.find(p.kind)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Circle().fill(Color(k?.color ?? EngKind.electricColor)).frame(width: 10, height: 10)
+                Text(k?.title ?? "Провод").font(.headline)
+                Spacer()
+                Button { editor.engSelected = nil; editor.buildEngineering() } label: {
+                    Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Text("\(k?.cable ?? "") · длина \(fmt((p.length * 100).rounded() / 100)) м").font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Button(role: .destructive) { editor.removeSelected() } label: { Label("Убрать", systemImage: "trash") }
+                    .font(.subheadline.bold())
+            }
+        }
+    }
+
     private var summary: some View {
         let e = editor.eng
         let text: String
         if editor.engMode == .electric {
             let cable = e.cableMeters(ceiling: Double(editor.room.height), wallLines: editor.result.wallLines)
-            text = "Точек электрики: \(e.count(.electric)) · кабель ≈ \(Int(cable.rounded(.up))) м"
+            text = "Точек электрики: \(e.count(.electric)) · " + (e.wires.isEmpty
+                ? "кабель ≈ \(Int(cable.rounded(.up))) м (примерно — проведите провода сами, будет точнее)"
+                : "провода \(Int(cable.rounded(.up))) м с запасом")
         } else {
             let pipes = e.pipeMeters.map { "\($0.0.title.lowercased()) \(fmt(($0.1 * 10).rounded() / 10)) м" }.joined(separator: ", ")
             text = "Выводов сантехники: \(e.count(.plumbing))" + (pipes.isEmpty ? "" : " · трубы: \(pipes)")

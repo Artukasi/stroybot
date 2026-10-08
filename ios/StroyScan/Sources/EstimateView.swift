@@ -71,7 +71,7 @@ enum Estimate {
         let wallPoints = e.points.filter { EngKind.find($0.kind).map { $0.group == .electric && $0.place == .wall && $0.id != "panel" } ?? false }.count
         let lights = e.points.filter { $0.kind == "ceiling_light" }.count
         let panels = e.points.filter { $0.kind == "panel" }.count
-        if e.count(.electric) > 0 {
+        if e.count(.electric) > 0 || !e.wires.isEmpty {
             let cable = e.cableMeters(ceiling: height, wallLines: r.wallLines)
             let el = { (id: String, title: String, qty: Double, unit: String, price: Double) in
                 out.append(Row(id: "e." + id, section: .electric, title: title, qty: qty, unit: unit, price: price))
@@ -83,7 +83,14 @@ enum Estimate {
             if lights > 0 { el("light", "Вывод под свет на потолке", Double(lights), "шт", 800) }
             if panels > 0 { el("panel", "Сборка щитка", Double(panels), "шт", 6000) }
             el("chase", "Штроба и прокладка кабеля", cable, "м", 350)
-            el("cable", "Кабель ВВГнг 3×2,5", up(cable), "м", 120)
+            if e.wires.isEmpty {
+                el("cable", "Кабель ВВГнг 3×2,5", up(cable), "м", 120)
+            } else {
+                let prices = ["sockets": 120.0, "light": 80, "power": 320, "lan": 40]
+                for (k, m) in e.wireMeters {
+                    el("cable_\(k.id)", "Кабель \(k.cable) (\(k.title.lowercased()))", up(m), "м", prices[k.id] ?? 120)
+                }
+            }
         }
 
         // сантехника

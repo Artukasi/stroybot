@@ -472,6 +472,18 @@ enum PlanPDF {
             kind.color.setStroke()
             path.stroke()
         }
+        for p in r.engineering.wires {
+            guard let first = p.points.first, let kind = WireKind.find(p.kind) else { continue }
+            let path = UIBezierPath()
+            path.move(to: map(SIMD2(first.x, first.y)))
+            for q in p.points.dropFirst() { path.addLine(to: map(SIMD2(q.x, q.y))) }
+            path.lineWidth = 1.6
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.setLineDash([4, 2], count: 2, phase: 0)
+            kind.color.setStroke()
+            path.stroke()
+        }
         for p in r.engineering.points {
             guard let kind = EngKind.find(p.kind) else { continue }
             let c = map(SIMD2(p.x, p.y))

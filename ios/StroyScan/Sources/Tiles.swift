@@ -6,23 +6,76 @@ import simd
 
 // MARK: - Своя плитка
 
-/// Плитка из библиотеки: картинка одной плитки, размер и что известно о покупке
+/// Отделка из библиотеки: плитка, обои, краска или ламинат/паркет. Картинка — одна плитка, доска или раппорт обоев
 struct TileItem: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable, CaseIterable, Identifiable {
+        case tile, wallpaper, paint, board
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .tile: return "Плитка"
+            case .wallpaper: return "Обои"
+            case .paint: return "Краска"
+            case .board: return "Пол"
+            }
+        }
+        var onWalls: Bool { self != .board }
+        var onFloor: Bool { self == .tile || self == .board }
+    }
+
     var id = UUID()
+    var kind: Kind = .tile
     var name: String
-    /// Размер одной плитки, см
+    /// Плитка: размер, см. Доска: длина × ширина, см. Обои: ширина рулона × раппорт (0 — без раппорта), см
     var width: Double
     var height: Double
-    /// м² в коробке (0 — не знаем)
+    /// Плитка и пол: м² в коробке или пачке (0 — не знаем)
     var perBox: Double = 0
-    /// Цена за м², ₽ (0 — не знаем)
+    /// Плитка и пол: ₽ за м². Обои: ₽ за рулон. Краска: ₽ за банку
     var price: Double = 0
     var link: String?
+    /// Обои: длина рулона, м
+    var rollLength: Double = 10.05
+    /// Краска: цвет и литров в банке
+    var color: String = "#e8e4dc"
+    var can: Double = 2.5
+
+    init(kind: Kind = .tile, name: String, width: Double, height: Double) {
+        self.kind = kind
+        self.name = name
+        self.width = width
+        self.height = height
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .tile
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Плитка"
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 30
+        height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 30
+        perBox = try c.decodeIfPresent(Double.self, forKey: .perBox) ?? 0
+        price = try c.decodeIfPresent(Double.self, forKey: .price) ?? 0
+        link = try c.decodeIfPresent(String.self, forKey: .link)
+        rollLength = try c.decodeIfPresent(Double.self, forKey: .rollLength) ?? 10.05
+        color = try c.decodeIfPresent(String.self, forKey: .color) ?? "#e8e4dc"
+        can = try c.decodeIfPresent(Double.self, forKey: .can) ?? 2.5
+    }
 
     /// Размер в метрах
     var w: Double { width / 100 }
     var h: Double { height / 100 }
-    var sizeText: String { "\(fmt(width))×\(fmt(height)) см" }
+    /// Обои без раппорта: картинку повторяем квадратом по ширине рулона
+    var repeatH: Double { kind == .wallpaper && height <= 0 ? w : h }
+
+    var sizeText: String {
+        switch kind {
+        case .tile: return "\(fmt(width))×\(fmt(height)) см"
+        case .board: return "доска \(fmt(width))×\(fmt(height)) см"
+        case .wallpaper: return "рулон \(fmt(width / 100)) м" + (height > 0 ? ", раппорт \(fmt(height)) см" : "")
+        case .paint: return "банка \(fmt(can)) л"
+        }
+    }
 }
 
 /// Картинки плиток на диске: Documents/StroyScan/tiles/<id>.jpg и <id>.json. Копия в боте их тоже берёт
@@ -210,20 +263,25 @@ enum TileCalc {
     struct Line: Identifiable {
         let id: UUID
         let tile: TileItem
-        var area: Double
-        var pieces: Int
-        var buyArea: Double
-        var boxes: Int?
+        var area: Double = 0
+        var surfaces: [String] = []
+        /// Что купить: строки «Плиток с запасом — 120 шт»
+        var rows: [(String, String)] = []
+        /// Сколько штук, рулонов или банок — для копии в магазин
+        var short = ""
         var cost: Double?
-        var surfaces: [String]
+        // накопители
+        var pieces = 0
+        var strips = 0
+        var rolls = 0
+        var liters = 0.0
     }
 
     struct Total {
         var lines: [Line] = []
         var area: Double = 0
-        var glueBags = 0
-        var groutKg: Double = 0
-        var crosses = 0
+        /// Расходники: клей, затирка, грунт и т.п.
+        var extras: [(String, String)] = []
         var cost: Double = 0
     }
 
@@ -234,63 +292,123 @@ enum TileCalc {
         return "стена \(z.wall + 1)" + (full ? "" : " (\(Int((a * 100).rounded()))–\(Int((b * 100).rounded())) см)")
     }
 
+    static func m2(_ v: Double) -> String { "\(fmt((v * 100).rounded() / 100)) м²" }
+
     static func total(_ tiling: Tiling, items: [UUID: TileItem], room: Room3D) -> Total {
         var t = Total()
         var byTile: [UUID: Line] = [:]
         var order: [UUID] = []
-        var glueKg = 0.0
+        var glueKg = 0.0, groutKg = 0.0, crosses = 0
+        var wallArea = 0.0, paintArea = 0.0, floorBoards = 0.0, wallpaperRolls = 0
         for z in tiling.zones {
-            guard let tile = items[z.tile], tile.w > 0.01, tile.h > 0.01 else { continue }
+            guard let tile = items[z.tile] else { continue }
             let a = area(z, room)
             guard a > 0.001 else { continue }
-            let one = tile.w * tile.h
-            let pieces = Int((a / one * (1 + z.pattern.waste)).rounded(.up))
-            var line = byTile[tile.id] ?? Line(id: tile.id, tile: tile, area: 0, pieces: 0, buyArea: 0, boxes: nil, cost: nil, surfaces: [])
+            var line = byTile[tile.id] ?? Line(id: tile.id, tile: tile)
             if byTile[tile.id] == nil { order.append(tile.id) }
             line.area += a
-            line.pieces += pieces
             line.surfaces.append(surfaceName(z, room))
+            switch tile.kind {
+            case .tile, .board:
+                guard tile.w > 0.01, tile.h > 0.01 else { break }
+                let waste = tile.kind == .board ? 0.07 : z.pattern.waste
+                let pieces = Int((a / (tile.w * tile.h) * (1 + waste)).rounded(.up))
+                line.pieces += pieces
+                if tile.kind == .tile {
+                    // клей: крупная плитка — больше; затирка: (A+B)/(A·B) · шов · глубина · 1,6
+                    let side = max(tile.width, tile.height)
+                    glueKg += a * (side >= 60 ? 6.5 : side >= 30 ? 5 : 3.5)
+                    let wmm = tile.width * 10, hmm = tile.height * 10
+                    groutKg += a * (wmm + hmm) / (wmm * hmm) * z.joint * 8 * 1.6
+                    crosses += Int((Double(pieces) * 1.1).rounded(.up))
+                } else {
+                    floorBoards += a
+                }
+            case .wallpaper:
+                // полосы: ширина стены / ширина рулона; длина полосы — высота + 10 см, кратно раппорту
+                guard let pos = room.walls.firstIndex(where: { $0.index == z.wall }), tile.w > 0.1 else { break }
+                let (lo, hi) = span(z, room)
+                let width = Double(room.walls[pos].length)
+                var strip = Double(hi - lo) + 0.1
+                if tile.height > 0 { strip = (strip / tile.h).rounded(.up) * tile.h }
+                let strips = Int((width / tile.w).rounded(.up))
+                let perRoll = max(1, Int((tile.rollLength / max(strip, 0.3)).rounded(.down)))
+                line.strips += strips
+                line.rolls += Int((Double(strips) / Double(perRoll)).rounded(.up))
+                wallArea += a
+            case .paint:
+                // два слоя по 0,12 л/м² + 10% запас
+                line.liters += a * 2 * 0.12 * 1.1
+                paintArea += a
+            }
             byTile[tile.id] = line
-            // клей: крупная плитка — больше; затирка: (A+B)/(A·B) · шов · глубина · 1,6
-            let side = max(tile.width, tile.height)
-            glueKg += a * (side >= 60 ? 6.5 : side >= 30 ? 5 : 3.5)
-            let wmm = tile.width * 10, hmm = tile.height * 10
-            t.groutKg += a * (wmm + hmm) / (wmm * hmm) * z.joint * 8 * 1.6
-            t.crosses += Int((Double(pieces) * 1.1).rounded(.up))
             t.area += a
         }
         for id in order {
             guard var line = byTile[id] else { continue }
-            line.buyArea = Double(line.pieces) * line.tile.w * line.tile.h
-            if line.tile.perBox > 0 {
-                let boxes = Int((line.buyArea / line.tile.perBox).rounded(.up))
-                line.boxes = boxes
-                line.buyArea = max(line.buyArea, Double(boxes) * line.tile.perBox)
+            let tile = line.tile
+            line.rows.append(("Площадь", m2(line.area)))
+            switch tile.kind {
+            case .tile, .board:
+                var buy = Double(line.pieces) * tile.w * tile.h
+                line.rows.append((tile.kind == .tile ? "Плиток с запасом" : "Досок с запасом", "\(line.pieces) шт"))
+                line.short = "\(line.pieces) шт"
+                if tile.perBox > 0 {
+                    let boxes = Int((buy / tile.perBox).rounded(.up))
+                    buy = max(buy, Double(boxes) * tile.perBox)
+                    line.rows.append((tile.kind == .tile ? "Коробок" : "Пачек", "\(boxes)"))
+                    line.short += ", \(tile.kind == .tile ? "коробок" : "пачек"): \(boxes)"
+                }
+                line.rows.append(("Купить", m2(buy)))
+                if tile.price > 0 { line.cost = buy * tile.price }
+            case .wallpaper:
+                line.rows.append(("Полос", "\(line.strips)"))
+                line.rows.append(("Рулонов (+1 запасной)", "\(line.rolls + 1)"))
+                line.short = "рулонов: \(line.rolls + 1)"
+                wallpaperRolls += line.rolls + 1
+                if tile.price > 0 { line.cost = Double(line.rolls + 1) * tile.price }
+            case .paint:
+                let cans = Int((line.liters / max(tile.can, 0.5)).rounded(.up))
+                line.rows.append(("Краски, 2 слоя", "≈ \(fmt((line.liters * 10).rounded(.up) / 10)) л"))
+                line.rows.append(("Банок по \(fmt(tile.can)) л", "\(cans)"))
+                line.short = "банок по \(fmt(tile.can)) л: \(cans)"
+                if tile.price > 0 { line.cost = Double(cans) * tile.price }
             }
-            if line.tile.price > 0 {
-                line.cost = line.buyArea * line.tile.price
-                t.cost += line.cost ?? 0
+            if let c = line.cost {
+                line.rows.append(("Стоимость", money(c)))
+                t.cost += c
             }
             t.lines.append(line)
         }
-        t.glueBags = Int((glueKg / 25).rounded(.up))
+        if glueKg > 0 {
+            t.extras.append(("Клей для плитки", "\(Int((glueKg / 25).rounded(.up))) меш. по 25 кг"))
+            t.extras.append(("Затирка", "≈ \(fmt((groutKg * 10).rounded(.up) / 10)) кг"))
+            t.extras.append(("Крестики", "≈ \(crosses) шт"))
+        }
+        if wallpaperRolls > 0 {
+            t.extras.append(("Клей для обоев", "\(max(1, Int((Double(wallpaperRolls) / 5).rounded(.up)))) уп."))
+        }
+        if wallArea + paintArea > 0 {
+            t.extras.append(("Грунт для стен", "≈ \(Int(((wallArea + paintArea) * 0.15).rounded(.up))) л"))
+        }
+        if floorBoards > 0 {
+            t.extras.append(("Подложка", m2(floorBoards * 1.05)))
+            t.extras.append(("Плинтус", "≈ \(Int((Double(room.walls.reduce(0) { $0 + $1.length }) * 1.05).rounded(.up))) м"))
+        }
         return t
     }
 
     /// Список для магазина — текстом
     static func text(_ t: Total, room: String) -> String {
-        var out = ["Плитка · \(room)"]
+        var out = ["Отделка · \(room)"]
         for l in t.lines {
-            var s = "• \(l.tile.name) \(l.tile.sizeText): \(l.pieces) шт ≈ \(fmt((l.buyArea * 100).rounded() / 100)) м²"
-            if let b = l.boxes { s += ", коробок: \(b)" }
+            var s = "• \(l.tile.kind.title): \(l.tile.name) (\(l.tile.sizeText)) — \(l.short), \(m2(l.area))"
             if let c = l.cost { s += ", ≈ \(money(c))" }
-            out.append(s + " (\(l.surfaces.joined(separator: ", ")))")
+            out.append(s + " — \(l.surfaces.joined(separator: ", "))")
             if let link = l.tile.link, !link.isEmpty { out.append("  \(link)") }
         }
-        out.append("• Клей для плитки: \(t.glueBags) меш. по 25 кг")
-        out.append("• Затирка: ≈ \(fmt((t.groutKg * 10).rounded(.up) / 10)) кг")
-        out.append("• Крестики: ≈ \(t.crosses) шт")
-        if t.cost > 0 { out.append("Плитка всего ≈ \(money(t.cost))") }
+        for (k, v) in t.extras { out.append("• \(k): \(v)") }
+        if t.cost > 0 { out.append("Всего ≈ \(money(t.cost))") }
         return out.joined(separator: "\n")
     }
 
@@ -307,8 +425,15 @@ enum TileCalc {
 
 enum TileTexture {
     static func material(_ tile: TileItem, _ z: Tiling.Zone) -> SCNMaterial {
-        let jointM = z.joint / 1000
-        let cellW = tile.w + jointM, cellH = tile.h + jointM
+        if tile.kind == .paint {
+            let m = SCNMaterial()
+            m.lightingModel = .physicallyBased
+            m.diffuse.contents = UIColor(hex: tile.color)
+            m.roughness.contents = NSNumber(value: 0.85)
+            return m
+        }
+        let jointM = tile.kind == .wallpaper ? 0 : z.joint / 1000
+        let cellW = tile.w + jointM, cellH = tile.repeatH + jointM
         let rows = z.pattern == .offset ? 2 : 1
         let m = SCNMaterial()
         m.lightingModel = .physicallyBased
@@ -316,7 +441,7 @@ enum TileTexture {
         m.diffuse.wrapS = .repeat
         m.diffuse.wrapT = .repeat
         m.diffuse.mipFilter = .linear
-        m.roughness.contents = NSNumber(value: 0.32)
+        m.roughness.contents = NSNumber(value: tile.kind == .wallpaper ? 0.8 : tile.kind == .board ? 0.45 : 0.32)
         m.metalness.contents = NSNumber(value: 0)
         var t = SCNMatrix4MakeScale(Float(1 / cellW), Float(1 / (cellH * Double(rows))), 1)
         if z.pattern == .diagonal { t = SCNMatrix4Mult(SCNMatrix4MakeRotation(.pi / 4, 0, 0, 1), t) }
@@ -327,11 +452,11 @@ enum TileTexture {
     /// Одна клетка (или две строки вразбежку): плитка и шов вокруг
     static func image(_ tile: TileItem, _ z: Tiling.Zone, rows: Int) -> UIImage? {
         guard let src = TileFiles.image(tile.id) else { return nil }
-        let jointM = z.joint / 1000
-        let cellW = tile.w + jointM, cellH = tile.h + jointM
+        let jointM = tile.kind == .wallpaper ? 0 : z.joint / 1000
+        let cellW = tile.w + jointM, cellH = tile.repeatH + jointM
         let k = 512 / max(cellW, cellH)
         let pw = max(8, (cellW * k).rounded()), ph = max(8, (cellH * k).rounded())
-        let j = max(1, jointM * k)
+        let j = jointM > 0 ? max(1, jointM * k) : 0
         let size = CGSize(width: pw, height: ph * Double(rows))
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -367,7 +492,8 @@ extension RenoEditor {
     func setTileTool(_ id: UUID?) {
         tileTool = id
         tileSelected = nil
-        engHint = id == nil ? nil : "Нажмите на стену или пол — плитка ляжет туда"
+        let kind = id.flatMap { tileItems[$0]?.kind }
+        engHint = kind == nil ? nil : kind == .board ? "Нажмите на пол" : kind!.onFloor ? "Нажмите на стену или пол" : "Нажмите на стену"
     }
 
     func editZone(_ change: (inout Tiling.Zone) -> Void) {
@@ -401,16 +527,27 @@ extension RenoEditor {
             engHint = tileTool == nil ? nil : "Не попали — нажмите на стену или пол"
             return
         }
-        if let tool = tileTool, tileItems[tool] != nil {
+        if let tool = tileTool, let item = tileItems[tool] {
+            if s < 0 && !item.kind.onFloor {
+                engHint = "\(item.kind.title) — на стены. Нажмите на стену"
+                return
+            }
+            if s >= 0 && !item.kind.onWalls {
+                engHint = "Ламинат и паркет — на пол. Нажмите на пол"
+                return
+            }
             if let i = tiling.zones.firstIndex(where: { $0.wall == s }) {
+                let oldKind = tileItems[tiling.zones[i].tile]?.kind
                 tiling.zones[i].tile = tool
+                if oldKind != item.kind { Self.defaults(&tiling.zones[i], item.kind) }
                 tileSelected = tiling.zones[i].id
             } else if tiling.zones.count < Tiling.maxZones {
-                let z = Tiling.Zone(wall: s, tile: tool, from: 0, to: 0)
+                var z = Tiling.Zone(wall: s, tile: tool, from: 0, to: 0)
+                Self.defaults(&z, item.kind)
                 tiling.zones.append(z)
                 tileSelected = z.id
             }
-            engHint = "Плитка легла. Нажмите на другую стену или пол — положу туда же"
+            engHint = "Готово. Нажмите на другую стену или пол — положу туда же"
             buildTiles()
         } else {
             tileSelected = tiling.zones.first { $0.wall == s }?.id
@@ -418,8 +555,25 @@ extension RenoEditor {
         }
     }
 
+    /// Шов и раскладка по виду отделки: доски — вразбежку с тонким тёмным швом, обои и краска — без шва
+    static func defaults(_ z: inout Tiling.Zone, _ kind: TileItem.Kind) {
+        switch kind {
+        case .tile:
+            z.pattern = .straight
+            z.joint = 2
+            z.grout = "#d9d6cf"
+        case .board:
+            z.pattern = .offset
+            z.joint = 0.5
+            z.grout = "#3a3530"
+        case .wallpaper, .paint:
+            z.pattern = .straight
+            z.joint = 0.5
+        }
+    }
+
     private func tileMaterial(_ tile: TileItem, _ z: Tiling.Zone) -> SCNMaterial {
-        let key = "\(tile.id)-\(z.pattern.rawValue)-\(z.joint)-\(z.grout)"
+        let key = "\(tile.id)-\(tile.color)-\(z.pattern.rawValue)-\(z.joint)-\(z.grout)"
         if let m = tileMats[key] { return m }
         let m = TileTexture.material(tile, z)
         tileMats[key] = m
@@ -501,9 +655,17 @@ struct TilePanel: View {
     @State private var editing: TileItem?
     @State private var calc = false
     @State private var auto = false
+    @State private var kind: TileItem.Kind = .tile
+
+    private var shown: [TileItem] { library.tiles.filter { $0.kind == kind } }
+    private var tilesOnly: [TileItem] { library.tiles.filter { $0.kind == .tile } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Picker("Что", selection: $kind) {
+                ForEach(TileItem.Kind.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
             if let hint = editor.engHint {
                 Label(hint, systemImage: "hand.tap").font(.footnote.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
@@ -521,13 +683,12 @@ struct TilePanel: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    ForEach(library.tiles) { t in thumb(t) }
+                    ForEach(shown) { t in thumb(t) }
                 }
                 .padding(.vertical, 2)
             }
-            if library.tiles.isEmpty {
-                Text("Добавьте свою плитку: сфотографируйте её или вставьте ссылку с сайта магазина.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if shown.isEmpty {
+                Text(emptyText).font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 10) {
                 Button { auto = true } label: {
@@ -535,7 +696,7 @@ struct TilePanel: View {
                         .frame(maxWidth: .infinity).padding(.vertical, 11)
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
                 }
-                .disabled(library.tiles.isEmpty)
+                .disabled(tilesOnly.isEmpty)
                 Button { calc = true } label: {
                     Label("Сколько купить", systemImage: "list.number").font(.subheadline.bold())
                         .frame(maxWidth: .infinity).padding(.vertical, 11)
@@ -550,7 +711,7 @@ struct TilePanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground))
         .sheet(isPresented: $adding) {
-            TileAddView { t, img in
+            TileAddView(kind: kind) { t, img in
                 library.save(t, image: img)
                 editor.setTileItems(library.tiles)
                 editor.setTileTool(t.id)
@@ -566,9 +727,9 @@ struct TilePanel: View {
             TileCalcView(total: TileCalc.total(editor.tiling, items: editor.tileItems, room: editor.room), room: editor.result.room)
         }
         .confirmationDialog("Подобрать раскладку", isPresented: $auto, titleVisibility: .visible) {
-            ForEach(library.tiles.prefix(6)) { t in
+            ForEach(tilesOnly.prefix(6)) { t in
                 Button("Основная: \(t.name)") {
-                    let floor = library.tiles.first { $0.id != t.id }?.id
+                    let floor = tilesOnly.first { $0.id != t.id }?.id
                     editor.autoTile(main: t.id, floorTile: floor)
                 }
             }
@@ -582,7 +743,9 @@ struct TilePanel: View {
         return Button { editor.setTileTool(on ? nil : t.id) } label: {
             VStack(spacing: 4) {
                 Group {
-                    if let img = TileFiles.image(t.id) {
+                    if t.kind == .paint {
+                        Color(UIColor(hex: t.color))
+                    } else if let img = TileFiles.image(t.id) {
                         Image(uiImage: img).resizable().scaledToFill()
                     } else {
                         Color.gray
@@ -606,8 +769,18 @@ struct TilePanel: View {
         }
     }
 
+    private var emptyText: String {
+        switch kind {
+        case .tile: return "Добавьте свою плитку: сфотографируйте её или вставьте ссылку с сайта магазина."
+        case .wallpaper: return "Добавьте обои: фото рисунка или ссылка на рулон в магазине."
+        case .paint: return "Добавьте краску: выберите цвет или возьмите его с фото стены, образца, картинки."
+        case .board: return "Добавьте ламинат или паркет: фото доски или ссылка из магазина."
+        }
+    }
+
     @ViewBuilder private func zonePanel(_ z: Tiling.Zone) -> some View {
         let room = editor.room
+        let itemKind = editor.tileItems[z.tile]?.kind ?? .tile
         let (a, b) = TileCalc.span(z, room)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -618,10 +791,12 @@ struct TilePanel: View {
                     Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.secondary)
                 }
             }
-            Picker("Раскладка", selection: Binding(get: { z.pattern }, set: { p in editor.editZone { $0.pattern = p } })) {
-                ForEach(Tiling.Pattern.allCases) { Text($0.title).tag($0) }
+            if itemKind == .tile || itemKind == .board {
+                Picker("Раскладка", selection: Binding(get: { z.pattern }, set: { p in editor.editZone { $0.pattern = p } })) {
+                    ForEach(Tiling.Pattern.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
             if !z.isFloor {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -646,6 +821,7 @@ struct TilePanel: View {
                         .labelsHidden()
                 }
             }
+            if itemKind == .tile {
             HStack(spacing: 8) {
                 Text("Шов").font(.subheadline)
                 ForEach([1.5, 2, 3, 5], id: \.self) { j in
@@ -662,9 +838,12 @@ struct TilePanel: View {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+            }
+            HStack {
                 Spacer()
-                Button(role: .destructive) { editor.removeZone() } label: { Image(systemName: "trash") }
-                    .accessibilityLabel("Убрать плитку")
+                Button(role: .destructive) { editor.removeZone() } label: { Label("Убрать", systemImage: "trash") }
+                    .font(.subheadline.bold())
             }
             Text("Площадь \(fmt((TileCalc.area(z, room) * 100).rounded() / 100)) м² без окон и дверей")
                 .font(.caption).foregroundStyle(.secondary)
@@ -702,37 +881,41 @@ struct TileCalcView: View {
                 ForEach(total.lines) { l in
                     Section {
                         HStack(spacing: 12) {
-                            if let img = TileFiles.image(l.tile.id) {
-                                Image(uiImage: img).resizable().scaledToFill().frame(width: 48, height: 48)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            Group {
+                                if l.tile.kind == .paint {
+                                    Color(UIColor(hex: l.tile.color))
+                                } else if let img = TileFiles.image(l.tile.id) {
+                                    Image(uiImage: img).resizable().scaledToFill()
+                                } else {
+                                    Color.gray
+                                }
                             }
+                            .frame(width: 48, height: 48)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                             VStack(alignment: .leading) {
                                 Text(l.tile.name).font(.headline)
-                                Text("\(l.tile.sizeText) · \(l.surfaces.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
+                                Text("\(l.tile.kind.title) · \(l.tile.sizeText) · \(l.surfaces.joined(separator: ", "))")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        row("Площадь укладки", "\(fmt((l.area * 100).rounded() / 100)) м²")
-                        row("Плиток с запасом", "\(l.pieces) шт")
-                        row("Купить", "\(fmt((l.buyArea * 100).rounded() / 100)) м²")
-                        if let b = l.boxes { row("Коробок", "\(b)") }
-                        if let c = l.cost { row("Стоимость", TileCalc.money(c)) }
+                        ForEach(Array(l.rows.enumerated()), id: \.offset) { _, r in row(r.0, r.1) }
                         if let link = l.tile.link, let url = URL(string: link) {
                             Link(destination: url) { Label("Открыть в магазине", systemImage: "cart") }
                         }
                     }
                 }
-                Section("Ещё понадобится") {
-                    row("Клей для плитки", "\(total.glueBags) меш. по 25 кг")
-                    row("Затирка", "≈ \(fmt((total.groutKg * 10).rounded(.up) / 10)) кг")
-                    row("Крестики", "≈ \(total.crosses) шт")
-                    if total.cost > 0 { row("Плитка всего", TileCalc.money(total.cost)) }
+                if !total.extras.isEmpty || total.cost > 0 {
+                    Section("Ещё понадобится") {
+                        ForEach(Array(total.extras.enumerated()), id: \.offset) { _, r in row(r.0, r.1) }
+                        if total.cost > 0 { row("Всего по ценам", TileCalc.money(total.cost)) }
+                    }
                 }
                 Section {
-                    Text("Запас на подрезку и бой: прямо — 10%, вразбежку — 12%, по диагонали — 15%. Окна и двери вычтены. Коробки и цена — если вы их указали у плитки.")
+                    Text("Плитка: запас 10% прямо, 12% вразбежку, 15% по диагонали. Ламинат: +7%. Обои: полосы по высоте с раппортом и один рулон в запас. Краска: 2 слоя. Окна и двери вычтены. Коробки и цена — если вы их указали.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Плитка · \(room)")
+            .navigationTitle("Отделка · \(room)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
@@ -869,7 +1052,7 @@ enum TileLink {
     }
 }
 
-/// Новая плитка: фото (камера или галерея) или ссылка, рамка по размеру плитки, цвет, размеры и коробка
+/// Новая отделка: фото (камера или галерея) или ссылка, рамка по размеру плитки/раппорта, цвет, размеры и упаковка
 struct TileAddView: View {
     var editing: TileItem? = nil
     let onSave: (TileItem, UIImage?) -> Void
@@ -877,6 +1060,7 @@ struct TileAddView: View {
 
     enum Source: String, CaseIterable { case photo = "Фото", link = "Ссылка" }
 
+    @State private var kind: TileItem.Kind
     @State private var source = Source.photo
     @State private var picked: PhotosPickerItem?
     @State private var camera = false
@@ -889,6 +1073,9 @@ struct TileAddView: View {
     @State private var height = "60"
     @State private var perBox = ""
     @State private var price = ""
+    @State private var roll = "10,05"
+    @State private var can = "2,5"
+    @State private var paint = Color(red: 0.91, green: 0.89, blue: 0.86)
     @State private var link: String?
     @State private var fixColor = true
     @State private var zoom: CGFloat = 1
@@ -898,90 +1085,95 @@ struct TileAddView: View {
     /// Размер окна с рамкой на экране — по нему считаем, что вырезать
     @State private var cropView = CGSize(width: 360, height: 300)
 
-    init(editing: TileItem? = nil, onSave: @escaping (TileItem, UIImage?) -> Void) {
+    init(kind: TileItem.Kind = .tile, editing: TileItem? = nil, onSave: @escaping (TileItem, UIImage?) -> Void) {
         self.editing = editing
         self.onSave = onSave
+        let k = editing?.kind ?? kind
+        _kind = State(initialValue: k)
         if let t = editing {
             _name = State(initialValue: t.name)
             _width = State(initialValue: fmt(t.width))
             _height = State(initialValue: fmt(t.height))
             _perBox = State(initialValue: t.perBox > 0 ? fmt(t.perBox) : "")
             _price = State(initialValue: t.price > 0 ? fmt(t.price) : "")
+            _roll = State(initialValue: fmt(t.rollLength))
+            _can = State(initialValue: fmt(t.can))
+            _paint = State(initialValue: Color(UIColor(hex: t.color)))
             _link = State(initialValue: t.link)
+        } else {
+            let d = TileAddView.defaults(k)
+            _width = State(initialValue: d.0)
+            _height = State(initialValue: d.1)
+        }
+    }
+
+    static func defaults(_ k: TileItem.Kind) -> (String, String) {
+        switch k {
+        case .tile: return ("30", "60")
+        case .wallpaper: return ("106", "0")
+        case .board: return ("138", "19,3")
+        case .paint: return ("0", "0")
         }
     }
 
     private func number(_ s: String) -> Double? { Double(s.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) }
     private var tileW: Double { min(max(number(width) ?? 30, 2), 320) }
-    private var tileH: Double { min(max(number(height) ?? 30, 2), 320) }
+    private var tileH: Double {
+        let v = number(height) ?? 0
+        if kind == .wallpaper { return min(max(v, 0), 320) }
+        return min(max(v, 2), 320)
+    }
+    /// Рамка на фото: плитка, доска или кусок обоев на ширину рулона
+    private var aspect: Double {
+        if kind == .wallpaper { return tileW / (tileH > 0 ? tileH : tileW) }
+        return tileW / tileH
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 if editing == nil {
                     Section {
-                        Picker("Откуда", selection: $source) {
-                            ForEach(Source.allCases, id: \.self) { Text($0.rawValue) }
+                        Picker("Что", selection: $kind) {
+                            ForEach(TileItem.Kind.allCases) { Text($0.title).tag($0) }
                         }
                         .pickerStyle(.segmented)
-                        if source == .photo {
-                            Button { camera = true } label: { Label("Сфотографировать плитку", systemImage: "camera") }
-                            PhotosPicker(selection: $picked, matching: .images) { Label("Выбрать из галереи", systemImage: "photo") }
-                            Text("Снимайте плитку прямо, без бликов, при дневном свете — лучше целиком.").font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            TextField("Ссылка на плитку в магазине", text: $linkText, axis: .vertical)
-                                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            Button { Task { await loadLink() } } label: {
-                                HStack {
-                                    if loading { ProgressView() }
-                                    Text(loading ? "Загружаю…" : "Взять плитку со страницы")
-                                }
-                            }
-                            .disabled(linkText.isEmpty || loading)
-                            Text("Любой сайт: Леруа Мерлен, Петрович, ОБИ, Керамин, Kerama Marazzi и другие. Возьму картинку, название и размер.")
-                                .font(.caption).foregroundStyle(.secondary)
+                        .onChange(of: kind) { k in
+                            let d = TileAddView.defaults(k)
+                            width = d.0
+                            height = d.1
                         }
-                        if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
                     }
                 }
-                if let photo {
-                    Section {
-                        cropper(photo)
-                            .frame(height: 300)
-                            .listRowInsets(EdgeInsets())
-                        Toggle("Подогнать цвет и яркость", isOn: $fixColor)
-                    } header: {
-                        Text("Двигайте и приближайте фото — в рамке одна плитка")
-                    }
-                } else if let t = editing, let img = TileFiles.image(t.id) {
-                    Section {
-                        Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 200).frame(maxWidth: .infinity)
-                    }
-                }
-                Section("Плитка") {
-                    TextField("Название", text: $name)
-                    HStack {
-                        TextField("Ширина", text: $width).keyboardType(.decimalPad)
-                        Text("×")
-                        TextField("Высота", text: $height).keyboardType(.decimalPad)
-                        Text("см").foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        TextField("м² в коробке (если знаете)", text: $perBox).keyboardType(.decimalPad)
-                        Text("м²").foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        TextField("Цена за м² (если знаете)", text: $price).keyboardType(.decimalPad)
-                        Text("₽").foregroundStyle(.secondary)
+                if kind == .paint {
+                    paintSection
+                } else {
+                    if editing == nil { sourceSection }
+                    if let photo {
+                        Section {
+                            cropper(photo)
+                                .frame(height: 300)
+                                .listRowInsets(EdgeInsets())
+                            Toggle("Подогнать цвет и яркость", isOn: $fixColor)
+                        } header: {
+                            Text(kind == .wallpaper ? "Двигайте и приближайте фото — в рамке кусок обоев на ширину рулона"
+                                                    : kind == .board ? "Двигайте и приближайте фото — в рамке одна доска"
+                                                    : "Двигайте и приближайте фото — в рамке одна плитка")
+                        }
+                    } else if let t = editing, let img = TileFiles.image(t.id) {
+                        Section {
+                            Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 200).frame(maxWidth: .infinity)
+                        }
                     }
                 }
+                fieldsSection
             }
-            .navigationTitle(editing == nil ? "Своя плитка" : "Плитка")
+            .navigationTitle(editing == nil ? "Своя отделка" : kind.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Сохранить") { save() }.disabled(photo == nil && editing == nil)
+                    Button("Сохранить") { save() }.disabled(kind != .paint && photo == nil && editing == nil)
                 }
             }
             .onChange(of: picked) { item in
@@ -996,9 +1188,108 @@ struct TileAddView: View {
         }
     }
 
+    @ViewBuilder private var sourceSection: some View {
+        Section {
+            Picker("Откуда", selection: $source) {
+                ForEach(Source.allCases, id: \.self) { Text($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            if source == .photo {
+                Button { camera = true } label: { Label("Сфотографировать", systemImage: "camera") }
+                PhotosPicker(selection: $picked, matching: .images) { Label("Выбрать из галереи", systemImage: "photo") }
+                Text("Снимайте прямо, без бликов, при дневном свете.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                TextField("Ссылка на товар в магазине", text: $linkText, axis: .vertical)
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button { Task { await loadLink() } } label: {
+                    HStack {
+                        if loading { ProgressView() }
+                        Text(loading ? "Загружаю…" : "Взять со страницы")
+                    }
+                }
+                .disabled(linkText.isEmpty || loading)
+                Text("Любой сайт: Леруа Мерлен, Петрович, ОБИ, Керамин, Kerama Marazzi и другие. Возьму картинку, название и размер.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+        }
+    }
+
+    @ViewBuilder private var paintSection: some View {
+        Section {
+            ColorPicker("Цвет краски", selection: $paint, supportsOpacity: false)
+            RoundedRectangle(cornerRadius: 14).fill(paint).frame(height: 70)
+            Button { camera = true } label: { Label("Взять цвет с фото", systemImage: "eyedropper") }
+            PhotosPicker(selection: $picked, matching: .images) { Label("Цвет с картинки из галереи", systemImage: "photo") }
+            Text("С фото беру средний цвет середины кадра. Экран телефона показывает цвета чуть иначе, чем стена, — сверяйтесь с веером в магазине.")
+                .font(.caption).foregroundStyle(.secondary)
+        } header: {
+            Text("Цвет")
+        }
+    }
+
+    @ViewBuilder private var fieldsSection: some View {
+        Section(kind.title) {
+            TextField("Название", text: $name)
+            switch kind {
+            case .tile, .board:
+                HStack {
+                    TextField(kind == .board ? "Длина" : "Ширина", text: $width).keyboardType(.decimalPad)
+                    Text("×")
+                    TextField(kind == .board ? "Ширина" : "Высота", text: $height).keyboardType(.decimalPad)
+                    Text("см").foregroundStyle(.secondary)
+                }
+                HStack {
+                    TextField(kind == .board ? "м² в пачке (если знаете)" : "м² в коробке (если знаете)", text: $perBox).keyboardType(.decimalPad)
+                    Text("м²").foregroundStyle(.secondary)
+                }
+                HStack {
+                    TextField("Цена за м² (если знаете)", text: $price).keyboardType(.decimalPad)
+                    Text("₽").foregroundStyle(.secondary)
+                }
+            case .wallpaper:
+                HStack {
+                    Text("Ширина рулона")
+                    TextField("106", text: $width).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    Text("см").foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Длина рулона")
+                    TextField("10,05", text: $roll).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    Text("м").foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Раппорт (0 — нет)")
+                    TextField("0", text: $height).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    Text("см").foregroundStyle(.secondary)
+                }
+                HStack {
+                    TextField("Цена за рулон (если знаете)", text: $price).keyboardType(.decimalPad)
+                    Text("₽").foregroundStyle(.secondary)
+                }
+            case .paint:
+                HStack {
+                    Text("Литров в банке")
+                    TextField("2,5", text: $can).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    Text("л").foregroundStyle(.secondary)
+                }
+                HStack {
+                    TextField("Цена за банку (если знаете)", text: $price).keyboardType(.decimalPad)
+                    Text("₽").foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private func use(_ img: UIImage) {
-        photo = TileImage.upright(img)
+        let up = TileImage.upright(img)
+        if kind == .paint {
+            if let c = TileImage.average(up) { paint = Color(c) }
+            return
+        }
+        photo = up
         zoom = 1
+        zoomStart = 1
         offset = .zero
         offsetStart = .zero
         problem = nil
@@ -1012,7 +1303,7 @@ struct TileAddView: View {
             let (found, img) = try await TileLink.fetch(linkText)
             use(img)
             name = found.name
-            if let w = found.width, let h = found.height {
+            if kind == .tile, let w = found.width, let h = found.height {
                 width = fmt(w)
                 height = fmt(h)
             }
@@ -1023,10 +1314,10 @@ struct TileAddView: View {
         }
     }
 
-    /// Рамка по пропорциям плитки; фото под ней двигают и приближают
+    /// Рамка по пропорциям; фото под ней двигают и приближают
     private func cropper(_ img: UIImage) -> some View {
         GeometryReader { geo in
-            let frame = TileImage.frame(in: geo.size, aspect: tileW / tileH)
+            let frame = TileImage.frame(in: geo.size, aspect: aspect)
             let base = TileImage.fill(img.size, frame.size)
             ZStack {
                 Color.black
@@ -1057,25 +1348,36 @@ struct TileAddView: View {
     }
 
     private func save() {
-        var t = editing ?? TileItem(name: "", width: 30, height: 30)
-        t.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? "Плитка \(fmt(tileW))×\(fmt(tileH))" : name
-        t.width = tileW
-        t.height = tileH
+        var t = editing ?? TileItem(kind: kind, name: "", width: 30, height: 30)
+        t.kind = kind
+        let fallback: String
+        switch kind {
+        case .tile: fallback = "Плитка \(fmt(tileW))×\(fmt(tileH))"
+        case .wallpaper: fallback = "Обои \(fmt(tileW / 100)) м"
+        case .board: fallback = "Ламинат \(fmt(tileW))×\(fmt(tileH))"
+        case .paint: fallback = "Краска"
+        }
+        t.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? fallback : name
+        t.width = kind == .paint ? 0 : tileW
+        t.height = kind == .paint ? 0 : tileH
         t.perBox = max(0, number(perBox) ?? 0)
         t.price = max(0, number(price) ?? 0)
+        t.rollLength = min(max(number(roll) ?? 10.05, 1), 50)
+        t.can = min(max(number(can) ?? 2.5, 0.5), 20)
+        t.color = UIColor(paint).hexString
         t.link = link ?? t.link
         var out: UIImage?
-        if let photo {
-            // какую часть фото видно в рамке — та и плитка. Размер рамки на экране не важен: считаем в долях
+        if let photo, kind != .paint {
+            // какую часть фото видно в рамке — та и картинка
             let view = cropView
-            let frame = TileImage.frame(in: view, aspect: tileW / tileH)
+            let frame = TileImage.frame(in: view, aspect: aspect)
             let scale = TileImage.fill(photo.size, frame.size) * zoom
             let originX = view.width / 2 + offset.width - photo.size.width * scale / 2
             let originY = view.height / 2 + offset.height - photo.size.height * scale / 2
             let crop = CGRect(x: (frame.minX - originX) / scale, y: (frame.minY - originY) / scale,
                               width: frame.width / scale, height: frame.height / scale)
             let src = fixColor ? (TileImage.enhanced(photo) ?? photo) : photo
-            out = TileImage.crop(src, crop, aspect: tileW / tileH)
+            out = TileImage.crop(src, crop, aspect: aspect)
         }
         onSave(t, out)
         dismiss()
@@ -1123,6 +1425,19 @@ enum TileImage {
         let out = UIImage(cgImage: cg)
         enhancedCache = (img, out)
         return out
+    }
+
+    /// Средний цвет середины кадра (40%) — для краски с фото
+    static func average(_ img: UIImage) -> UIColor? {
+        guard let ci = CIImage(image: img) else { return nil }
+        let e = ci.extent
+        let rect = CGRect(x: e.midX - e.width * 0.2, y: e.midY - e.height * 0.2, width: e.width * 0.4, height: e.height * 0.4)
+        guard let f = CIFilter(name: "CIAreaAverage", parameters: [kCIInputImageKey: ci, kCIInputExtentKey: CIVector(cgRect: rect)]),
+              let out = f.outputImage else { return nil }
+        var px = [UInt8](repeating: 0, count: 4)
+        context.render(out, toBitmap: &px, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        return UIColor(red: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255, blue: CGFloat(px[2]) / 255, alpha: 1)
     }
 
     /// Вырезать рамку и привести к размеру плитки (длинная сторона 512)

@@ -135,7 +135,7 @@ struct ResultView: View {
                     }
                     if !result.wallLines.isEmpty {
                         NavigationLink { engineeringScreen(.tile) } label: {
-                            tool("Плитка", "square.grid.2x2.fill", "своя плитка, дизайн, расчёт")
+                            tool("Отделка", "square.grid.2x2.fill", "плитка, обои, краска, пол")
                         }
                         NavigationLink { engineeringScreen(.electric) } label: {
                             tool("Электрика", "bolt.fill", "вырезы и провода в 3D")

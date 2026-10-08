@@ -127,7 +127,7 @@ struct Renovation3DView: View {
             }
         }
         .navigationTitle(fixedMode == .electric ? "Электрика" : fixedMode == .plumbing ? "Сантехника"
-                         : fixedMode == .tile ? "Плитка" : "Ремонт в 3D")
+                         : fixedMode == .tile ? "Отделка" : "Ремонт в 3D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {

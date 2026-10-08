@@ -193,6 +193,8 @@ struct Tiling: Equatable {
     }
 
     var zones: [Zone] = []
+    /// Своя мебель по ссылке или фото (Pieces.swift)
+    var pieces: [CustomPiece] = []
     var isEmpty: Bool { zones.isEmpty }
 
     static let maxZones = 60
@@ -202,7 +204,7 @@ struct Tiling: Equatable {
         return ["zones": zones.map { z in
             ["wall": z.wall, "tile": z.tile.uuidString, "from": r(z.from), "to": r(z.to), "pattern": z.pattern.rawValue,
              "joint": z.joint, "grout": z.grout] as [String: Any]
-        }]
+        }, "pieces": pieces.map(\.json)]
     }
 
     init() {}
@@ -219,6 +221,7 @@ struct Tiling: Equatable {
             z.grout = d["grout"] as? String ?? "#d9d6cf"
             return z
         }
+        pieces = (json["pieces"] as? [[String: Any]] ?? []).prefix(CustomPiece.max).compactMap(CustomPiece.init(json:))
     }
 }
 
@@ -946,6 +949,8 @@ struct TileLinkFound {
     var name: String
     var width: Double?
     var height: Double?
+    /// Текст страницы без разметки — в нём ищем размеры мебели
+    var text = ""
 }
 
 enum TileLink {
@@ -973,6 +978,7 @@ enum TileLink {
         guard let (data, _) = try? await URLSession.shared.data(for: req) else { throw Problem.download }
         let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1251) ?? ""
         guard var found = parse(html, base: url) else { throw Problem.noImage }
+        found.text = plain(html)
         var imgReq = URLRequest(url: found.image, timeoutInterval: 20)
         imgReq.setValue(agent, forHTTPHeaderField: "User-Agent")
         imgReq.setValue(url.absoluteString, forHTTPHeaderField: "Referer")
@@ -1025,6 +1031,15 @@ enum TileLink {
         guard let re = try? NSRegularExpression(pattern: #""image"\s*:\s*\[?\s*"(https?:[^"]+)""#),
               let m = re.firstMatch(in: html, range: NSRange(location: 0, length: (html as NSString).length)) else { return nil }
         return (html as NSString).substring(with: m.range(at: 1)).replacingOccurrences(of: "\\/", with: "/")
+    }
+
+    /// Страница без тегов и скриптов (первые 400 тыс. знаков)
+    static func plain(_ html: String) -> String {
+        var s = String(html.prefix(400_000))
+        s = s.replacingOccurrences(of: #"(?is)<(script|style)[^>]*>.*?</\1>"#, with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+        s = unescape(s).replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return s
     }
 
     static func unescape(_ s: String) -> String {

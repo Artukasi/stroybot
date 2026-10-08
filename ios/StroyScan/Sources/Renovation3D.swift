@@ -310,7 +310,7 @@ private struct Foot {
 /// 3D-ремонт по скану: строит комнату точно по размерам, выделяет то, что нажали, и меняет только это.
 final class RenoEditor: NSObject, ObservableObject {
     enum Pick: Equatable {
-        case wall(Int), floor, ceiling, window(Int), door(Int), object(Int), added(Int)
+        case wall(Int), floor, ceiling, window(Int), door(Int), object(Int), added(Int), custom(Int)
 
         init?(name: String) {
             let parts = name.split(separator: ":")
@@ -321,6 +321,7 @@ final class RenoEditor: NSObject, ObservableObject {
             case "door": guard let n else { return nil }; self = .door(n)
             case "obj": guard let n else { return nil }; self = .object(n)
             case "add": guard let n else { return nil }; self = .added(n)
+            case "cust": guard let n else { return nil }; self = .custom(n)
             case "floor": self = .floor
             case "ceiling", "lamps": self = .ceiling
             default: return nil
@@ -365,6 +366,10 @@ final class RenoEditor: NSObject, ObservableObject {
     @Published var tileSelected: UUID?
     let tileHolder = SCNNode()
     var tileMats: [String: SCNMaterial] = [:]
+    /// Своя мебель по ссылке или фото (Pieces.swift); она лежит в tiling.pieces
+    let customHolder = SCNNode()
+    var customNodes: [SCNNode] = []
+    private var dragCustom: Int?
     var engWallOf: [UUID: Int] = [:]
 
     let result: RoomResult
@@ -683,6 +688,7 @@ final class RenoEditor: NSObject, ObservableObject {
         if pick != nil { select(nil) }
         itemHolder.isHidden = on
         addedHolder.isHidden = on || bare
+        customHolder.isHidden = on || bare
     }
 
     /// Повернуть комнату на четверть оборота (кнопками — без возни пальцами)
@@ -760,7 +766,7 @@ final class RenoEditor: NSObject, ObservableObject {
         lampHolder.name = "lamps"
         engHolder.name = "eng"
         for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder, defectHolder,
-                  tileHolder] {
+                  tileHolder, customHolder] {
             scene.rootNode.addChildNode(n)
         }
         orbitCamera.camera = RenoEditor.camera(room: false)
@@ -915,6 +921,7 @@ final class RenoEditor: NSObject, ObservableObject {
         buildEngineering()
         buildDefects()
         buildTiles()
+        buildCustom()
         highlight()
         applyVisibility()
     }
@@ -1455,7 +1462,7 @@ final class RenoEditor: NSObject, ObservableObject {
 
     /// Вещь целиком на полу: все четыре угла внутри комнаты, ничего не торчит в стене или в проёме.
     /// Зазор 2 см — на плинтус.
-    private func inRoom(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> Bool {
+    func inRoom(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> Bool {
         Foot(c, angle: angle, w: w + 0.04, d: d + 0.04).corners.allSatisfy { room.inside($0) }
     }
 
@@ -1464,7 +1471,7 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     /// Ближайшее к c место (шаг 5 см), где вещь встаёт целиком; nil — в комнату не помещается
-    private func nearestFit(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> SIMD2<Float>? {
+    func nearestFit(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> SIMD2<Float>? {
         if inRoom(c, angle: angle, w: w, d: d) { return c }
         var best: SIMD2<Float>?
         var bestDist = Float.greatestFiniteMagnitude
@@ -1489,8 +1496,40 @@ final class RenoEditor: NSObject, ObservableObject {
         nearestFit(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle), w: Float(a.width), d: Float(a.depth))
     }
 
+    /// Во что упирается своя мебель j на этом месте: другая мебель или проход у двери; nil — стоит свободно
+    func customBump(_ j: Int) -> String? {
+        guard tiling.pieces.indices.contains(j) else { return nil }
+        let p = tiling.pieces[j]
+        let me = Foot(SIMD2(Float(p.x), Float(p.y)), angle: Float(p.angle), w: Float(p.width), d: Float(p.depth))
+        if !furnitureHidden {
+            for (i, it) in result.items.enumerated() where look.objects[String(i)]?.hidden != true {
+                if me.overlaps(Foot(SIMD2(Float(it.x), Float(it.y)), angle: Float(it.angle), w: Float(it.width), d: Float(it.depth))) {
+                    return it.title.lowercased()
+                }
+            }
+            for a in look.added where me.overlaps(Foot(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle),
+                                                       w: Float(a.width), d: Float(a.depth))) {
+                return RoomResult.itemTitle(a.kind).lowercased()
+            }
+        }
+        for (k, c) in tiling.pieces.enumerated() where k != j {
+            if me.overlaps(Foot(SIMD2(Float(c.x), Float(c.y)), angle: Float(c.angle), w: Float(c.width), d: Float(c.depth))) {
+                return c.name.isEmpty ? "другую вашу мебель" : c.name
+            }
+        }
+        for (pos, list) in room.openings.enumerated() {
+            let g = room.walls[pos]
+            let along = atan2(g.dir.y, g.dir.x)
+            for o in list where o.kind != "window" {
+                // 60 см перед дверью — проход
+                if me.overlaps(Foot(g.point(o.center) + g.normal * 0.3, angle: along, w: o.width, d: 0.6)) { return "проход у двери" }
+            }
+        }
+        return nil
+    }
+
     /// Свободное место под новую вещь: не на проходе у дверей, не перед окном, не поверх мебели
-    private func freeSpot(kind: String, variant: String, w: Float, d: Float, h: Float) -> (SIMD2<Float>, Float)? {
+    func freeSpot(kind: String, variant: String, w: Float, d: Float, h: Float) -> (SIMD2<Float>, Float)? {
         var blocks: [Foot] = []
         for (i, it) in result.items.enumerated() where look.objects[String(i)]?.hidden != true {
             blocks.append(Foot(SIMD2(Float(it.x), Float(it.y)), angle: Float(it.angle),
@@ -1498,6 +1537,9 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         for a in look.added {
             blocks.append(Foot(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle), w: Float(a.width) + 0.3, d: Float(a.depth) + 0.3))
+        }
+        for c in tiling.pieces {
+            blocks.append(Foot(SIMD2(Float(c.x), Float(c.y)), angle: Float(c.angle), w: Float(c.width) + 0.3, d: Float(c.depth) + 0.3))
         }
         for (pos, list) in room.openings.enumerated() {
             let g = room.walls[pos]
@@ -1576,7 +1618,7 @@ final class RenoEditor: NSObject, ObservableObject {
 
     // MARK: Выделение
 
-    private func highlight() {
+    func highlight() {
         selectionNode?.removeFromParentNode()
         selectionNode = nil
         guard let pick else { return }
@@ -1611,6 +1653,10 @@ final class RenoEditor: NSObject, ObservableObject {
             guard j < addedNodes.count else { return }
             lines = boxEdges(addedNodes[j])
             parent = addedNodes[j]
+        case .custom(let j):
+            guard j < customNodes.count else { return }
+            lines = boxEdges(customNodes[j])
+            parent = customNodes[j]
         }
         guard let parent else { return }
         let frame = Kit()
@@ -1690,7 +1736,10 @@ final class RenoEditor: NSObject, ObservableObject {
         let p = g.location(in: view)
         switch g.state {
         case .began:
-            if let j = dragIndex, j < addedNodes.count, let hit = floorPoint(p) {
+            if let j = dragCustom, j < customNodes.count, let hit = floorPoint(p) {
+                let pos = customNodes[j].simdPosition
+                dragOffset = SIMD2(pos.x, pos.z) - hit
+            } else if let j = dragIndex, j < addedNodes.count, let hit = floorPoint(p) {
                 let pos = addedNodes[j].simdPosition
                 dragOffset = SIMD2(pos.x, pos.z) - hit
             } else {
@@ -1698,7 +1747,19 @@ final class RenoEditor: NSObject, ObservableObject {
                 lookStart = (yaw, pitch)
             }
         case .changed:
-            if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
+            if let j = dragCustom, j < customNodes.count, tiling.pieces.indices.contains(j) {
+                guard let hit = floorPoint(p) else { return }
+                let c = tiling.pieces[j]
+                let q = hit + dragOffset
+                let pos = customNodes[j].simdPosition
+                let old = SIMD2(pos.x, pos.z)
+                let fits = { (x: SIMD2<Float>) in self.inRoom(x, angle: Float(c.angle), w: Float(c.width), d: Float(c.depth)) }
+                let stuck = !fits(old)
+                if let next = [q, SIMD2(q.x, old.y), SIMD2(old.x, q.y)].first(where: { fits($0) || (stuck && room.inside($0)) }) {
+                    customNodes[j].simdPosition.x = next.x
+                    customNodes[j].simdPosition.z = next.y
+                }
+            } else if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
                 guard let hit = floorPoint(p) else { return }
                 let a = look.added[j]
                 let q = hit + dragOffset
@@ -1721,6 +1782,12 @@ final class RenoEditor: NSObject, ObservableObject {
                 applyRoomCamera()
             }
         default:
+            if let j = dragCustom, j < customNodes.count, tiling.pieces.indices.contains(j) {
+                let pos = customNodes[j].simdPosition
+                tiling.pieces[j].x = Double(pos.x)
+                tiling.pieces[j].y = Double(pos.z)
+            }
+            dragCustom = nil
             if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
                 let pos = addedNodes[j].simdPosition
                 edit { l in
@@ -1756,8 +1823,13 @@ extension RenoEditor: UIGestureRecognizerDelegate {
         if g === pan {
             // тащить можно только выбранную добавленную мебель
             dragIndex = nil
+            dragCustom = nil
             if case .added(let j)? = pick, case .added(let hit)? = hitPick(at: g.location(in: view)), hit == j {
                 dragIndex = j
+                return true
+            }
+            if case .custom(let j)? = pick, case .custom(let hit)? = hitPick(at: g.location(in: view)), hit == j {
+                dragCustom = j
                 return true
             }
             return inside

@@ -62,6 +62,7 @@ struct Renovation3DView: View {
     @State private var alert: String?
     @State private var shot: RenderShot?
     @State private var share: ShareFile?
+    @State private var addingPiece = false
 
     init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false,
          fixedMode: EngMode? = nil, tiling: Binding<Tiling>? = nil, scanId: Int?,
@@ -168,6 +169,15 @@ struct Renovation3DView: View {
         }
         .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
         .fullScreenCover(item: $shot) { RenderResultView(shot: $0) }
+        .sheet(isPresented: $addingPiece) {
+            CustomPieceAddView { piece, image in
+                switch editor.addCustom(piece, image: image) {
+                case .tooMany: alert = "Своих вещей можно поставить не больше \(CustomPiece.max)."
+                case .noRoom: alert = "Эта вещь не помещается в комнату: \(piece.sizeText)."
+                case .added: break
+                }
+            }
+        }
         .alert(alert ?? "", isPresented: Binding(get: { alert != nil }, set: { if !$0 { alert = nil } })) {
             Button("Понятно", role: .cancel) {}
         }
@@ -352,6 +362,9 @@ struct Renovation3DView: View {
                     }
                 }
             }
+            Button { addingPiece = true } label: {
+                Label("Своя по ссылке или фото", systemImage: "link")
+            }
             if editor.hasHidden {
                 Button { editor.restoreHidden() } label: {
                     Label("Вернуть убранное", systemImage: "arrow.uturn.backward")
@@ -506,6 +519,8 @@ struct EditPanel: View {
         case .object(let i): return editor.result.items.indices.contains(i) ? editor.result.items[i].title : "Мебель"
         case .added(let j):
             return editor.look.added.indices.contains(j) ? RoomResult.itemTitle(editor.look.added[j].kind) : "Мебель"
+        case .custom(let j):
+            return editor.tiling.pieces.indices.contains(j) ? editor.tiling.pieces[j].name : "Моя мебель"
         }
     }
 
@@ -529,6 +544,8 @@ struct EditPanel: View {
             object(i)
         case .added(let j):
             added(j)
+        case .custom(let j):
+            custom(j)
         }
     }
 
@@ -596,6 +613,48 @@ struct EditPanel: View {
             }
             arButton(title: RoomResult.itemTitle(a.kind), kind: a.kind, variant: a.variant, color: a.color,
                      w: a.width, d: a.depth, h: a.height)
+        }
+    }
+
+    /// Своя вещь из магазина: влезает ли, пройдёт ли в дверь
+    @ViewBuilder private func custom(_ j: Int) -> some View {
+        if editor.tiling.pieces.indices.contains(j) {
+            let p = editor.tiling.pieces[j]
+            Text("\(p.sizeText). Двигайте пальцем по полу.").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                if !editor.customInRoom(j) {
+                    Label("Не влезает в комнату на этом месте", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                } else if let bump = editor.customBump(j) {
+                    Label("Задевает \(bump)", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                } else {
+                    Label("Встаёт свободно", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                }
+                if let door = editor.customPassesDoor(j) {
+                    let cm = Int((door.door * 100).rounded())
+                    if door.ok {
+                        Label("Пройдёт в дверь \(cm) см боком", systemImage: "door.left.hand.open").foregroundStyle(.green)
+                    } else {
+                        Label("В дверь \(cm) см не пройдёт — только в разобранном виде", systemImage: "door.left.hand.closed")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            HStack(spacing: 16) {
+                Button {
+                    if !editor.rotateCustom(j) { alert = "Повёрнутой эта вещь в комнату не помещается." }
+                } label: {
+                    Label("Повернуть", systemImage: "rotate.right").font(.subheadline.bold())
+                }
+                Button(role: .destructive) { editor.removeCustom(j) } label: {
+                    Label("Убрать", systemImage: "trash").font(.subheadline.bold())
+                }
+                if let link = p.link, let url = URL(string: link) {
+                    Link(destination: url) { Label("Магазин", systemImage: "safari").font(.subheadline.bold()) }
+                }
+            }
+            arButton(title: p.name, kind: "storage", variant: "default", color: "#c8c2b8",
+                     w: p.width, d: p.depth, h: p.height)
         }
     }
 

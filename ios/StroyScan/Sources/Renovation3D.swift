@@ -346,6 +346,7 @@ final class RenoEditor: NSObject, ObservableObject {
     @Published var pendingPipe: Engineering.Pipe?
     @Published var engHint: String?
     let engHolder = SCNNode()
+    let defectHolder = SCNNode()
     var engWallOf: [UUID: Int] = [:]
 
     let result: RoomResult
@@ -687,7 +688,7 @@ final class RenoEditor: NSObject, ObservableObject {
         ceilingHolder.name = "ceiling"
         lampHolder.name = "lamps"
         engHolder.name = "eng"
-        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder] {
+        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder, defectHolder] {
             scene.rootNode.addChildNode(n)
         }
         orbitCamera.camera = RenoEditor.camera(room: false)
@@ -815,6 +816,7 @@ final class RenoEditor: NSObject, ObservableObject {
         buildLamps()
         buildLights()
         buildEngineering()
+        buildDefects()
         highlight()
         applyVisibility()
     }

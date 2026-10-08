@@ -310,7 +310,43 @@ final class ScanStore: ObservableObject {
         }
     }
 
+    // MARK: - Резервная копия
+
+    /// Папка со всеми сканами (её и копируем в бот)
+    nonisolated var folderURL: URL { root }
+
+    /// Растёт при каждом изменении истории — по нему видно, что копию пора обновить
+    var changes: Int { UserDefaults.standard.integer(forKey: "store.changes") }
+
+    /// Сканы и квартиры из копии, которых нет в телефоне. Те, что уже есть, не трогаем
+    func importBackup(from dir: URL) -> (rooms: Int, flats: Int)? {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("index.json")),
+              let index = try? JSONDecoder().decode(Index.self, from: data) else { return nil }
+        let fm = FileManager.default
+        var rooms = 0, addedFlats = 0
+        for scan in index.scans where self.scan(scan.id) == nil {
+            let src = dir.appendingPathComponent(scan.id.uuidString, isDirectory: true)
+            guard fm.fileExists(atPath: src.appendingPathComponent("scan.json").path) else { continue }
+            try? fm.removeItem(at: folder(scan.id))
+            guard (try? fm.copyItem(at: src, to: folder(scan.id))) != nil else { continue }
+            var s = scan
+            s.pending = false
+            scans.append(s)
+            rooms += 1
+        }
+        for f in index.flats where flat(f.id) == nil {
+            var f = f
+            f.rooms = f.rooms.filter { scan($0) != nil }
+            guard !f.rooms.isEmpty else { continue }
+            flats.append(f)
+            addedFlats += 1
+        }
+        persist()
+        return (rooms, addedFlats)
+    }
+
     private func persist() {
+        UserDefaults.standard.set(changes + 1, forKey: "store.changes")
         let index = Index(scans: scans, flats: flats)
         if let data = try? JSONEncoder().encode(index) {
             try? data.write(to: root.appendingPathComponent("index.json"), options: .atomic)
@@ -328,6 +364,7 @@ extension RoomResult {
         d["item_bottoms"] = items.map { ($0.bottom * 1000).rounded() / 1000 }
         d["weak_walls"] = Array(quality.weakWalls).sorted()
         d["engineering"] = engineering.json
+        d["defects"] = defects.map(\.json)
         if let f = worldFrame { d["world_frame"] = [f.x, f.y, f.z, f.w] }
         return d
     }
@@ -370,6 +407,7 @@ extension RoomResult {
         quality.weakWalls = Set((d["weak_walls"] as? [Any] ?? []).compactMap { ($0 as? NSNumber)?.intValue })
         if let p = d["photo"] as? String { photo = Data(base64Encoded: p) }
         if let e = d["engineering"] as? [String: Any] { engineering = Engineering(json: e) }
+        defects = (d["defects"] as? [[String: Any]] ?? []).prefix(Defect.max).compactMap(Defect.init(json:))
         if let f = (d["world_frame"] as? [Any])?.compactMap(num), f.count == 4 { worldFrame = SIMD4(f[0], f[1], f[2], f[3]) }
     }
 }

@@ -18,6 +18,7 @@ struct ContentView: View {
     @EnvironmentObject var link: BotLink
     @EnvironmentObject var store: ScanStore
     @EnvironmentObject var hub: ScanHub
+    @EnvironmentObject var backup: Backup
     @Environment(\.scenePhase) private var phase
     @State private var path = NavigationPath()
     @State private var request: ScanRequest?
@@ -44,6 +45,7 @@ struct ContentView: View {
                     }
                     queueCard
                     connection
+                    BackupCard()
                     history
                     tips
                 }
@@ -79,7 +81,22 @@ struct ContentView: View {
             if on { Task { await store.flush(link) } }
         }
         .onChange(of: phase) { p in
-            if p == .active { Task { await store.flush(link) } }
+            if p == .active {
+                Task {
+                    await store.flush(link)
+                    await backup.save(store, link, auto: true)
+                }
+            } else if p == .background {
+                // пара секунд в фоне — успеть сохранить копию
+                let task = UIApplication.shared.beginBackgroundTask()
+                Task {
+                    await backup.save(store, link, auto: true, throttle: false)
+                    UIApplication.shared.endBackgroundTask(task)
+                }
+            }
+        }
+        .alert(backup.message ?? "", isPresented: Binding(get: { backup.message != nil }, set: { if !$0 { backup.message = nil } })) {
+            Button("OK", role: .cancel) {}
         }
     }
 
@@ -116,6 +133,15 @@ struct ContentView: View {
                     } else {
                         archive = true
                         extra = "Электрику и сантехнику расставьте заново: прежняя расстановка сохранилась в прошлой съёмке («Было — стало»)."
+                    }
+                }
+                if let prev = store.result(target), !prev.defects.isEmpty {
+                    if case .more = req.mode, let moved = r.movedDefects(prev) {
+                        r.defects = moved
+                    } else {
+                        archive = true
+                        extra = [extra, "Дефекты отметьте заново: прежние сохранились в прошлой съёмке («Было — стало»)."]
+                            .compactMap { $0 }.joined(separator: "\n\n")
                     }
                 }
                 store.update(target, result: r, resend: true, archive: archive)

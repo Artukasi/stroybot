@@ -111,12 +111,34 @@ final class BotLink: ObservableObject {
         return (url, (json?["credits"] as? NSNumber)?.intValue)
     }
 
+    // MARK: Резервная копия
+
+    /// Есть ли копия в боте и когда сохранена
+    func backupInfo() async throws -> Date? {
+        let data = try await call("GET", server + "/scan/backup/info", body: nil)
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard json?["exists"] as? Bool == true, let t = (json?["saved_at"] as? NSNumber)?.doubleValue else { return nil }
+        return Date(timeIntervalSince1970: t)
+    }
+
+    func uploadBackup(_ zip: Data) async throws {
+        _ = try await call("PUT", server + "/scan/backup", body: nil, timeout: 180, raw: zip)
+    }
+
+    func downloadBackup() async throws -> Data {
+        try await call("GET", server + "/scan/backup", body: nil, timeout: 180)
+    }
+
     private func call(_ method: String, _ url: String, body: Any?, auth: Bool = true,
-                      timeout: TimeInterval = 30, design: Bool = false) async throws -> Data {
+                      timeout: TimeInterval = 30, design: Bool = false, raw: Data? = nil) async throws -> Data {
         guard let u = URL(string: url) else { throw LinkError.message("Неверный адрес сервера.") }
         var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = method
         if auth, let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let raw {
+            req.setValue("application/zip", forHTTPHeaderField: "Content-Type")
+            req.httpBody = raw
+        }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -140,6 +162,7 @@ final class BotLink: ObservableObject {
         case 402: throw LinkError.message("Не хватает кредитов. Пополните в боте.")
         case 403: throw LinkError.message("Код не подошёл или устарел. Получите новый командой /scanner в боте.")
         case 404 where code == "scan": throw LinkError.scanMissing
+        case 404 where code == "no backup": throw LinkError.message("В боте ещё нет копии.")
         case 404, 405: throw LinkError.message("Бот ещё не умеет это. Обновите бота на сервере.")
         case 409: throw LinkError.message("Нужно фото комнаты")
         case 413: throw LinkError.message("Слишком большой файл.")

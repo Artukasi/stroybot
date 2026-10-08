@@ -196,7 +196,9 @@ struct FlatView: View {
     }
 
     private func sharePDF() {
-        if let url = PlanPDF.flat(name: flat?.name ?? "Квартира", rooms: rooms.map { $0.1 }, outlines: outlines) {
+        let ids = rooms.map(\.0)
+        let photo = { (d: UUID) -> UIImage? in ids.lazy.compactMap { store.defectPhoto($0, d) }.first }
+        if let url = PlanPDF.flat(name: flat?.name ?? "Квартира", rooms: rooms.map { $0.1 }, outlines: outlines, photos: photo) {
             share = ShareFile(url: url)
         } else {
             note = "Не получилось собрать PDF."

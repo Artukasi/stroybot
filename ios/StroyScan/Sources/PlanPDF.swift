@@ -13,20 +13,22 @@ enum PlanPDF {
     static let grey = UIColor(white: 0.45, alpha: 1)
 
     /// Одна комната
-    static func room(_ r: RoomResult) -> URL? {
+    static func room(_ r: RoomResult, photos: @escaping (UUID) -> UIImage? = { _ in nil }) -> URL? {
         render(name: r.room) { ctx in
             roomPage(r, ctx)
             if !r.engineering.isEmpty { engineeringPage(r, ctx) }
+            if !r.defects.isEmpty { defectsPages(r, photos: photos, ctx) }
         }
     }
 
     /// Квартира: итоги и общий план, потом комнаты. outlines — контуры в общих координатах (или nil)
-    static func flat(name: String, rooms: [RoomResult], outlines: [[[Double]]]?) -> URL? {
+    static func flat(name: String, rooms: [RoomResult], outlines: [[[Double]]]?, photos: @escaping (UUID) -> UIImage? = { _ in nil }) -> URL? {
         render(name: name) { ctx in
             flatPage(name: name, rooms: rooms, outlines: outlines, ctx)
             for r in rooms {
                 roomPage(r, ctx)
                 if !r.engineering.isEmpty { engineeringPage(r, ctx) }
+                if !r.defects.isEmpty { defectsPages(r, photos: photos, ctx) }
             }
         }
     }
@@ -141,6 +143,75 @@ enum PlanPDF {
             guard let k = EngKind.find(p.kind) else { continue }
             let wall = p.wall.map { "№\($0 + 1)" } ?? "потолок"
             y = tableRow([k.short, k.title, wall, p.wall == nil ? "—" : cm(p.offset), p.wall == nil ? "—" : cm(p.height)], widths, y: y)
+        }
+        footer()
+    }
+
+    // MARK: - Дефекты
+
+    /// План с номерами, дальше карточки: фото, что, где, заметка, исправлено ли
+    private static func defectsPages(_ r: RoomResult, photos: (UUID) -> UIImage?, _ ctx: UIGraphicsPDFRendererContext) {
+        ctx.beginPage()
+        let open = r.defects.filter { !$0.fixed }.count
+        var y = header(title: r.room, subtitle: "Дефекты · \(r.defects.count) шт, не исправлено \(open)")
+        let planBox = CGRect(x: margin, y: y, width: page.width - 2 * margin, height: 250)
+        roundedBox(planBox)
+        let inner = planBox.insetBy(dx: 34, dy: 26)
+        drawRoom(r, in: inner, labels: false, furniture: false)
+        // те же расчёты рамки, что в drawRoom
+        let all = r.plan + r.wallLines.flatMap { [SIMD2($0.x, $0.y), SIMD2($0.z, $0.w)] }
+        if let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(), let minY = all.map(\.y).min(), let maxY = all.map(\.y).max(),
+           maxX > minX, maxY > minY {
+            let k = min(inner.width / CGFloat(maxX - minX), inner.height / CGFloat(maxY - minY))
+            let ox = inner.minX + (inner.width - CGFloat(maxX - minX) * k) / 2
+            let oy = inner.minY + (inner.height - CGFloat(maxY - minY) * k) / 2
+            for (i, d) in r.defects.enumerated() {
+                let c = CGPoint(x: ox + CGFloat(d.x - minX) * k, y: oy + CGFloat(d.y - minY) * k)
+                let dot = UIBezierPath(ovalIn: CGRect(x: c.x - 8, y: c.y - 8, width: 16, height: 16))
+                (d.fixed ? UIColor.systemGreen : UIColor.systemRed).setFill()
+                dot.fill()
+                text("\(i + 1)", at: CGPoint(x: c.x - 8, y: c.y - 5.5), size: 8, bold: true, color: .white, width: 16, align: .center)
+            }
+        }
+        y = planBox.maxY + 16
+
+        let cardH: CGFloat = 118
+        for (i, d) in r.defects.enumerated() {
+            if y + cardH > page.height - 50 {
+                footer()
+                ctx.beginPage()
+                y = header(title: r.room, subtitle: "Дефекты (продолжение)")
+            }
+            let card = CGRect(x: margin, y: y, width: page.width - 2 * margin, height: cardH - 10)
+            roundedBox(card)
+            var tx = card.minX + 12
+            if d.hasPhoto, let img = photos(d.id) {
+                let ph = CGRect(x: card.minX + 8, y: card.minY + 8, width: 128, height: card.height - 16)
+                let ctxg = UIGraphicsGetCurrentContext()
+                ctxg?.saveGState()
+                UIBezierPath(roundedRect: ph, cornerRadius: 8).addClip()
+                // заполнить рамку, сохранив пропорции
+                let s = max(ph.width / img.size.width, ph.height / img.size.height)
+                let size = CGSize(width: img.size.width * s, height: img.size.height * s)
+                img.draw(in: CGRect(x: ph.midX - size.width / 2, y: ph.midY - size.height / 2, width: size.width, height: size.height))
+                ctxg?.restoreGState()
+                tx = ph.maxX + 12
+            }
+            let badge = UIBezierPath(ovalIn: CGRect(x: tx, y: card.minY + 10, width: 20, height: 20))
+            (d.fixed ? UIColor.systemGreen : UIColor.systemRed).setFill()
+            badge.fill()
+            text("\(i + 1)", at: CGPoint(x: tx, y: card.minY + 13.5), size: 9, bold: true, color: .white, width: 20, align: .center)
+            text(d.title + (d.fixed ? " — исправлено" : ""), at: CGPoint(x: tx + 28, y: card.minY + 11), size: 12, bold: true,
+                 color: d.fixed ? .systemGreen : ink, width: card.maxX - tx - 40)
+            let place = d.wall.map { "Стена \($0 + 1), высота \(Int((d.height * 100).rounded())) см от пола" }
+                ?? (d.height < 0.1 ? "Пол" : "Потолок")
+            let date = d.created.formatted(date: .abbreviated, time: .omitted)
+            text("\(place) · отмечено \(date)", at: CGPoint(x: tx, y: card.minY + 36), size: 9, color: grey, width: card.maxX - tx - 12)
+            if !d.note.isEmpty {
+                text(d.note, at: CGPoint(x: tx, y: card.minY + 52), size: 10, color: UIColor(white: 0.15, alpha: 1),
+                     width: card.maxX - tx - 12)
+            }
+            y += cardH
         }
         footer()
     }

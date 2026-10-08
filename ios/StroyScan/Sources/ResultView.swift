@@ -91,6 +91,7 @@ struct ResultView: View {
 
                 statsGrid
                 if !result.engineering.isEmpty { engineeringCard }
+                DefectsSection(scanID: savedID, result: $result)
                 if !result.items.isEmpty { furnitureList }
                 photoSection
 
@@ -169,6 +170,7 @@ struct ResultView: View {
         }
         .onChange(of: result.room) { _ in store.update(savedID, result: result) }
         .onChange(of: result.engineering) { _ in store.update(savedID, result: result) }
+        .onChange(of: result.defects) { _ in store.update(savedID, result: result) }
         .fullScreenCover(isPresented: $camera) {
             PhotoCameraView { data in usePhoto(data) }
         }
@@ -236,6 +238,7 @@ struct ResultView: View {
             .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls)
                 .opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanEngineering(eng: result.engineering, points: result.plan).opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanDefects(defects: result.defects, points: result.plan).opacity(drawn >= 1 ? 1 : 0))
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
@@ -382,7 +385,7 @@ struct ResultView: View {
     }
 
     private func sharePDF() {
-        if let url = PlanPDF.room(result) {
+        if let url = PlanPDF.room(result, photos: { store.defectPhoto(savedID, $0) }) {
             share = ShareFile(url: url)
         } else {
             note = "Не получилось собрать PDF."

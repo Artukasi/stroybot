@@ -5,6 +5,7 @@ struct StroyScanApp: App {
     @StateObject private var link = BotLink()
     @StateObject private var store = ScanStore()
     @StateObject private var hub = ScanHub()
+    @StateObject private var backup = Backup()
 
     var body: some Scene {
         WindowGroup {
@@ -12,6 +13,7 @@ struct StroyScanApp: App {
                 .environmentObject(link)
                 .environmentObject(store)
                 .environmentObject(hub)
+                .environmentObject(backup)
                 .tint(Palette.signal)
                 // ссылка из бота: stroyscan://pair?server=https://…&code=ABCD2345
                 .onOpenURL { url in

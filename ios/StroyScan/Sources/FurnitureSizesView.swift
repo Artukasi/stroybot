@@ -69,9 +69,9 @@ enum FurnitureFit {
     }
 
     static func links(_ query: String, kind: String) -> [FurnitureOffer.Shop] {
-        let q = query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? query
         return shops.compactMap { name, base in
-            guard name != "Divan.ru" || furnitureOnly.contains(kind), let url = URL(string: base + q) else { return nil }
+            guard name != "Divan.ru" || furnitureOnly.contains(kind),
+                  let url = ShopSearch.url(base, query) else { return nil }
             return FurnitureOffer.Shop(id: name, url: url)
         }
     }

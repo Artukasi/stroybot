@@ -303,17 +303,33 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     private var cancelledCurrent = false
 
     /// ARKit exposes its active capture device so zoom changes stay aligned with the live AR feed.
-    private func prepareCameraZoom() {
-        guard #available(iOS 16.0, *),
-              let device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera,
-              device.constituentDevices.contains(where: { $0.deviceType == .builtInUltraWideCamera }),
+    private func prepareCameraZoom(retry: Int = 0) {
+        guard #available(iOS 16.0, *) else {
+            zoomDevice = nil
+            hasUltraWide = false
+            return
+        }
+        guard let device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera else {
+            // RoomPlan may report that capture started just before ARKit exposes its camera device.
+            if retry < 5 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    guard let self, self.running else { return }
+                    self.prepareCameraZoom(retry: retry + 1)
+                }
+            } else {
+                zoomDevice = nil
+                zoomBase = 1
+                hasUltraWide = false
+            }
+            return
+        }
+        guard device.constituentDevices.contains(where: { $0.deviceType == .builtInUltraWideCamera }),
               let base = device.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue,
               base > 1,
               device.maxAvailableVideoZoomFactor >= CGFloat(base) else {
             zoomDevice = nil
             zoomBase = 1
             hasUltraWide = false
-            cameraZoom = 1
             return
         }
         zoomDevice = device
@@ -322,16 +338,28 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         applyCameraZoom(cameraZoom, animated: false)
     }
 
+    var cameraZoomStops: [CGFloat] {
+        guard hasUltraWide, let device = zoomDevice else { return [1, 2, 3] }
+        let maximum = min(3, device.maxAvailableVideoZoomFactor / zoomBase)
+        return [0.5, 1, 2, 3].filter { $0 <= maximum + 0.01 }
+    }
+
     func setCameraZoom(_ requested: CGFloat) {
-        guard hasUltraWide else { return }
-        applyCameraZoom(requested, animated: true)
+        guard hasUltraWide else {
+            cameraZoom = min(max(requested, 1), 3)
+            return
+        }
+        let maximum = cameraZoomStops.last ?? 1
+        applyCameraZoom(min(max(requested, 0.5), maximum), animated: true)
     }
 
     private func applyCameraZoom(_ requested: CGFloat, animated: Bool) {
         guard let device = zoomDevice else { return }
         let base = zoomBase
+        let maximum = min(3, device.maxAvailableVideoZoomFactor / base)
+        let zoom = min(max(requested, 0.5), maximum)
         zoomQueue.async {
-            let factor = min(max(requested * base, device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
+            let factor = min(max(zoom * base, device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
             do {
                 try device.lockForConfiguration()
                 if animated {
@@ -343,7 +371,7 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
             } catch {
                 return
             }
-            let applied = min(max(factor / base, 0.5), 1)
+            let applied = min(max(factor / base, 0.5), maximum)
             DispatchQueue.main.async { self.cameraZoom = applied }
         }
     }
@@ -857,6 +885,7 @@ struct ScanScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var askFinish = false
     @State private var askCancel = false
+    @State private var pinchStartZoom: CGFloat?
     let onDone: (ScanOutcome) -> Void
 
     init(mode: ScanMode = .room, arSession: ARSession? = nil, onDone: @escaping (ScanOutcome) -> Void) {
@@ -868,7 +897,18 @@ struct ScanScreen: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            RoomScanner(controller: controller).ignoresSafeArea()
+            RoomScanner(controller: controller)
+                .ignoresSafeArea()
+                .scaleEffect(controller.hasUltraWide ? 1 : controller.cameraZoom)
+                .clipped()
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { scale in
+                            if pinchStartZoom == nil { pinchStartZoom = controller.cameraZoom }
+                            controller.setCameraZoom((pinchStartZoom ?? 1) * scale)
+                        }
+                        .onEnded { _ in pinchStartZoom = nil }
+                )
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     Button("Отмена") {
@@ -904,23 +944,23 @@ struct ScanScreen: View {
                     }
                     .disabled(controller.finishing)
                 }
-                if controller.hasUltraWide {
-                    HStack(spacing: 8) {
-                        Text("Зум").font(.caption.bold()).foregroundStyle(.white)
-                        ForEach([CGFloat(0.5), CGFloat(1)], id: \.self) { zoom in
-                            let active = abs(controller.cameraZoom - zoom) < 0.05
-                            Button { controller.setCameraZoom(zoom) } label: {
-                                Text(zoom < 1 ? "0,5×" : "1×")
-                                    .font(.footnote.bold())
-                                    .frame(width: 48, height: 40)
-                                    .background(active ? Palette.signal : Color.black.opacity(0.5), in: Capsule())
-                                    .foregroundStyle(active ? Palette.ink : Color.white)
-                            }
-                            .accessibilityLabel(active ? "Выбрано \(zoom < 1 ? "0,5×" : "1×")" : "Включить \(zoom < 1 ? "0,5×" : "1×")")
+                HStack(spacing: 8) {
+                    Text(controller.hasUltraWide ? "Зум" : "Цифровой зум")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                    ForEach(controller.cameraZoomStops, id: \.self) { zoom in
+                        let active = abs(controller.cameraZoom - zoom) < 0.05
+                        Button { controller.setCameraZoom(zoom) } label: {
+                            Text(zoomTitle(zoom))
+                                .font(.footnote.bold())
+                                .frame(width: 44, height: 40)
+                                .background(active ? Palette.signal : Color.black.opacity(0.5), in: Capsule())
+                                .foregroundStyle(active ? Palette.ink : Color.white)
                         }
+                        .accessibilityLabel(active ? "Выбрано \(zoomTitle(zoom))" : "Включить \(zoomTitle(zoom))")
                     }
-                    .padding(.top, 2)
                 }
+                .padding(.top, 2)
                 if controller.isFlat {
                     Text(controller.nextRoomBusy ? "Сохраняю комнату \(controller.flatDone + 1)…"
                          : "Квартира · комната \(controller.flatDone + 1)")
@@ -1018,5 +1058,9 @@ struct ScanScreen: View {
         .alert("Скан не получился", isPresented: .constant(controller.failed != nil)) {
             Button("Понятно") { controller.failed = nil; dismiss() }
         } message: { Text(controller.failed ?? "") }
+    }
+
+    private func zoomTitle(_ zoom: CGFloat) -> String {
+        zoom < 1 ? "0,5×" : "\(Int(zoom))×"
     }
 }

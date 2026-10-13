@@ -120,7 +120,7 @@ struct BrandView: View {
             }
         }
         .padding(16)
-        .background(Palette.ink)
+        .background(Palette.black)
         .overlay(alignment: .bottom) { Palette.signal.frame(height: 4) }
         .animation(.spring(response: 0.35), value: logo != nil)
     }

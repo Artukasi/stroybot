@@ -81,6 +81,7 @@ enum ClientWeb {
         var d: [String: Any] = [
             "poly": r.plan.map { [r2($0.x), r2($0.y)] },
             "walls": walls.map { [r2($0.x), r2($0.y), r2($0.z), r2($0.w)] },
+            "wallLengths": r.walls.map { r2($0.length) },
             "h": r2(r.height > 0 ? r.height : 2.7),
             "openings": openings,
             "boxes": boxes,
@@ -163,11 +164,11 @@ enum ClientWeb {
         body += "</section>"
 
         body += """
-        <section class="card"><h2>Комната в 3D</h2>
+        <section class="card"><h2>Комната в 3D с размерами</h2>
         <div id="v3d"><canvas id="cv"></canvas>
-        <div class="tools"><button data-a="left">⟲</button><button data-a="top">Сверху</button><button data-a="right">⟳</button></div>
+        <div class="tools"><button data-a="left" aria-label="Повернуть влево">⟲</button><button data-a="top">Сверху</button><button data-a="right" aria-label="Повернуть вправо">⟳</button><button data-a="dims" aria-pressed="true">Размеры ✓</button></div>
         <noscript><p class="muted">3D открывается в браузере: Chrome, Safari, Яндекс. План и смета — ниже.</p></noscript></div>
-        <p class="muted">Крутите пальцем или мышью, приближайте двумя пальцами или колесом.</p></section>
+        <p class="muted">Длины стен и высота подписаны прямо в 3D. Размеры включены при открытии; крутите комнату пальцем или мышью, приближайте двумя пальцами или колесом.</p></section>
         """
 
         body += "<section class=\"card\"><h2>План с размерами</h2>\(planSVG(r))<p class=\"muted\">Длины стен в метрах. Синие — окна, коричневые — двери.</p></section>"
@@ -250,8 +251,9 @@ enum ClientWeb {
     .card{background:var(--card);border-radius:20px;padding:16px;margin-bottom:14px}.card h2{margin:0 0 10px;font-size:20px}
     #v3d{position:relative;height:min(70vw,460px);min-height:280px;background:linear-gradient(#dfe5ec,#c9d1db);border-radius:14px;overflow:hidden;touch-action:none}
     #cv{width:100%;height:100%;display:block;cursor:grab}
-    .tools{position:absolute;right:10px;bottom:10px;display:flex;gap:6px}
+    .tools{position:absolute;right:10px;bottom:10px;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 20px);justify-content:flex-end}
     .tools button{border:0;background:rgba(20,32,46,.85);color:#fff;font-weight:700;border-radius:10px;padding:8px 12px;font-size:15px}
+    .tools button[aria-pressed="true"]{background:#14202e;box-shadow:inset 0 0 0 2px var(--sig)}
     .plan{width:100%;height:auto;max-height:520px}.photo{width:100%;border-radius:14px}
     table{width:100%;border-collapse:collapse;font-size:14px}td{padding:7px 4px;border-bottom:1px solid #e7ebf0;vertical-align:top}
     td.n{text-align:right;white-space:nowrap}tr.sec td{font-weight:800;padding-top:14px;color:var(--draft)}
@@ -271,6 +273,7 @@ enum ClientWeb {
     let cx=0,cz=0;S.poly.forEach(p=>{cx+=p[0];cz+=p[1]});cx/=S.poly.length;cz/=S.poly.length;
     let span=1;S.poly.forEach(p=>{span=Math.max(span,Math.hypot(p[0]-cx,p[1]-cz))});
     let yaw=0.7,pitch=0.75,dist=span*3.2;
+    let showDims=true;
     function inside(x,z){let c=false;const p=S.poly;for(let i=0,j=p.length-1;i<p.length;j=i++){const a=p[i],b=p[j];if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])c=!c}return c}
     function hex(h){h=(h||'#cccccc').replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h,16);return[(n>>16)&255,(n>>8)&255,n&255]}
     function shade(rgb,k){return 'rgb('+rgb.map(v=>Math.max(0,Math.min(255,Math.round(v*k)))).join(',')+')'}
@@ -282,6 +285,34 @@ enum ClientWeb {
      const c=[cx,H*0.35,cz];cam=[cx+dist*Math.cos(pitch)*Math.sin(yaw),H*0.35+dist*Math.sin(pitch),cz+dist*Math.cos(pitch)*Math.cos(yaw)];
      fw=nrm(sub(c,cam));rt=nrm(cross(fw,[0,1,0]));up=cross(rt,fw);f=Math.min(W,Hh)*1.45}
     function P(p){const v=sub(p,cam);const z=Math.max(0.05,dot(v,fw));return[W/2+dot(v,rt)*f/z,Hh/2-dot(v,up)*f/z,z]}
+    function fmtM(v){return (Math.round(v*100)/100).toFixed(2).replace('.',',')+' м'}
+    function line2(a,b,color,width){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke()}
+    function dimension(a,b,label){
+     const p1=P(a),p2=P(b),dx=p2[0]-p1[0],dy=p2[1]-p1[1],len=Math.hypot(dx,dy);if(!Number.isFinite(len)||len<12)return;
+     const nx=-dy/len,ny=dx/len;
+     line2(p1,p2,'rgba(20,32,46,.88)',5);line2(p1,p2,'#f5c518',2);
+     [p1,p2].forEach(p=>line2([p[0]-nx*5,p[1]-ny*5],[p[0]+nx*5,p[1]+ny*5],'#14202e',3));
+     [p1,p2].forEach(p=>line2([p[0]-nx*4,p[1]-ny*4],[p[0]+nx*4,p[1]+ny*4],'#f5c518',1.5));
+     ctx.save();ctx.font='700 12px -apple-system,BlinkMacSystemFont,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+     const mx=(p1[0]+p2[0])/2,my=(p1[1]+p2[1])/2,tw=ctx.measureText(label).width,pad=7,bh=22,bw=tw+pad*2;
+     ctx.fillStyle='rgba(20,32,46,.94)';ctx.fillRect(mx-bw/2,my-bh/2,bw,bh);ctx.strokeStyle='#f5c518';ctx.lineWidth=1;ctx.strokeRect(mx-bw/2,my-bh/2,bw,bh);
+     ctx.fillStyle='#fff';ctx.fillText(label,mx,my);ctx.restore();
+    }
+    function drawDimensions(){
+     if(!showDims)return;
+     const top=H+0.1;
+     S.walls.forEach((w,i)=>{
+      const a=[w[0],w[1]],b=[w[2],w[3]],dx=b[0]-a[0],dz=b[1]-a[1],len=Math.hypot(dx,dz);if(len<0.3)return;
+      let n=[-dz/len,dx/len],m=[(a[0]+b[0])/2,(a[1]+b[1])/2];if(inside(m[0]+n[0]*0.08,m[1]+n[1]*0.08))n=[-n[0],-n[1]];
+      const offset=0.18,pa=[a[0]+n[0]*offset,top,a[1]+n[1]*offset],pb=[b[0]+n[0]*offset,top,b[1]+n[1]*offset];
+      line2(P([a[0],H,a[1]]),P(pa),'rgba(20,32,46,.72)',1);line2(P([b[0],H,b[1]]),P(pb),'rgba(20,32,46,.72)',1);
+      dimension(pa,pb,fmtM(S.wallLengths&&S.wallLengths[i]>0?S.wallLengths[i]:len));
+     });
+     const camXZ=[cam[0],cam[2]],front=S.poly.reduce((best,p)=>Math.hypot(p[0]-camXZ[0],p[1]-camXZ[1])<Math.hypot(best[0]-camXZ[0],best[1]-camXZ[1])?p:best,S.poly[0]);
+     let out=[front[0]-cx,front[1]-cz],ol=Math.hypot(out[0],out[1])||1;out=[out[0]/ol,out[1]/ol];
+     const x=front[0]+out[0]*0.22,z=front[1]+out[1]*0.22;
+     dimension([x,0.05,z],[x,H,z],fmtM(H));
+    }
     const polys=[];
     function quad(pts,rgb,n,p){polys.push({pts,rgb,n,p})}
     function build(){polys.length=0;const camXZ=[cam[0],cam[2]];
@@ -308,7 +339,8 @@ enum ClientWeb {
        const toCam=sub(cam,c);return{p,pr,z:Math.hypot(...toCam),face:dot(p.n,toCam)>0}}).filter(o=>o.face);
      list.forEach(o=>{if(o.p.p)o.z-=0.02});list.sort((a,b)=>b.z-a.z);
      list.forEach(o=>{const k=0.8+0.25*Math.max(0,dot(o.p.n,L));ctx.beginPath();o.pr.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]));ctx.closePath();
-      ctx.fillStyle=shade(o.p.rgb,k);ctx.fill();ctx.strokeStyle='rgba(20,32,46,.25)';ctx.stroke()});}
+      ctx.fillStyle=shade(o.p.rgb,k);ctx.fill();ctx.strokeStyle='rgba(20,32,46,.25)';ctx.stroke()});
+     drawDimensions();}
     let drag=null,pinch=null;const pts=new Map();
     cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);pts.set(e.pointerId,[e.clientX,e.clientY]);drag=[e.clientX,e.clientY,yaw,pitch];
      if(pts.size===2){const v=[...pts.values()];pinch=[Math.hypot(v[0][0]-v[1][0],v[0][1]-v[1][1]),dist]}});
@@ -319,7 +351,8 @@ enum ClientWeb {
     cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
     cv.addEventListener('wheel',e=>{e.preventDefault();dist=Math.max(span*1.2,Math.min(span*8,dist*(1+e.deltaY*0.001)));draw()},{passive:false});
     document.querySelectorAll('.tools button').forEach(b=>b.addEventListener('click',()=>{const a=b.dataset.a;
-     if(a==='left')yaw+=Math.PI/2;if(a==='right')yaw-=Math.PI/2;if(a==='top')pitch=pitch>1.3?0.75:1.5;draw()}));
+     if(a==='left')yaw+=Math.PI/2;if(a==='right')yaw-=Math.PI/2;if(a==='top')pitch=pitch>1.3?0.75:1.5;
+     if(a==='dims'){showDims=!showDims;b.setAttribute('aria-pressed',showDims?'true':'false');b.textContent=showDims?'Размеры ✓':'Размеры'}draw()}));
     window.addEventListener('resize',draw);draw();
     })();
     """

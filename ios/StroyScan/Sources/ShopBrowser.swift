@@ -258,7 +258,7 @@ final class ShopPage: NSObject, ObservableObject, WKNavigationDelegate {
     })()
     """
 
-    static let script = """
+    static let script = #"""
     (function(){
       function meta(n){var e=document.querySelector('meta[property="'+n+'"],meta[name="'+n+'"],meta[itemprop="'+n+'"]');return e?e.getAttribute('content'):null}
       function abs(u){try{return new URL(u,location.href).href}catch(e){return null}}
@@ -307,7 +307,7 @@ final class ShopPage: NSObject, ObservableObject, WKNavigationDelegate {
       var text=((root&&root.innerText)||'').replace(/\s+/g,' ').slice(0,18000);
       return JSON.stringify({url:location.href,name:name,props:(props+'; '+facts).slice(0,12000),desc:desc,images:imgs,text:text});
     })()
-    """
+    """#
 }
 
 struct ShopWebView: UIViewRepresentable {

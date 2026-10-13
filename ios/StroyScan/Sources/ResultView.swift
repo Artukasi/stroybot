@@ -50,6 +50,7 @@ struct ResultView: View {
     @EnvironmentObject var link: BotLink
     @EnvironmentObject var store: ScanStore
     @EnvironmentObject var hub: ScanHub
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Запись в истории «Мои комнаты»
     let savedID: UUID
     @State var result: RoomResult
@@ -75,6 +76,7 @@ struct ResultView: View {
     @State private var look = RenoStyle.scandi.finishes
     @State private var camera = false
     @State private var share: ShareFile?
+    @State private var exportingDimensions = false
     @State private var note: String?
     private let rooms = ["Комната", "Кухня", "Ванная", "Санузел", "Спальня", "Гостиная", "Детская", "Коридор", "Балкон"]
 
@@ -188,7 +190,15 @@ struct ResultView: View {
                 Text("По желанию: пришлите этот файл в чат СтройБота — он тоже посчитает ремонт и смету по скану.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let usdz = result.usdz {
-                    ShareLink(item: usdz) { Label("3D-модель комнаты (USDZ)", systemImage: "cube") }
+                    Button { shareDimensionedModel() } label: {
+                        HStack {
+                            if exportingDimensions { ProgressView() }
+                            Label(exportingDimensions ? "Добавляю размеры…" : "3D-модель с размерами (USDZ)",
+                                  systemImage: "ruler")
+                        }
+                    }
+                    .disabled(exportingDimensions)
+                    ShareLink(item: usdz) { Label("Исходная 3D-модель", systemImage: "cube") }
                 }
             }
             .padding()
@@ -283,7 +293,11 @@ struct ResultView: View {
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-            .onAppear { withAnimation(.easeOut(duration: 1.4)) { drawn = 1 } }
+            .onAppear {
+                withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.reveal)) {
+                    drawn = 1
+                }
+            }
     }
 
     // MARK: - Электрика и сантехника
@@ -333,7 +347,9 @@ struct ResultView: View {
         }
         .onAppear {
             guard !counted else { return }
-            withAnimation(.easeOut(duration: 1.3).delay(0.3)) { counted = true }
+            withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: .easeOut(duration: 0.32))) {
+                counted = true
+            }
         }
     }
 
@@ -362,8 +378,10 @@ struct ResultView: View {
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
         .opacity(counted ? 1 : 0)
-        .offset(y: counted ? 0 : 14)
-        .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.05 * Double(i)), value: counted)
+        .offset(y: counted || reduceMotion ? 0 : 8)
+        .animation(reduceMotion ? .easeOut(duration: 0.12)
+                               : .easeOut(duration: 0.22).delay(0.025 * Double(i)),
+                   value: counted)
     }
 
     private var furnitureList: some View {
@@ -451,7 +469,7 @@ struct ResultView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 18))
+        .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func shareDXF() {
@@ -467,6 +485,23 @@ struct ResultView: View {
             share = ShareFile(url: url)
         } else {
             note = "Не получилось сохранить файл."
+        }
+    }
+
+    private func shareDimensionedModel() {
+        guard !exportingDimensions else { return }
+        exportingDimensions = true
+        let room = result
+        Task {
+            let url = await Task.detached(priority: .userInitiated) {
+                room.dimensionedUSDZ()
+            }.value
+            exportingDimensions = false
+            if let url {
+                share = ShareFile(url: url)
+            } else {
+                note = "Не получилось добавить размеры в 3D-модель. Исходный файл скана сохранён."
+            }
         }
     }
 

@@ -212,7 +212,29 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         running = true
         // скан идёт минуту-две без касаний: экран не должен гаснуть и блокироваться
         UIApplication.shared.isIdleTimerDisabled = true
-        serial += 1
+                serial += 1
+        let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        if cameraStatus == .denied || cameraStatus == .restricted {
+            running = false
+            UIApplication.shared.isIdleTimerDisabled = false
+            failed = "СтройСкану нужен доступ к камере. Разрешите его в настройках iPhone: Конфиденциальность и безопасность → Камера."
+            return
+        }
+        if cameraStatus == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .video) { [weak self, weak view] granted in
+                DispatchQueue.main.async {
+                    guard let self = self, let view = view, !self.cancelled else { return }
+                    if granted {
+                        view.captureSession.run(configuration: RoomCaptureSession.Configuration())
+                    } else {
+                        self.running = false
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        self.failed = "СтройСкану нужен доступ к камере. Разрешите его в настройках iPhone: Конфиденциальность и безопасность → Камера."
+                    }
+                }
+            }
+            return
+        }
         view.captureSession.run(configuration: RoomCaptureSession.Configuration())
     }
 

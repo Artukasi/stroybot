@@ -79,6 +79,7 @@ struct ShopImagePicker: View {
     let grab: ShopPage.Grab
     let page: ShopPage
     let onDone: (TileLinkFound, UIImage) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var thumbs: [Int: UIImage] = [:]
     @State private var taking: Int?
     @State private var problem: String?
@@ -101,13 +102,21 @@ struct ShopImagePicker: View {
                                     RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground))
                                     if let t = thumbs[i] {
                                         Image(uiImage: t).resizable().scaledToFill()
+                                            .transition(.opacity)
                                     } else {
                                         ProgressView()
                                     }
-                                    if taking == i { Color.black.opacity(0.35); ProgressView().tint(.white) }
+                                    if taking == i {
+                                        Color.black.opacity(0.35).transition(.opacity)
+                                        ProgressView().tint(.white).transition(.opacity)
+                                    }
                                 }
                                 .frame(height: 110)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .animation(reduceMotion ? .easeOut(duration: 0.12) : AppMotion.fade,
+                                           value: thumbs[i] != nil)
+                                .animation(reduceMotion ? .easeOut(duration: 0.12) : AppMotion.press,
+                                           value: taking == i)
                                 .overlay(alignment: .topLeading) {
                                     if i == 0 && img.main {
                                         Text("главная").font(.caption2.bold()).padding(4)
@@ -187,6 +196,9 @@ final class ShopPage: NSObject, ObservableObject, WKNavigationDelegate {
         guard let web else { throw URLError(.cancelled) }
         grabbing = true
         defer { grabbing = false }
+        // Many stores lazy-load their product photos after navigation or scrolling.
+        _ = try? await web.evaluateJavaScript(Self.prepareImagesScript)
+        try? await Task.sleep(nanoseconds: 450_000_000)
         let raw = try await web.evaluateJavaScript(Self.script)
         guard let s = raw as? String, let data = s.data(using: .utf8),
               let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw URLError(.cannotParseResponse) }
@@ -210,8 +222,11 @@ final class ShopPage: NSObject, ObservableObject, WKNavigationDelegate {
         var req = URLRequest(url: p.url, timeoutInterval: 20)
         req.setValue(TileLink.agent, forHTTPHeaderField: "User-Agent")
         if let page = web?.url { req.setValue(page.absoluteString, forHTTPHeaderField: "Referer") }
-        req.setValue("image/avif,image/webp,image/jpeg,image/png,*/*", forHTTPHeaderField: "Accept")
-        if let (data, _) = try? await URLSession.shared.data(for: req), let img = UIImage(data: data), img.size.width >= 40 {
+        req.setValue("image/webp,image/jpeg,image/png,*/*", forHTTPHeaderField: "Accept")
+        if let (data, response) = try? await URLSession.shared.data(for: req),
+           (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+           !((response as? HTTPURLResponse)?.mimeType?.lowercased().contains("text/html") ?? false),
+           let img = UIImage(data: data), img.size.width >= 50, img.size.height >= 50 {
             cache[p.url] = img
             return img
         }
@@ -225,38 +240,72 @@ final class ShopPage: NSObject, ObservableObject, WKNavigationDelegate {
         guard let s = try? await web.evaluateJavaScript(js) as? String, let data = s.data(using: .utf8),
               let r = (try? JSONSerialization.jsonObject(with: data)) as? [String: Double],
               let w = r["w"], let h = r["h"], w > 20, h > 20 else { return nil }
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        try? await Task.sleep(nanoseconds: 650_000_000)
         let cfg = WKSnapshotConfiguration()
         cfg.rect = CGRect(x: r["x"] ?? 0, y: r["y"] ?? 0, width: w, height: h)
         return try? await web.takeSnapshot(configuration: cfg)
     }
+
+    static let prepareImagesScript = """
+    (function(){
+      Array.from(document.images).slice(0,80).forEach(function(i){
+        i.loading='eager';
+        var lazy=i.getAttribute('data-zoom-image')||i.getAttribute('data-large')||i.getAttribute('data-original')||i.getAttribute('data-lazy-src')||i.getAttribute('data-src');
+        if(lazy&&(!i.currentSrc||i.currentSrc.indexOf('data:')===0))i.src=lazy;
+      });
+      window.dispatchEvent(new Event('scroll'));
+      return true;
+    })()
+    """
 
     static let script = """
     (function(){
       function meta(n){var e=document.querySelector('meta[property="'+n+'"],meta[name="'+n+'"],meta[itemprop="'+n+'"]');return e?e.getAttribute('content'):null}
       function abs(u){try{return new URL(u,location.href).href}catch(e){return null}}
       var ld=[];
-      document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){
-        try{var j=JSON.parse(s.textContent);(Array.isArray(j)?j:[j]).forEach(function(x){if(x&&x['@graph'])ld=ld.concat(x['@graph']);else if(x)ld.push(x)})}catch(e){}
-      });
-      var prod=ld.find(function(x){var t=x['@type'];return t==='Product'||(Array.isArray(t)&&t.indexOf('Product')>=0)})||{};
-      var pimg=prod.image;if(Array.isArray(pimg))pimg=pimg[0];if(pimg&&typeof pimg==='object')pimg=pimg.url||pimg.contentUrl;
-      var props=(Array.isArray(prod.additionalProperty)?prod.additionalProperty:[]).map(function(p){return (p.name||'')+': '+(p.value||'')+' '+(p.unitText||'')}).join('; ');
-      ['width','height','depth'].forEach(function(k){var v=prod[k];if(v)props+='; '+({width:'Ширина',height:'Высота',depth:'Глубина'})[k]+': '+(v.value||v)+' '+(v.unitText||v.unitCode||'')});
+      function walk(x,depth){if(!x||depth>5)return;if(Array.isArray(x)){x.forEach(function(y){walk(y,depth+1)});return}
+        if(typeof x!=='object')return;ld.push(x);
+        ['@graph','mainEntity','hasVariant','itemListElement'].forEach(function(k){if(x[k])walk(x[k],depth+1)})}
+      document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{walk(JSON.parse(s.textContent),0)}catch(e){}});
+      function isProduct(x){var t=x&&x['@type'];if(!Array.isArray(t))t=[t];return t.some(function(v){var n=String(v||'').split(/[\/#]/).pop();return n==='Product'||n==='ProductGroup'})}
+      function score(x){return (x.name?4:0)+(x.image?3:0)+(x.description?1:0)+(x.additionalProperty?2:0)+(x.width||x.height||x.depth?3:0)}
+      var products=ld.filter(isProduct).sort(function(a,b){return score(b)-score(a)});
+      var prod=products.find(function(x){return x.image||x.name})||{};
+      if(prod.hasVariant&&Array.isArray(prod.hasVariant)){var v=prod.hasVariant.find(function(x){return x.image})||prod.hasVariant[0];if(v)prod=v}
+      function imageURL(v){if(typeof v==='string')return v;if(v&&typeof v==='object')return v.url||v.contentUrl||v['@id'];return null}
       var imgs=[],seen={},n=0;
-      function add(src,area,main,el){src=abs(src);if(!src||src.indexOf('data:')===0||seen[src])return;seen[src]=1;
+      function add(src,area,main,el,rank){src=abs(src);if(!src||/^data:|\.svg(?:$|\?)/i.test(src))return;
+        var old=seen[src];if(old){
+          old.main=old.main||main;old.rank=Math.max(old.rank,rank||0);
+          if(el&&!old.tag){old.tag=el.getAttribute('data-sb-id')||String(++n);el.setAttribute('data-sb-id',old.tag)}
+          return
+        }
         var tag='';if(el){tag=el.getAttribute('data-sb-id')||String(++n);el.setAttribute('data-sb-id',tag)}
-        imgs.push({src:src,area:area,main:main,tag:tag})}
-      if(pimg)add(pimg,1e9,true,null);
-      var og=meta('og:image')||meta('og:image:secure_url')||meta('twitter:image');if(og)add(og,1e9-1,true,null);
-      Array.from(document.images).forEach(function(i){var r=i.getBoundingClientRect();var w=i.naturalWidth||r.width,h=i.naturalHeight||r.height;
-        if(w>=150&&h>=150&&r.width>=60&&r.height>=60){var big=i.getAttribute('data-zoom-image')||i.getAttribute('data-large')||i.getAttribute('data-src');add(big||i.currentSrc||i.src,w*h,false,i)}});
-      var main=imgs.filter(function(x){return x.main}),rest=imgs.filter(function(x){return !x.main}).sort(function(a,b){return b.area-a.area});
-      imgs=main.concat(rest).slice(0,18);
+        var entry={src:src,area:area||0,main:!!main,tag:tag,rank:rank||0};seen[src]=entry;imgs.push(entry)}
+      var pimgs=Array.isArray(prod.image)?prod.image:[prod.image];pimgs.forEach(function(x){var u=imageURL(x);if(u)add(u,1e9,true,null,100)});
+      var og=meta('og:image:secure_url')||meta('og:image')||meta('twitter:image');if(og)add(og,1e8,true,null,80);
+      function bestSrc(i){var attrs=['data-zoom-image','data-large','data-original','data-lazy-src','data-src','data-original-src'];
+        for(var a=0;a<attrs.length;a++){var v=i.getAttribute(attrs[a]);if(v&&v.length>8)return v}
+        var sets=(i.getAttribute('srcset')||'').split(',').map(function(s){var p=s.trim().split(/\s+/);return {url:p[0],size:parseFloat(p[1])||0}}).sort(function(a,b){return b.size-a.size});
+        return (sets[0]&&sets[0].url)||i.currentSrc||i.src}
+      Array.from(document.images).forEach(function(i){var r=i.getBoundingClientRect(),w=i.naturalWidth||Number(i.getAttribute('width'))||r.width,h=i.naturalHeight||Number(i.getAttribute('height'))||r.height;
+        var src=bestSrc(i),hint=((i.alt||'')+' '+(i.title||'')+' '+(i.className||'')+' '+src).toLowerCase();
+        if(!src||w<100||h<100||r.width<45||r.height<45)return;
+        if(/logo|sprite|favicon|avatar|payment|delivery|banner|badge|widget|qr-code|social-icon/.test(hint))return;
+        var rank=(/product|catalog|goods|tile|sku|gallery|detail|zoom/.test(hint)?30:0)-(/recommend|similar|recently|review/.test(hint)?25:0);
+        add(src,w*h,false,i,rank)});
+      imgs.sort(function(a,b){if(a.main!==b.main)return a.main?-1:1;return b.rank-a.rank||b.area-a.area});
+      imgs=imgs.slice(0,24);
       var h1=document.querySelector('h1');
       var name=prod.name||(h1&&h1.innerText)||meta('og:title')||document.title||'';
-      var desc=(prod.description||meta('og:description')||meta('description')||'').slice(0,3000);
-      return JSON.stringify({url:location.href,name:name,props:props,desc:desc,images:imgs,text:(document.body&&document.body.innerText||'').slice(0,300000)});
+      var desc=String(prod.description||meta('og:description')||meta('description')||'').slice(0,3000);
+      function val(v){if(v&&typeof v==='object'){var u=v.unitText||v.unitCode||'';if(u==='CMT')u='см';else if(u==='MMT')u='мм';else if(u==='MTR')u='м';return (v.value||v.name||'')+' '+u}return v||''}
+      var props=(Array.isArray(prod.additionalProperty)?prod.additionalProperty:[]).map(function(p){return (p.name||'')+': '+val(p.value)}).join('; ');
+      ['width','height','depth'].forEach(function(k){var v=prod[k];if(v)props+='; '+({width:'Ширина',height:'Высота',depth:'Глубина'})[k]+': '+val(v)});
+      var facts=Array.from(document.querySelectorAll('[itemprop],tr')).slice(0,100).map(function(e){return (e.innerText||e.content||'').trim()}).filter(Boolean).join('; ');
+      var root=document.querySelector('[itemtype*="Product"]')||document.querySelector('main')||document.body;
+      var text=((root&&root.innerText)||'').replace(/\s+/g,' ').slice(0,18000);
+      return JSON.stringify({url:location.href,name:name,props:(props+'; '+facts).slice(0,12000),desc:desc,images:imgs,text:text});
     })()
     """
 }
@@ -291,7 +340,9 @@ enum ShopSearch {
     ]
 
     static func url(_ base: String, _ query: String) -> URL? {
-        URL(string: base + (query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? query))
+        let unreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: unreserved) else { return nil }
+        return URL(string: base + encoded)
     }
 }
 

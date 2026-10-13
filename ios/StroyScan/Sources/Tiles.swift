@@ -995,15 +995,19 @@ enum TileLink {
         let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1251) ?? ""
         guard var found = parse(html, base: url) else { throw Problem.noImage }
         found.text = plain(html)
-        found.page = url
+        found.page = resp.url ?? url
         if found.width == nil, let sz = tileSize(name: found.name, props: "", desc: "", text: found.text) {
             found.width = sz.0
             found.height = sz.1
         }
         var imgReq = URLRequest(url: found.image, timeoutInterval: 20)
         imgReq.setValue(agent, forHTTPHeaderField: "User-Agent")
-        imgReq.setValue(url.absoluteString, forHTTPHeaderField: "Referer")
-        guard let (imgData, _) = try? await URLSession.shared.data(for: imgReq), let img = UIImage(data: imgData) else {
+        imgReq.setValue((found.page ?? url).absoluteString, forHTTPHeaderField: "Referer")
+        imgReq.setValue("image/webp,image/jpeg,image/png,*/*", forHTTPHeaderField: "Accept")
+        guard let (imgData, response) = try? await URLSession.shared.data(for: imgReq),
+              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+              !((response as? HTTPURLResponse)?.mimeType?.lowercased().contains("text/html") ?? false),
+              let img = UIImage(data: imgData), img.size.width >= 50, img.size.height >= 50 else {
             throw Problem.noImage
         }
         if found.name.isEmpty { found.name = url.host ?? "Плитка" }
@@ -1013,7 +1017,7 @@ enum TileLink {
     /// og:image, twitter:image или картинка из описания товара; название и размер «60×60 см» / «600x600 мм»
     static func parse(_ html: String, base: URL) -> TileLinkFound? {
         let metas = meta(html)
-        let raw = metas["og:image"] ?? metas["og:image:secure_url"] ?? metas["twitter:image"] ?? jsonImage(html)
+        let raw = jsonImage(html) ?? metas["og:image:secure_url"] ?? metas["og:image"] ?? metas["twitter:image"]
         guard let raw, let image = URL(string: unescape(raw), relativeTo: base)?.absoluteURL else { return nil }
         var name = unescape(metas["og:title"] ?? title(html) ?? "")
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1049,9 +1053,46 @@ enum TileLink {
     }
 
     static func jsonImage(_ html: String) -> String? {
-        guard let re = try? NSRegularExpression(pattern: #""image"\s*:\s*\[?\s*"(https?:[^"]+)""#),
-              let m = re.firstMatch(in: html, range: NSRange(location: 0, length: (html as NSString).length)) else { return nil }
-        return (html as NSString).substring(with: m.range(at: 1)).replacingOccurrences(of: "\\/", with: "/")
+        guard let scripts = try? NSRegularExpression(pattern: #"(?is)<script[^>]*type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>"#) else { return nil }
+        let ns = html as NSString
+        let range = NSRange(location: 0, length: min(ns.length, 600_000))
+        for match in scripts.matches(in: html, range: range) {
+            let json = ns.substring(with: match.range(at: 1))
+            guard let data = json.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) else { continue }
+            if let url = productImage(in: value) { return unescape(url).replacingOccurrences(of: "\\/", with: "/") }
+        }
+        return nil
+    }
+
+    private static func productImage(in value: Any, depth: Int = 0) -> String? {
+        guard depth < 6 else { return nil }
+        if let list = value as? [Any] {
+            for item in list { if let url = productImage(in: item, depth: depth + 1) { return url } }
+            return nil
+        }
+        guard let object = value as? [String: Any] else { return nil }
+        let rawType = object["@type"]
+        let types = (rawType as? [String]) ?? [rawType as? String ?? ""]
+        if types.contains(where: {
+            let name = $0.split(whereSeparator: { $0 == "/" || $0 == "#" }).last.map(String.init) ?? $0
+            return name.caseInsensitiveCompare("Product") == .orderedSame || name.caseInsensitiveCompare("ProductGroup") == .orderedSame
+        }),
+           let images = object["image"], let url = firstImageURL(in: images) {
+            return url
+        }
+        for key in ["@graph", "mainEntity", "hasVariant", "itemListElement"] {
+            if let child = object[key], let url = productImage(in: child, depth: depth + 1) { return url }
+        }
+        return nil
+    }
+
+    private static func firstImageURL(in value: Any) -> String? {
+        if let string = value as? String { return string }
+        if let list = value as? [Any] { for item in list { if let url = firstImageURL(in: item) { return url } } }
+        if let object = value as? [String: Any] {
+            return (object["url"] as? String) ?? (object["contentUrl"] as? String) ?? (object["@id"] as? String)
+        }
+        return nil
     }
 
     /// Страница без тегов и скриптов (первые 400 тыс. знаков)
@@ -1128,6 +1169,7 @@ struct TileAddView: View {
     var editing: TileItem? = nil
     let onSave: (TileItem, UIImage?) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Source: String, CaseIterable { case photo = "Фото", link = "Ссылка" }
 
@@ -1139,6 +1181,7 @@ struct TileAddView: View {
     @State private var browse: BrowseURL?
     @State private var loading = false
     @State private var problem: String?
+    @State private var importNote: String?
     @State private var photo: UIImage?
     @State private var name = ""
     @State private var width = "30"
@@ -1232,6 +1275,7 @@ struct TileAddView: View {
                                                     : kind == .board ? "Двигайте и приближайте фото — в рамке одна доска"
                                                     : "Двигайте и приближайте фото — в рамке одна плитка")
                         }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                     } else if let t = editing, let img = TileFiles.image(t.id) {
                         Section {
                             Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 200).frame(maxWidth: .infinity)
@@ -1240,6 +1284,8 @@ struct TileAddView: View {
                 }
                 fieldsSection
             }
+            .animation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.state), value: source)
+            .animation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.fade), value: photo != nil)
             .navigationTitle(editing == nil ? "Своя отделка" : kind.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1315,6 +1361,7 @@ struct TileAddView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+            if let importNote { Label(importNote, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary) }
         }
     }
 
@@ -1391,6 +1438,7 @@ struct TileAddView: View {
             return
         }
         photo = up
+        importNote = nil
         zoom = 1
         zoomStart = 1
         offset = .zero
@@ -1439,8 +1487,12 @@ struct TileAddView: View {
             width = fmt(kind == .board ? max(w, h) : w)
             height = fmt(kind == .board ? min(w, h) : h)
             problem = nil
+            importNote = "Размер взят со страницы. Проверьте, что это размер одной плитки или доски, а не упаковки."
         } else if kind == .tile || kind == .board {
-            problem = "Размер на странице не нашёл — впишите его ниже из карточки товара."
+            problem = nil
+            importNote = "Размер на странице не найден. Впишите формат одной плитки или доски из карточки товара."
+        } else {
+            importNote = "Фото взято со страницы. Перед раскладкой проверьте размеры и раппорт."
         }
         link = found.page?.absoluteString ?? linkText.trimmingCharacters(in: .whitespacesAndNewlines)
         fixColor = false   // фото из магазина уже обработано

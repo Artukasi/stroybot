@@ -262,11 +262,13 @@ extension RenoEditor {
 struct CustomPieceAddView: View {
     let onSave: (CustomPiece, UIImage?) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Source: String, CaseIterable { case link = "Ссылка", photo = "Фото" }
 
     @State private var source = Source.link
     @State private var linkText = ""
+    @State private var searchWord = "диван"
     @State private var browse: BrowseURL?
     @State private var link: String?
     @State private var loading = false
@@ -300,8 +302,18 @@ struct CustomPieceAddView: View {
                     }
                     .pickerStyle(.segmented)
                     if source == .link {
-                        TextField("Ссылка на товар в магазине", text: $linkText, axis: .vertical)
-                            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        HStack {
+                            TextField("Вставьте ссылку на товар", text: $linkText, axis: .vertical)
+                                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            Button {
+                                if let text = UIPasteboard.general.string {
+                                    linkText = text
+                                    Task { await loadLink() }
+                                }
+                            } label: { Image(systemName: "doc.on.clipboard") }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Вставить ссылку из буфера обмена")
+                        }
                         Button { Task { await loadLink() } } label: {
                             HStack {
                                 if loading { ProgressView() }
@@ -309,6 +321,30 @@ struct CustomPieceAddView: View {
                             }
                         }
                         .disabled(linkText.isEmpty || loading)
+                        if let url = linkIn(linkText) {
+                            Button { browse = BrowseURL(url: url) } label: {
+                                Label("Открыть страницу и выбрать фото", systemImage: "safari")
+                            }
+                        }
+                        TextField("Что ищем: диван, кровать, шкаф…", text: $searchWord)
+                            .textInputAutocapitalization(.never)
+                        Text("Или найдите товар в магазине:").font(.caption).foregroundStyle(.secondary)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(ShopSearch.shops, id: \.name) { shop in
+                                    Button {
+                                        if let url = ShopSearch.url(shop.base, searchWord) {
+                                            browse = BrowseURL(url: url)
+                                        }
+                                    } label: {
+                                        Text(shop.name).font(.caption.bold())
+                                            .padding(.horizontal, 10).padding(.vertical, 7)
+                                            .background(Palette.signal.opacity(0.35), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
                         Text("Любой магазин: Хофф, Divan.ru, Икеа, Озон, Wildberries и другие. Возьму фото, название и размеры, если они есть на странице.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
@@ -323,6 +359,7 @@ struct CustomPieceAddView: View {
                     Section {
                         Image(uiImage: photo).resizable().scaledToFit().frame(maxHeight: 200).frame(maxWidth: .infinity)
                     }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
                 Section {
                     TextField("Название", text: $name)
@@ -336,6 +373,8 @@ struct CustomPieceAddView: View {
                     Text("Поставлю вещь в комнату в настоящем размере и проверю, влезает ли она и пройдёт ли в дверь.")
                 }
             }
+            .animation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.state), value: source)
+            .animation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.fade), value: photo != nil)
             .navigationTitle("Своя мебель")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

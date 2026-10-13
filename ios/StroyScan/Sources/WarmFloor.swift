@@ -78,7 +78,7 @@ struct WarmFloorView: View {
                 drawing
                     .frame(height: 290)
                     .padding(14)
-                    .background(Palette.ink, in: RoundedRectangle(cornerRadius: 22))
+                    .background(Palette.black, in: RoundedRectangle(cornerRadius: 22))
                 HStack(spacing: 10) {
                     number("Пол", calc.floor)
                     number("Под мебелью", calc.furniture)

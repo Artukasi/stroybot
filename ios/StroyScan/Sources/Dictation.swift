@@ -106,7 +106,7 @@ struct DictateButton: View {
             Label(dictation.running ? "Стоп — готово" : "Надиктовать голосом",
                   systemImage: dictation.running ? "stop.circle.fill" : "mic.fill")
                 .font(.subheadline.bold())
-                .foregroundStyle(dictation.running ? Color.red : Palette.draft)
+                .foregroundStyle(dictation.running ? Color.red : Palette.signal)
                 .symbolEffectPulse(dictation.running)
         }
         if let p = dictation.problem { Text(p).font(.caption).foregroundStyle(.red) }

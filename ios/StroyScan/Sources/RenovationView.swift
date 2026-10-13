@@ -319,7 +319,7 @@ struct Renovation3DView: View {
                 Text(rendering ? "Рисую, до 3 минут…" : "Нейросеть: как будет в жизни").bold()
             }
             .frame(maxWidth: .infinity).padding(.vertical, 12)
-            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 14))
+            .background(Palette.black, in: RoundedRectangle(cornerRadius: 14))
             .foregroundStyle(.white)
         }
         .disabled(rendering || !editor.ready || editor.tiling.isEmpty)

@@ -212,7 +212,7 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
         running = true
         // скан идёт минуту-две без касаний: экран не должен гаснуть и блокироваться
         UIApplication.shared.isIdleTimerDisabled = true
-                serial += 1
+        serial += 1
         let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
         if cameraStatus == .denied || cameraStatus == .restricted {
             running = false

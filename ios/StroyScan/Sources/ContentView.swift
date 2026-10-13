@@ -202,7 +202,7 @@ struct ContentView: View {
                     Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.5))
                 }
                 .padding(14)
-                .background(LinearGradient(colors: [Palette.ink, Palette.draft], startPoint: .leading, endPoint: .trailing),
+                .background(LinearGradient(colors: [Palette.black, Palette.draft], startPoint: .leading, endPoint: .trailing),
                             in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(PressStyle())
@@ -236,7 +236,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 18))
+            .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(PressStyle())
     }
@@ -318,8 +318,8 @@ struct ContentView: View {
                 Button { newPlace = ""; addingPlace = true } label: {
                     Label("Объект", systemImage: "plus").font(.subheadline.bold())
                         .padding(.horizontal, 12).padding(.vertical, 7)
-                        .overlay(Capsule().stroke(Palette.draft, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
-                        .foregroundStyle(Palette.draft)
+                        .overlay(Capsule().stroke(Palette.signal, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
+                        .foregroundStyle(Palette.signal)
                 }
             }
         }
@@ -336,7 +336,7 @@ struct ContentView: View {
         Button(action: action) {
             Text(title).font(.subheadline.bold()).lineLimit(1)
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(on ? Palette.ink : Color(.secondarySystemGroupedBackground), in: Capsule())
+                .background(on ? Palette.signal : Color(.secondarySystemGroupedBackground), in: Capsule())
                 .foregroundStyle(on ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)
@@ -431,7 +431,7 @@ struct ScanRow: View {
                 if let img = store.photo(scan.id) {
                     Image(uiImage: img).resizable().scaledToFill()
                 } else {
-                    Image(systemName: "square.dashed").font(.title2).foregroundStyle(Palette.draft)
+                    Image(systemName: "square.dashed").font(.title2).foregroundStyle(Palette.signal)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Palette.paper)
                 }
@@ -441,7 +441,7 @@ struct ScanRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(scan.room).font(.headline)
                 if let place = scan.place {
-                    Label(place, systemImage: "mappin").font(.caption).foregroundStyle(Palette.draft).lineLimit(1)
+                    Label(place, systemImage: "mappin").font(.caption).foregroundStyle(Palette.signal).lineLimit(1)
                 }
                 Text("пол \(fmt(scan.floorArea)) м² · стены \(fmt(scan.wallArea)) м²")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -476,16 +476,21 @@ struct Badge: View {
 
 /// Кнопка чуть проседает под пальцем
 struct PressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .opacity(configuration.isPressed && reduceMotion ? 0.76 : 1)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : AppMotion.press,
+                       value: configuration.isPressed)
     }
 }
 
-/// Шапка: чертёж, по которому бежит луч лидара
+/// Шапка: контур комнаты проявляется один раз, показывая результат сканирования
 struct HeroCard: View {
-    @State private var sweep = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var outlineProgress: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -507,15 +512,9 @@ struct HeroCard: View {
                 room.addLine(to: CGPoint(x: w * 0.78, y: h * 0.86))
                 room.addLine(to: CGPoint(x: w * 0.55, y: h * 0.86))
                 room.closeSubpath()
-                ctx.stroke(room, with: .color(Palette.signal), style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
+                ctx.stroke(room.trimmedPath(from: 0, to: outlineProgress),
+                           with: .color(Palette.signal), style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
             }
-            GeometryReader { geo in
-                LinearGradient(colors: [Palette.signal.opacity(0), Palette.signal.opacity(0.35), Palette.signal.opacity(0)],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: 60)
-                    .offset(x: sweep ? geo.size.width : -60)
-            }
-            .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Замер лидаром").font(.title.bold()).foregroundStyle(.white)
                 Text("Комната или вся квартира за пару минут. Материалы, смета и ремонт — прямо в телефоне.")
@@ -525,10 +524,14 @@ struct HeroCard: View {
             .padding(18)
         }
         .frame(height: 190)
-        .background(Palette.ink)
+        .background(Palette.black)
         .clipShape(RoundedRectangle(cornerRadius: 24))
         .onAppear {
-            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: false)) { sweep = true }
+            guard !reduceMotion else {
+                outlineProgress = 1
+                return
+            }
+            withAnimation(AppMotion.reveal) { outlineProgress = 1 }
         }
     }
 }

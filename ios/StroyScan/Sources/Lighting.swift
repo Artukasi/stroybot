@@ -115,7 +115,7 @@ struct LightingView: View {
                 plan(spots)
                     .frame(height: 260)
                     .padding(12)
-                    .background(Palette.ink, in: RoundedRectangle(cornerRadius: 22))
+                    .background(Palette.black, in: RoundedRectangle(cornerRadius: 22))
                 VStack(alignment: .leading, spacing: 8) {
                     row("Комната", "\(kind.title), \(m2(result.floorArea))")
                     row("Освещённость", "\(lux) лк (норма СП — \(kind.norm) лк)")

@@ -1,5 +1,6 @@
 import Foundation
 import RoomPlan
+import SceneKit
 import simd
 import UIKit
 
@@ -59,6 +60,30 @@ struct RoomResult {
     /// Фото комнаты (JPEG) для ИИ-ремонта
     var photo: Data?
     var quality = Quality()
+    /// Электрика и сантехника, которые расставили в 3D
+    var engineering = Engineering()
+    /// Плитка на полу и стенах (Tiles.swift)
+    var tiling = Tiling()
+    /// Дефекты, отмеченные на плане
+    var defects: [Defect] = []
+    /// Как мировые координаты съёмки переводятся в план: угол поворота, сдвиг x, сдвиг y, уровень пола (y)
+    var worldFrame: SIMD4<Double>?
+
+    /// Точка мира (ARKit) → план (x, y) и высота от пола
+    func toPlan(_ w: SIMD3<Float>) -> SIMD3<Double>? {
+        guard let f = worldFrame else { return nil }
+        let c = cos(-f.x), s = sin(-f.x)
+        let x = Double(w.x), z = Double(w.z)
+        return SIMD3(x * c - z * s - f.y, x * s + z * c - f.z, Double(w.y) - f.w)
+    }
+
+    /// План (x, y) и высота от пола → точка мира (ARKit); обратное к toPlan
+    func toWorld(_ p: SIMD3<Double>) -> SIMD3<Float>? {
+        guard let f = worldFrame else { return nil }
+        let c = cos(-f.x), s = sin(-f.x)
+        let x1 = p.x + f.y, z1 = p.y + f.z
+        return SIMD3(Float(x1 * c + z1 * s), Float(p.z + f.w), Float(-x1 * s + z1 * c))
+    }
 
     var perimeter: Double {
         guard plan.count > 2 else { return walls.reduce(0) { $0 + $1.length } }
@@ -225,6 +250,108 @@ struct RoomResult {
 }
 
 extension RoomResult {
+    /// Makes a shareable copy of the RoomPlan USDZ with measurement lines and labels baked in.
+    /// The original scan stays intact so users can still share the unannotated source model.
+    func dimensionedUSDZ() -> URL? {
+        guard let source = usdz, worldFrame != nil, walls.count == wallLines.count,
+              let scene = try? SCNScene(url: source, options: nil) else { return nil }
+
+        guard addDimensionAnnotations(to: scene, positionAt: { x, z, elevation in
+            guard let p = self.toWorld(SIMD3(x, z, elevation)) else { return nil }
+            return SCNVector3(Float(p.x), Float(p.y), Float(p.z))
+        }) != nil else { return nil }
+
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Комната-с-размерами-\(UUID().uuidString.prefix(8)).usdz")
+        guard scene.write(to: output, options: nil, delegate: nil, progressHandler: nil),
+              FileManager.default.fileExists(atPath: output.path) else { return nil }
+        return output
+    }
+
+    /// Adds measurement geometry to a room scene using its coordinate mapping.
+    @discardableResult
+    func addDimensionAnnotations(
+        to scene: SCNScene,
+        positionAt point: (Double, Double, Double) -> SCNVector3?
+    ) -> SCNNode? {
+        guard walls.count == wallLines.count else { return nil }
+        let annotations = SCNNode()
+        annotations.name = "Размеры комнаты"
+        let yellow = SCNMaterial()
+        yellow.diffuse.contents = UIColor.systemYellow
+        yellow.emission.contents = UIColor.systemYellow
+        yellow.lightingModel = .constant
+        yellow.isDoubleSided = true
+
+        func addLabel(_ text: String, at position: SCNVector3, yaw: Float = 0, size: CGFloat = 0.055) {
+            let geometry = SCNText(string: text, extrusionDepth: 0.002)
+            geometry.font = UIFont.systemFont(ofSize: size, weight: .semibold)
+            geometry.flatness = 0.2
+            geometry.firstMaterial = yellow
+            let bounds = geometry.boundingBox
+            let node = SCNNode(geometry: geometry)
+            node.pivot = SCNMatrix4MakeTranslation((bounds.min.x + bounds.max.x) / 2,
+                                                   (bounds.min.y + bounds.max.y) / 2, 0)
+            node.position = position
+            node.eulerAngles.y = yaw
+            node.name = "Размер: \(text)"
+            annotations.addChildNode(node)
+        }
+
+        for i in wallLines.indices {
+            let line = wallLines[i]
+            let a = SIMD2(line.x, line.y), b = SIMD2(line.z, line.w)
+            let delta = b - a
+            let length = simd_length(delta)
+            guard length > 0.2, let start = point(a.x, a.y, walls[i].height + 0.035),
+                  let end = point(b.x, b.y, walls[i].height + 0.035) else { continue }
+            let mid = SCNVector3((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2)
+            let dx = end.x - start.x, dz = end.z - start.z
+            let yaw = atan2(-dz, dx)
+            let bar = SCNBox(width: CGFloat(length), height: 0.006, length: 0.006, chamferRadius: 0)
+            bar.firstMaterial = yellow
+            let barNode = SCNNode(geometry: bar)
+            barNode.position = mid
+            barNode.eulerAngles.y = yaw
+            barNode.name = "Размер стены \(i + 1)"
+            annotations.addChildNode(barNode)
+
+            for endpoint in [start, end] {
+                let tick = SCNCylinder(radius: 0.003, height: 0.055)
+                tick.radialSegmentCount = 8
+                tick.firstMaterial = yellow
+                let tickNode = SCNNode(geometry: tick)
+                tickNode.position = endpoint
+                annotations.addChildNode(tickNode)
+            }
+
+            let labelAt = SCNVector3(mid.x, mid.y + 0.075, mid.z)
+            addLabel("\(fmt(walls[i].length)) × \(fmt(walls[i].height)) м", at: labelAt, yaw: yaw)
+        }
+
+        for opening in openings {
+            guard let wall = opening.wall, wallLines.indices.contains(wall),
+                  let offset = opening.offset else { continue }
+            let line = wallLines[wall]
+            let a = SIMD2(line.x, line.y), b = SIMD2(line.z, line.w)
+            let delta = b - a
+            let length = simd_length(delta)
+            guard length > 0.01 else { continue }
+            let center = a + delta / length * min(max(offset, 0), length)
+            let top = (opening.bottom ?? 0) + opening.height + 0.06
+            guard let at = point(center.x, center.y, top) else { continue }
+            let yaw = atan2(Float(-(b.y - a.y)), Float(b.x - a.x))
+            let title = opening.kind == "window" ? "Окно" : opening.kind == "door" ? "Дверь" : "Проём"
+            addLabel("\(title) \(fmt(opening.width)) × \(fmt(opening.height)) м", at: at, yaw: yaw, size: 0.042)
+        }
+
+        guard !annotations.childNodes.isEmpty else { return nil }
+        scene.rootNode.addChildNode(annotations)
+        return annotations
+    }
+}
+
+extension RoomResult {
     /// Стены скана для подгонки: концы по полу, высота, низ, уверенность
     static func rawWalls(_ walls: [CapturedRoom.Surface]) -> [Rectify.Wall] {
         walls.map { wall in
@@ -241,7 +368,7 @@ extension RoomResult {
     }
 
     /// Двери, окна и проёмы: середина по полу и ширина (дверь в разрыве стены не считается дырой)
-    static func rawOpenings(_ room: CapturedRoom) -> [Rectify.Opening] {
+    static func rawOpenings(_ room: ScanParts) -> [Rectify.Opening] {
         (room.doors + room.windows + room.openings).map {
             Rectify.Opening(center: SIMD2(Double($0.transform.columns.3.x), Double($0.transform.columns.3.z)),
                             width: Double($0.dimensions.x))
@@ -249,17 +376,22 @@ extension RoomResult {
     }
 
     /// Выпрямленные стены скана. prev — угол сетки прошлого кадра (во время съёмки)
-    static func rectify(_ room: CapturedRoom, prev: Double? = nil) -> Rectify.Result {
+    static func rectify(_ room: ScanParts, prev: Double? = nil) -> Rectify.Result {
         Rectify.run(rawWalls(room.walls), openings: rawOpenings(room), prev: prev)
     }
 
     init(_ captured: CapturedRoom) {
-        self.init(captured, RoomResult.rectify(captured))
+        self.init(ScanParts(captured))
+    }
+
+    /// Один скан или несколько сканов одной комнаты («доснять»)
+    init(_ parts: ScanParts) {
+        self.init(parts, RoomResult.rectify(parts))
     }
 
     /// Размеры по выпрямленным стенам: углы сомкнуты, куски одной стены — одна стена.
     /// Копия стены («двоится») в размеры не идёт, о ней пишет проверка скана
-    init(_ captured: CapturedRoom, _ fitted: Rectify.Result) {
+    init(_ captured: ScanParts, _ fitted: Rectify.Result) {
         self.init()
         let rect = fitted.withoutCopies()
         let rw = rect.walls
@@ -277,11 +409,8 @@ extension RoomResult {
         // контур пола: по сомкнутым стенам; если не сомкнулись — на iOS 17 от RoomPlan, на iOS 16 по концам стен
         var points = rect.loop
         if points.count < 3 {
-            if #available(iOS 17.0, *), let floor = captured.floors.first, floor.polygonCorners.count > 2 {
-                points = floor.polygonCorners.map { c in
-                    let w = floor.transform * SIMD4<Float>(c.x, c.y, c.z, 1)
-                    return SIMD2(Double(w.x), Double(w.z))
-                }
+            if captured.floorPolygon.count > 2 {
+                points = captured.floorPolygon
             } else {
                 points = RoomResult.convexHull(rw.flatMap { [$0.a, $0.b] })
             }
@@ -303,6 +432,7 @@ extension RoomResult {
             width = min(maxX - minX, maxY - minY)
         }
         let toPlan = { (p: SIMD2<Double>) -> SIMD2<Double> in rotate(p) - shift }
+        worldFrame = SIMD4(a, shift.x, shift.y, floorY)
 
         // стены на плане: два конца в тех же координатах, что и контур пола
         wallLines = rw.map { w in

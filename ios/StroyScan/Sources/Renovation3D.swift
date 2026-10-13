@@ -310,7 +310,7 @@ private struct Foot {
 /// 3D-ремонт по скану: строит комнату точно по размерам, выделяет то, что нажали, и меняет только это.
 final class RenoEditor: NSObject, ObservableObject {
     enum Pick: Equatable {
-        case wall(Int), floor, ceiling, window(Int), door(Int), object(Int), added(Int)
+        case wall(Int), floor, ceiling, window(Int), door(Int), object(Int), added(Int), custom(Int)
 
         init?(name: String) {
             let parts = name.split(separator: ":")
@@ -321,6 +321,7 @@ final class RenoEditor: NSObject, ObservableObject {
             case "door": guard let n else { return nil }; self = .door(n)
             case "obj": guard let n else { return nil }; self = .object(n)
             case "add": guard let n else { return nil }; self = .added(n)
+            case "cust": guard let n else { return nil }; self = .custom(n)
             case "floor": self = .floor
             case "ceiling", "lamps": self = .ceiling
             default: return nil
@@ -334,6 +335,42 @@ final class RenoEditor: NSObject, ObservableObject {
     /// Камера в комнате на уровне глаз (иначе — сверху)
     @Published private(set) var inside = false
     @Published private(set) var ready = false
+    /// Электрика и сантехника (см. EngineeringEditor.swift)
+    @Published var eng: Engineering
+    @Published var engMode: EngMode = .off
+    /// Комната как есть после скана: голые серые стены, бетонный пол, мебель — простые коробки.
+    /// Ремонт (look) при этом не меняется — вернулись в «Ремонт», и он на месте
+    @Published private(set) var bare = false
+    /// Яркость картинки: −1 темнее … +1 светлее (экспозиция камеры)
+    @Published private(set) var brightness: Float = 0
+    /// Мебель убрана с модели (чтобы видеть стены и вести провода и трубы)
+    @Published private(set) var furnitureHidden = false
+    /// Вид сверху строго вниз — как план
+    @Published private(set) var topView = false
+    /// Откуда смотрим на комнату снаружи: угол вокруг середины комнаты
+    private var orbitYaw: Float = atan2(0.5, 0.8)
+    /// Что ставим по нажатию: вид точки или вид трубы
+    @Published var engTool: EngTool?
+    @Published var engSelected: UUID?
+    /// Труба, которую сейчас проводят нажатиями
+    @Published var route: [SIMD3<Double>] = []
+    /// Труба из скана камерой, которую надо привязать к стене
+    @Published var pendingPipe: Engineering.Pipe?
+    @Published var engHint: String?
+    let engHolder = SCNNode()
+    let defectHolder = SCNNode()
+    /// Плитка (Tiles.swift): где лежит, плитки из библиотеки, какую кладём и какая зона выбрана
+    @Published var tiling: Tiling
+    var tileItems: [UUID: TileItem] = [:]
+    @Published var tileTool: UUID?
+    @Published var tileSelected: UUID?
+    let tileHolder = SCNNode()
+    var tileMats: [String: SCNMaterial] = [:]
+    /// Своя мебель по ссылке или фото (Pieces.swift); она лежит в tiling.pieces
+    let customHolder = SCNNode()
+    var customNodes: [SCNNode] = []
+    private var dragCustom: Int?
+    var engWallOf: [UUID: Int] = [:]
 
     let result: RoomResult
     let room: Room3D
@@ -349,7 +386,7 @@ final class RenoEditor: NSObject, ObservableObject {
     private let itemHolder = SCNNode()
     private let addedHolder = SCNNode()
     private let lightHolder = SCNNode()
-    private var wallNodes: [SCNNode] = []
+    private(set) var wallNodes: [SCNNode] = []
     /// Вид за окнами и коридоры за проёмами — только для вида из комнаты
     private var outsideNodes: [[SCNNode]] = []
     private var itemNodes: [Int: SCNNode] = [:]
@@ -363,6 +400,9 @@ final class RenoEditor: NSObject, ObservableObject {
     private var viewpointIndex = 0
     private var yaw: Float = 0
     private var pitch: Float = -0.12
+    /// Направление виртуального стика: x — вбок, y — вперёд/назад.
+    private var walkInput = SIMD2<Float>(0, 0)
+    private var previousWalkTick = CACurrentMediaTime()
     private var lookStart: (Float, Float) = (0, 0)
     private var fovStart: CGFloat = 75
     private var selectionNode: SCNNode?
@@ -380,6 +420,8 @@ final class RenoEditor: NSObject, ObservableObject {
         self.room = Room3D(result)
         self.look = look
         self.shown = look
+        self.eng = result.engineering
+        self.tiling = result.tiling
         self.view = SCNView(frame: .zero)
         super.init()
         setupScene()
@@ -435,6 +477,7 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         if timer == nil {
             timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                self?.advanceWalk()
                 self?.updateCutaway()
             }
         }
@@ -624,6 +667,8 @@ final class RenoEditor: NSObject, ObservableObject {
 
     func setInside(_ on: Bool) {
         inside = on
+        walkInput = .zero
+        previousWalkTick = CACurrentMediaTime()
         if on {
             view.allowsCameraControl = false
             view.pointOfView = roomCamera
@@ -636,9 +681,99 @@ final class RenoEditor: NSObject, ObservableObject {
             control.interactionMode = .orbitTurntable
             control.inertiaEnabled = true
             control.target = SCNVector3(room.centroid.x, 0.6, room.centroid.y)
+            // не уходим под пол и не переворачиваемся через верх
+            control.minimumVerticalAngle = 5
+            control.maximumVerticalAngle = 89.5
             chainGestures()
         }
         applyVisibility()
+    }
+
+    /// Стик задаёт скорость прогулки; пустой стик останавливает камеру.
+    func setWalkInput(x: Float, y: Float) {
+        let input = SIMD2(x, y)
+        let length = simd_length(input)
+        walkInput = length > 1 ? input / length : input
+    }
+
+    /// Плавно двигает камеру на уровне глаз и не выпускает её за контур комнаты.
+    private func advanceWalk() {
+        let now = CACurrentMediaTime()
+        let deltaTime = Float(min(now - previousWalkTick, 0.1))
+        previousWalkTick = now
+        guard inside, deltaTime > 0, simd_length_squared(walkInput) > 0.002 else { return }
+
+        let cameraPosition = roomCamera.simdPosition
+        let current = SIMD2(cameraPosition.x, cameraPosition.z)
+        let forward = SIMD2(-sin(yaw), -cos(yaw))
+        let right = SIMD2(cos(yaw), -sin(yaw))
+        let step = (right * walkInput.x + forward * walkInput.y) * (1.1 * deltaTime)
+        let destination = current + step
+
+        if room.inside(destination) {
+            roomCamera.simdPosition.x = destination.x
+            roomCamera.simdPosition.z = destination.y
+            return
+        }
+
+        // У стены скользим вдоль неё, чтобы прогулка не замирала от диагонального движения.
+        let slideX = SIMD2(destination.x, current.y)
+        let slideZ = SIMD2(current.x, destination.y)
+        if room.inside(slideX) {
+            roomCamera.simdPosition.x = slideX.x
+        } else if room.inside(slideZ) {
+            roomCamera.simdPosition.z = slideZ.y
+        }
+    }
+
+    func setFurnitureHidden(_ on: Bool) {
+        furnitureHidden = on
+        if pick != nil { select(nil) }
+        itemHolder.isHidden = on
+        addedHolder.isHidden = on || bare
+        customHolder.isHidden = on || bare
+    }
+
+    /// Повернуть комнату на четверть оборота (кнопками — без возни пальцами)
+    func turnOrbit(_ quarters: Int) {
+        if inside { setInside(false) }
+        if let p = view.pointOfView?.simdWorldPosition {
+            // продолжаем от того места, куда человек уже повернул пальцем
+            let c = room.centroid
+            let v = SIMD2(p.x - c.x, p.z - c.y)
+            if simd_length(v) > 0.3 && !topView { orbitYaw = atan2(v.x, v.y) }
+        }
+        orbitYaw += Float(quarters) * .pi / 2
+        topView = false
+        placeOrbit(animated: true)
+    }
+
+    func setTopView(_ on: Bool) {
+        if inside { setInside(false) }
+        topView = on
+        placeOrbit(animated: true)
+    }
+
+    /// Вся комната целиком, вид по умолчанию
+    func resetView() {
+        if inside { setInside(false) }
+        topView = false
+        orbitYaw = atan2(0.5, 0.8)
+        placeOrbit(animated: true)
+    }
+
+    func setBare(_ on: Bool) {
+        guard on != bare else { return }
+        select(nil)
+        bare = on
+        if ready { buildAll() }
+    }
+
+    func setBrightness(_ v: Float) {
+        brightness = max(-1, min(1, v))
+        for cam in [orbitCamera.camera, roomCamera.camera] {
+            cam?.exposureOffset = CGFloat(RenoEditor.baseExposure + brightness * 0.8)
+        }
     }
 
     func nextViewpoint() {
@@ -658,6 +793,10 @@ final class RenoEditor: NSObject, ObservableObject {
         let name = result.room.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Ремонт-\(name).usdz")
         try? FileManager.default.removeItem(at: url)
+        let dimensions = result.addDimensionAnnotations(to: scene) { x, z, elevation in
+            SCNVector3(Float(x), Float(elevation), Float(z))
+        }
+        defer { dimensions?.removeFromParentNode() }
         return scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) ? url : nil
     }
 
@@ -668,11 +807,13 @@ final class RenoEditor: NSObject, ObservableObject {
         scene.background.contents = backdrop
         // свет окружения: мягкие блики и тени без чёрных провалов
         scene.lightingEnvironment.contents = Tex.environment()
-        scene.lightingEnvironment.intensity = 1.0
+        scene.lightingEnvironment.intensity = 0.6
         floorHolder.name = "floor"
         ceilingHolder.name = "ceiling"
         lampHolder.name = "lamps"
-        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder] {
+        engHolder.name = "eng"
+        for n in [floorHolder, ceilingHolder, lampHolder, wallHolder, itemHolder, addedHolder, lightHolder, engHolder, defectHolder,
+                  tileHolder, customHolder] {
             scene.rootNode.addChildNode(n)
         }
         orbitCamera.camera = RenoEditor.camera(room: false)
@@ -688,6 +829,9 @@ final class RenoEditor: NSObject, ObservableObject {
         resetOrbit()
     }
 
+    /// Сдвиг экспозиции по умолчанию: чуть темнее нейтрали — светлые стены не пересвечены
+    static let baseExposure: Float = -0.35
+
     /// Камера как у фотографа интерьеров: HDR, автоэкспозиция, мягкое затенение углов
     private static func camera(room: Bool) -> SCNCamera {
         let c = SCNCamera()
@@ -696,16 +840,18 @@ final class RenoEditor: NSObject, ObservableObject {
         c.projectionDirection = .horizontal
         c.fieldOfView = room ? 75 : 55
         c.wantsHDR = true
+        // автоэкспозиция только затемняет: светлую комнату она «вытягивала» до белого пятна
         c.wantsExposureAdaptation = room
-        c.exposureAdaptationBrighteningSpeedFactor = 0.8
+        c.exposureAdaptationBrighteningSpeedFactor = 0.6
         c.exposureAdaptationDarkeningSpeedFactor = 0.8
-        c.minimumExposure = -1.5
-        c.maximumExposure = 1.5
-        c.exposureOffset = room ? 0 : 0.15
-        c.whitePoint = 1.15
-        c.bloomThreshold = 0.95
-        c.bloomIntensity = 0.3
-        c.bloomBlurRadius = 10
+        c.minimumExposure = -2
+        c.maximumExposure = 0.2
+        c.exposureOffset = CGFloat(baseExposure)
+        // мягкий «плечевой» тон: светлые стены остаются с фактурой, а не уходят в белое
+        c.whitePoint = 1.8
+        c.bloomThreshold = 1.6
+        c.bloomIntensity = 0.12
+        c.bloomBlurRadius = 8
         c.screenSpaceAmbientOcclusionIntensity = room ? 1.0 : 0.8
         c.screenSpaceAmbientOcclusionRadius = 0.3
         c.screenSpaceAmbientOcclusionBias = 0.03
@@ -719,11 +865,31 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     private func resetOrbit() {
+        placeOrbit(animated: false)
+    }
+
+    /// Камера снаружи: под углом orbitYaw или строго сверху; комната целиком в кадре
+    private func placeOrbit(animated: Bool) {
         let c = room.centroid
         let span = max(room.hi.x - room.lo.x, room.hi.y - room.lo.y, 2.5)
         let d = span * 1.1 + 1.5
-        orbitCamera.simdPosition = SIMD3(c.x + d * 0.5, d * 0.95 + room.height * 0.3, c.y + d * 0.8)
-        orbitCamera.simdLook(at: SIMD3(c.x, 0.6, c.y))
+        let target = SIMD3(c.x, topView ? 0 : 0.6, c.y)
+        let pos: SIMD3<Float>
+        if topView {
+            pos = SIMD3(c.x, room.height + span * 1.25 + 1, c.y + 0.001)
+        } else {
+            let r = d * 0.94
+            pos = SIMD3(c.x + sin(orbitYaw) * r, d * 0.95 + room.height * 0.3, c.y + cos(orbitYaw) * r)
+        }
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = animated ? 0.6 : 0
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        orbitCamera.simdPosition = pos
+        orbitCamera.simdLook(at: target, up: topView ? SIMD3(0, 0, -1) : SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
+        SCNTransaction.commit()
+        if view.pointOfView === orbitCamera {
+            view.defaultCameraController.target = SCNVector3(target.x, target.y, target.z)
+        }
     }
 
     private func goToViewpoint() {
@@ -778,6 +944,7 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         if !orbit { wallNodes.forEach { $0.isHidden = false } }
         updateCutaway()
+        syncEngVisibility()
     }
 
     private func updateCutaway() {
@@ -787,6 +954,7 @@ final class RenoEditor: NSObject, ObservableObject {
             let hide = simd_dot(c - g.mid, g.normal) < -0.05
             if wallNodes[pos].isHidden != hide { wallNodes[pos].isHidden = hide }
         }
+        syncEngVisibility()
     }
 
     private func buildAll() {
@@ -797,6 +965,10 @@ final class RenoEditor: NSObject, ObservableObject {
         buildAdded()
         buildLamps()
         buildLights()
+        buildEngineering()
+        buildDefects()
+        buildTiles()
+        buildCustom()
         highlight()
         applyVisibility()
     }
@@ -867,19 +1039,21 @@ final class RenoEditor: NSObject, ObservableObject {
     private func buildFloor() {
         floorHolder.childNodes.forEach { $0.removeFromParentNode() }
         guard room.polygon.count > 2 else { return }
-        let m = Mat.floor(shown.floor.finish, shown.floor.color)
+        let m = bare ? RenoEditor.bareFloor : Mat.floor(shown.floor.finish, shown.floor.color)
         floorHolder.addChildNode(SCNNode(geometry: Mesh.polygon(expanded(room.polygon, by: 0.06), y: 0, up: true, m)))
     }
 
     private func buildCeiling() {
         ceilingHolder.childNodes.forEach { $0.removeFromParentNode() }
         guard room.polygon.count > 2 else { return }
-        let m = Mat.wall("paint", shown.ceiling.color, "plain")
+        let m = bare ? RenoEditor.bareCeiling : Mat.wall("paint", shown.ceiling.color, "plain")
         ceilingHolder.addChildNode(SCNNode(geometry: Mesh.polygon(expanded(room.polygon, by: 0.06), y: room.height, up: false, m)))
     }
 
     private func buildLamps() {
         lampHolder.childNodes.forEach { $0.removeFromParentNode() }
+        // голая комната — светильников ещё нет
+        guard !bare else { return }
         let node = Lamps.build(shown.ceiling.light, center: room.centroid, ceiling: room.height, lo: room.lo, hi: room.hi,
                                table: diningTable(), palette: shown.palette, inside: room.inside)
         lampHolder.addChildNode(node)
@@ -905,6 +1079,31 @@ final class RenoEditor: NSObject, ObservableObject {
     /// Солнце через главное окно (с тенями) и мягкий дневной свет от окон
     private func buildLights() {
         lightHolder.childNodes.forEach { $0.removeFromParentNode() }
+        // голая комната — ровный свет без бликов и тёмных углов: всё видно с любой стороны
+        for cam in [orbitCamera.camera, roomCamera.camera] {
+            cam?.vignettingIntensity = bare ? 0 : (cam === roomCamera.camera ? 0.3 : 0.15)
+            cam?.screenSpaceAmbientOcclusionIntensity = bare ? 0.5 : (cam === roomCamera.camera ? 1.0 : 0.8)
+            cam?.wantsExposureAdaptation = !bare && cam === roomCamera.camera
+        }
+        if bare {
+            let amb = SCNLight()
+            amb.type = .ambient
+            amb.intensity = 650
+            amb.temperature = 5500
+            let a = SCNNode()
+            a.light = amb
+            lightHolder.addChildNode(a)
+            let top = SCNLight()
+            top.type = .directional
+            top.intensity = 450
+            top.castsShadow = false
+            let t = SCNNode()
+            t.light = top
+            t.simdPosition = SIMD3(room.centroid.x, 10, room.centroid.y)
+            t.simdLook(at: SIMD3(room.centroid.x + 1.5, 0, room.centroid.y + 2.5))
+            lightHolder.addChildNode(t)
+            return
+        }
         var windows: [(WallGeo, OpeningGeo)] = []
         for (pos, list) in room.openings.enumerated() {
             for o in list where o.kind == "window" { windows.append((room.walls[pos], o)) }
@@ -918,7 +1117,7 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         let sun = SCNLight()
         sun.type = .directional
-        sun.intensity = 1500
+        sun.intensity = 850
         sun.temperature = 5600
         sun.castsShadow = true
         sun.shadowMode = .deferred
@@ -938,7 +1137,7 @@ final class RenoEditor: NSObject, ObservableObject {
             let p = w.point(o.center)
             let l = SCNLight()
             l.type = .spot
-            l.intensity = 800
+            l.intensity = 380
             l.temperature = 6500
             l.spotInnerAngle = 40
             l.spotOuterAngle = 140
@@ -976,6 +1175,7 @@ final class RenoEditor: NSObject, ObservableObject {
         wallHolder.addChildNode(node)
         wallNodes[pos] = node
         outsideNodes[pos] = outside
+        buildTiles()
     }
 
     private func surface(forWall i: Int) -> Look.Finish {
@@ -992,7 +1192,7 @@ final class RenoEditor: NSObject, ObservableObject {
         group.simdPosition = SIMD3(g.a.x, 0, g.a.y)
         group.eulerAngles.y = atan2(-g.dir.y, g.dir.x)
         let f = surface(forWall: g.index)
-        let wallMat = Mat.wall(f.finish, f.color, f.pattern)
+        let wallMat = bare ? RenoEditor.bareWall : Mat.wall(f.finish, f.color, f.pattern)
         let cut = Mat.flat(rgb(0.95, 0.94, 0.92), rough: 0.9)
         let bodyMats = [Mat.invisible, cut, cut, cut, cut, cut]
         let trim = Mat.flat(shown.palette.trim, rough: 0.4)
@@ -1023,10 +1223,10 @@ final class RenoEditor: NSObject, ObservableObject {
             let body = SCNNode(geometry: box)
             body.simdPosition = SIMD3((x0 - e0 + x1 + e1) / 2, (y0 + y1) / 2, -thick / 2)
             group.addChildNode(body)
-            if y0 < 0.001 {
+            if y0 < 0.001 && !bare {
                 k.box(x1 - x0, 0.08, 0.014, trim, x: (x0 + x1) / 2, y: 0, z: 0.007)
             }
-            if classic && y1 > top - 0.001 {
+            if classic && !bare && y1 > top - 0.001 {
                 k.box(x1 - x0, 0.09, 0.05, trim, x: (x0 + x1) / 2, y: top - 0.09, z: 0.025, r: 0.012)
             }
         }
@@ -1074,12 +1274,12 @@ final class RenoEditor: NSObject, ObservableObject {
         if h > 1.7 { k.box(w - 2 * bar, 0.05, 0.06, frame, x: cx, y: t - 0.5, z: zf) }
         let glass = k.box(w - 2 * bar, h - 2 * bar, 0.006, Mat.glass, x: cx, y: b + bar, z: zf)
         glass.castsShadow = false
-        if b > 0.25 {
+        if b > 0.25 && !bare {
             // подоконник
             let depth = thick * 0.5 + 0.08
             k.box(w + 0.12, 0.035, depth, Mat.flat(rgb(0.95, 0.95, 0.94), rough: 0.25), x: cx, y: b - 0.035, z: 0.08 - depth / 2)
         }
-        curtains(k, l: l, r: r, b: b, t: t)
+        if !bare { curtains(k, l: l, r: r, b: b, t: t) }
     }
 
     private func twoSided(_ hex: String) -> SCNMaterial {
@@ -1141,6 +1341,8 @@ final class RenoEditor: NSObject, ObservableObject {
         let pal = shown.palette
         let trim = Mat.flat(pal.trim, rough: 0.4)
         let w = r - l, cx = (l + r) / 2
+        // голая комната — просто проём
+        guard !bare else { return }
         // наличники
         k.box(0.07, t + 0.07, 0.02, trim, x: l - 0.035, y: 0, z: 0.01)
         k.box(0.07, t + 0.07, 0.02, trim, x: r + 0.035, y: 0, z: 0.01)
@@ -1190,6 +1392,7 @@ final class RenoEditor: NSObject, ObservableObject {
 
     private func buildItems() {
         itemHolder.childNodes.forEach { $0.removeFromParentNode() }
+        itemHolder.isHidden = furnitureHidden
         itemNodes = [:]
         for i in result.items.indices { rebuildItem(i) }
     }
@@ -1205,6 +1408,7 @@ final class RenoEditor: NSObject, ObservableObject {
     /// Отсканированный предмет точно в размер скана, в выбранном варианте и цвете
     private func makeItem(_ i: Int) -> SCNNode? {
         let it = result.items[i]
+        if bare { return bareItem(i, it) }
         let edit = shown.objects[String(i)]
         if edit?.hidden == true { return nil }
         let variant = edit?.variant ?? LookOptions.defaultVariant(it)
@@ -1220,6 +1424,33 @@ final class RenoEditor: NSObject, ObservableObject {
         node.eulerAngles.y = facing(kind: it.kind, variant: variant, at: p, angle: Float(it.angle), skip: i)
         return node
     }
+
+    /// Предмет как в скане Apple: светлая коробка в размер
+    private func bareItem(_ i: Int, _ it: RoomResult.Item) -> SCNNode {
+        let box = SCNBox(width: CGFloat(it.width), height: CGFloat(it.height), length: CGFloat(it.depth), chamferRadius: 0.01)
+        box.firstMaterial = RenoEditor.bareItemMat
+        let body = SCNNode(geometry: box)
+        body.simdPosition.y = Float(it.height) / 2
+        let node = SCNNode()
+        node.name = "obj:\(i)"
+        node.addChildNode(body)
+        node.simdPosition = SIMD3(Float(it.x), Float(it.bottom), Float(it.y))
+        node.eulerAngles.y = -Float(it.angle)
+        return node
+    }
+
+    static let bareWall = Mat.flat(rgb(0.80, 0.80, 0.78), rough: 0.95)
+    static let bareFloor = Mat.flat(rgb(0.58, 0.58, 0.56), rough: 0.98)
+    static let bareCeiling = Mat.flat(rgb(0.88, 0.88, 0.87), rough: 0.95)
+    static let bareItemMat: SCNMaterial = {
+        // своя копия: общий кэш материалов не трогаем
+        let m = SCNMaterial()
+        m.lightingModel = .physicallyBased
+        m.diffuse.contents = rgb(0.96, 0.96, 0.95)
+        m.roughness.contents = NSNumber(value: 0.7)
+        m.transparency = 0.85
+        return m
+    }()
 
     /// Поворот: спинкой к ближней стене, стулья — лицом к столу
     private func facing(kind: String, variant: String, at p: SIMD2<Float>, angle: Float, skip: Int) -> Float {
@@ -1244,6 +1475,8 @@ final class RenoEditor: NSObject, ObservableObject {
 
     private func buildAdded() {
         addedHolder.childNodes.forEach { $0.removeFromParentNode() }
+        // добавленная мебель — часть ремонта, в комнате «как есть» её нет
+        addedHolder.isHidden = bare || furnitureHidden
         addedNodes = shown.added.indices.map { makeAdded($0) }
         addedNodes.forEach { addedHolder.addChildNode($0) }
     }
@@ -1276,7 +1509,7 @@ final class RenoEditor: NSObject, ObservableObject {
 
     /// Вещь целиком на полу: все четыре угла внутри комнаты, ничего не торчит в стене или в проёме.
     /// Зазор 2 см — на плинтус.
-    private func inRoom(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> Bool {
+    func inRoom(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> Bool {
         Foot(c, angle: angle, w: w + 0.04, d: d + 0.04).corners.allSatisfy { room.inside($0) }
     }
 
@@ -1285,7 +1518,7 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     /// Ближайшее к c место (шаг 5 см), где вещь встаёт целиком; nil — в комнату не помещается
-    private func nearestFit(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> SIMD2<Float>? {
+    func nearestFit(_ c: SIMD2<Float>, angle: Float, w: Float, d: Float) -> SIMD2<Float>? {
         if inRoom(c, angle: angle, w: w, d: d) { return c }
         var best: SIMD2<Float>?
         var bestDist = Float.greatestFiniteMagnitude
@@ -1310,8 +1543,40 @@ final class RenoEditor: NSObject, ObservableObject {
         nearestFit(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle), w: Float(a.width), d: Float(a.depth))
     }
 
+    /// Во что упирается своя мебель j на этом месте: другая мебель или проход у двери; nil — стоит свободно
+    func customBump(_ j: Int) -> String? {
+        guard tiling.pieces.indices.contains(j) else { return nil }
+        let p = tiling.pieces[j]
+        let me = Foot(SIMD2(Float(p.x), Float(p.y)), angle: Float(p.angle), w: Float(p.width), d: Float(p.depth))
+        if !furnitureHidden {
+            for (i, it) in result.items.enumerated() where look.objects[String(i)]?.hidden != true {
+                if me.overlaps(Foot(SIMD2(Float(it.x), Float(it.y)), angle: Float(it.angle), w: Float(it.width), d: Float(it.depth))) {
+                    return it.title.lowercased()
+                }
+            }
+            for a in look.added where me.overlaps(Foot(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle),
+                                                       w: Float(a.width), d: Float(a.depth))) {
+                return RoomResult.itemTitle(a.kind).lowercased()
+            }
+        }
+        for (k, c) in tiling.pieces.enumerated() where k != j {
+            if me.overlaps(Foot(SIMD2(Float(c.x), Float(c.y)), angle: Float(c.angle), w: Float(c.width), d: Float(c.depth))) {
+                return c.name.isEmpty ? "другую вашу мебель" : c.name
+            }
+        }
+        for (pos, list) in room.openings.enumerated() {
+            let g = room.walls[pos]
+            let along = atan2(g.dir.y, g.dir.x)
+            for o in list where o.kind != "window" {
+                // 60 см перед дверью — проход
+                if me.overlaps(Foot(g.point(o.center) + g.normal * 0.3, angle: along, w: o.width, d: 0.6)) { return "проход у двери" }
+            }
+        }
+        return nil
+    }
+
     /// Свободное место под новую вещь: не на проходе у дверей, не перед окном, не поверх мебели
-    private func freeSpot(kind: String, variant: String, w: Float, d: Float, h: Float) -> (SIMD2<Float>, Float)? {
+    func freeSpot(kind: String, variant: String, w: Float, d: Float, h: Float) -> (SIMD2<Float>, Float)? {
         var blocks: [Foot] = []
         for (i, it) in result.items.enumerated() where look.objects[String(i)]?.hidden != true {
             blocks.append(Foot(SIMD2(Float(it.x), Float(it.y)), angle: Float(it.angle),
@@ -1319,6 +1584,9 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         for a in look.added {
             blocks.append(Foot(SIMD2(Float(a.x), Float(a.y)), angle: Float(a.angle), w: Float(a.width) + 0.3, d: Float(a.depth) + 0.3))
+        }
+        for c in tiling.pieces {
+            blocks.append(Foot(SIMD2(Float(c.x), Float(c.y)), angle: Float(c.angle), w: Float(c.width) + 0.3, d: Float(c.depth) + 0.3))
         }
         for (pos, list) in room.openings.enumerated() {
             let g = room.walls[pos]
@@ -1397,7 +1665,7 @@ final class RenoEditor: NSObject, ObservableObject {
 
     // MARK: Выделение
 
-    private func highlight() {
+    func highlight() {
         selectionNode?.removeFromParentNode()
         selectionNode = nil
         guard let pick else { return }
@@ -1432,6 +1700,10 @@ final class RenoEditor: NSObject, ObservableObject {
             guard j < addedNodes.count else { return }
             lines = boxEdges(addedNodes[j])
             parent = addedNodes[j]
+        case .custom(let j):
+            guard j < customNodes.count else { return }
+            lines = boxEdges(customNodes[j])
+            parent = customNodes[j]
         }
         guard let parent else { return }
         let frame = Kit()
@@ -1494,6 +1766,16 @@ final class RenoEditor: NSObject, ObservableObject {
     }
 
     @objc private func onTap(_ g: UITapGestureRecognizer) {
+        if engMode == .tile {
+            tileTap(at: g.location(in: view))
+            return
+        }
+        if engMode != .off {
+            engTap(at: g.location(in: view))
+            return
+        }
+        // комната «как есть» — только посмотреть
+        if bare { return }
         select(hitPick(at: g.location(in: view)))
     }
 
@@ -1501,7 +1783,10 @@ final class RenoEditor: NSObject, ObservableObject {
         let p = g.location(in: view)
         switch g.state {
         case .began:
-            if let j = dragIndex, j < addedNodes.count, let hit = floorPoint(p) {
+            if let j = dragCustom, j < customNodes.count, let hit = floorPoint(p) {
+                let pos = customNodes[j].simdPosition
+                dragOffset = SIMD2(pos.x, pos.z) - hit
+            } else if let j = dragIndex, j < addedNodes.count, let hit = floorPoint(p) {
                 let pos = addedNodes[j].simdPosition
                 dragOffset = SIMD2(pos.x, pos.z) - hit
             } else {
@@ -1509,7 +1794,19 @@ final class RenoEditor: NSObject, ObservableObject {
                 lookStart = (yaw, pitch)
             }
         case .changed:
-            if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
+            if let j = dragCustom, j < customNodes.count, tiling.pieces.indices.contains(j) {
+                guard let hit = floorPoint(p) else { return }
+                let c = tiling.pieces[j]
+                let q = hit + dragOffset
+                let pos = customNodes[j].simdPosition
+                let old = SIMD2(pos.x, pos.z)
+                let fits = { (x: SIMD2<Float>) in self.inRoom(x, angle: Float(c.angle), w: Float(c.width), d: Float(c.depth)) }
+                let stuck = !fits(old)
+                if let next = [q, SIMD2(q.x, old.y), SIMD2(old.x, q.y)].first(where: { fits($0) || (stuck && room.inside($0)) }) {
+                    customNodes[j].simdPosition.x = next.x
+                    customNodes[j].simdPosition.z = next.y
+                }
+            } else if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
                 guard let hit = floorPoint(p) else { return }
                 let a = look.added[j]
                 let q = hit + dragOffset
@@ -1532,6 +1829,12 @@ final class RenoEditor: NSObject, ObservableObject {
                 applyRoomCamera()
             }
         default:
+            if let j = dragCustom, j < customNodes.count, tiling.pieces.indices.contains(j) {
+                let pos = customNodes[j].simdPosition
+                tiling.pieces[j].x = Double(pos.x)
+                tiling.pieces[j].y = Double(pos.z)
+            }
+            dragCustom = nil
             if let j = dragIndex, j < addedNodes.count, look.added.indices.contains(j) {
                 let pos = addedNodes[j].simdPosition
                 edit { l in
@@ -1567,8 +1870,13 @@ extension RenoEditor: UIGestureRecognizerDelegate {
         if g === pan {
             // тащить можно только выбранную добавленную мебель
             dragIndex = nil
+            dragCustom = nil
             if case .added(let j)? = pick, case .added(let hit)? = hitPick(at: g.location(in: view)), hit == j {
                 dragIndex = j
+                return true
+            }
+            if case .custom(let j)? = pick, case .custom(let hit)? = hitPick(at: g.location(in: view)), hit == j {
+                dragCustom = j
                 return true
             }
             return inside

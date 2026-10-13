@@ -671,10 +671,13 @@ enum Furniture3D {
 // MARK: - Светильники на потолке
 
 enum Lamps {
+    /// Общий множитель света ламп: вместе с солнцем и светом окон комната не должна уходить в белое
+    static let scale: CGFloat = 0.55
+
     static func omni(_ intensity: CGFloat, _ temperature: CGFloat, reach: Float) -> SCNLight {
         let l = SCNLight()
         l.type = .omni
-        l.intensity = intensity
+        l.intensity = intensity * scale
         l.temperature = temperature
         l.attenuationStartDistance = 0.3
         l.attenuationEndDistance = CGFloat(max(reach, 4))
@@ -685,7 +688,7 @@ enum Lamps {
     static func spot(_ intensity: CGFloat, _ temperature: CGFloat, angle: CGFloat) -> SCNLight {
         let l = SCNLight()
         l.type = .spot
-        l.intensity = intensity
+        l.intensity = intensity * scale
         l.temperature = temperature
         l.spotInnerAngle = angle * 0.35
         l.spotOuterAngle = angle

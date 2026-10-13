@@ -111,12 +111,62 @@ final class BotLink: ObservableObject {
         return (url, (json?["credits"] as? NSNumber)?.intValue)
     }
 
+    // MARK: Резервная копия
+
+    /// Есть ли копия в боте и когда сохранена
+    func backupInfo() async throws -> Date? {
+        let data = try await call("GET", server + "/scan/backup/info", body: nil)
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard json?["exists"] as? Bool == true, let t = (json?["saved_at"] as? NSNumber)?.doubleValue else { return nil }
+        return Date(timeIntervalSince1970: t)
+    }
+
+    func uploadBackup(_ zip: Data) async throws {
+        _ = try await call("PUT", server + "/scan/backup", body: nil, timeout: 180, raw: zip)
+    }
+
+    func downloadBackup() async throws -> Data {
+        try await call("GET", server + "/scan/backup", body: nil, timeout: 180)
+    }
+
+    // MARK: Нейросети бота (те же, что в чате и Mini App; кредиты общие)
+
+    /// JSON-запрос к /api/… бота; ответ — словарь
+    func api(_ method: String, _ path: String, json: [String: Any]? = nil, timeout: TimeInterval = 120) async throws -> [String: Any] {
+        let data = try await call(method, server + path, body: json, timeout: timeout, design: true)
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    }
+
+    /// Форма с фото: поля и файлы (имя поля, jpeg). Одинаковые имена — несколько файлов
+    func apiForm(_ path: String, fields: [(String, String)], files: [(String, Data)], timeout: TimeInterval = 240) async throws -> [String: Any] {
+        let boundary = "stroyscan-\(UUID().uuidString)"
+        var body = Data()
+        func add(_ s: String) { body.append(s.data(using: .utf8)!) }
+        for (k, v) in fields {
+            add("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n\(v)\r\n")
+        }
+        for (i, (k, d)) in files.enumerated() {
+            add("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"; filename=\"photo\(i).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+            body.append(d)
+            add("\r\n")
+        }
+        add("--\(boundary)--\r\n")
+        let data = try await call("POST", server + path, body: nil, timeout: timeout, design: true,
+                                  raw: body, contentType: "multipart/form-data; boundary=\(boundary)")
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    }
+
     private func call(_ method: String, _ url: String, body: Any?, auth: Bool = true,
-                      timeout: TimeInterval = 30, design: Bool = false) async throws -> Data {
+                      timeout: TimeInterval = 30, design: Bool = false, raw: Data? = nil,
+                      contentType: String = "application/zip") async throws -> Data {
         guard let u = URL(string: url) else { throw LinkError.message("Неверный адрес сервера.") }
         var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = method
         if auth, let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let raw {
+            req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            req.httpBody = raw
+        }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -125,9 +175,11 @@ final class BotLink: ObservableObject {
         do {
             answer = try await URLSession.shared.data(for: req)
         } catch let e as URLError where e.code == .timedOut {
-            throw LinkError.message("Бот долго не отвечает. Попробуйте ещё раз.")
-        } catch let e as URLError where e.code == .notConnectedToInternet {
-            throw LinkError.message("Нет интернета.")
+            throw LinkError.offline("Бот долго не отвечает. Попробуйте ещё раз.")
+        } catch let e as URLError where e.code == .notConnectedToInternet || e.code == .networkConnectionLost {
+            throw LinkError.offline("Нет интернета.")
+        } catch is URLError {
+            throw LinkError.offline("Бот сейчас недоступен: компьютер с ботом выключен или адрес сменился.")
         }
         let (data, resp) = answer
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -135,9 +187,10 @@ final class BotLink: ObservableObject {
         let code = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String
         switch status {
         case 401: disconnect(); throw LinkError.message("Подключение сброшено. Получите новый код командой /scanner в боте.")
-        case 402: throw LinkError.message("Не хватает кредитов. Пополните в боте.")
+        case 402: throw LinkError.credits
         case 403: throw LinkError.message("Код не подошёл или устарел. Получите новый командой /scanner в боте.")
         case 404 where code == "scan": throw LinkError.scanMissing
+        case 404 where code == "no backup": throw LinkError.message("В боте ещё нет копии.")
         case 404, 405: throw LinkError.message("Бот ещё не умеет это. Обновите бота на сервере.")
         case 409: throw LinkError.message("Нужно фото комнаты")
         case 413: throw LinkError.message("Слишком большой файл.")
@@ -146,7 +199,7 @@ final class BotLink: ObservableObject {
         case 400: throw LinkError.message("Бот не понял запрос. Обновите приложение и бота.")
         case 429: throw LinkError.message("Слишком много попыток. Подождите 10 минут.")
         case 502 where design: throw LinkError.message("ИИ не ответил, кредиты вернули. Попробуйте ещё раз.")
-        case 502, 503, 504: throw LinkError.message("Бот сейчас недоступен. Попробуйте позже.")
+        case 500...599: throw LinkError.offline("Бот сейчас недоступен. Попробуйте позже.")
         default: throw LinkError.message("Ошибка сервера (\(status)).")
         }
     }
@@ -154,12 +207,17 @@ final class BotLink: ObservableObject {
 
 enum LinkError: Error {
     case message(String)
+    /// Нет связи с ботом (интернет, бот выключен) — можно отправить позже
+    case offline(String)
     /// Скана нет в боте (удалили или другой аккаунт) — надо отправить заново
     case scanMissing
+    /// Не хватает кредитов — можно пополнить прямо из приложения
+    case credits
 
     var text: String {
         switch self {
-        case .message(let t): return t
+        case .credits: return "Не хватает кредитов. Пополните — кнопка «Пополнить» в «Нейросетях»."
+        case .message(let t), .offline(let t): return t
         case .scanMissing: return "Скан не найден в боте. Отправьте его ещё раз."
         }
     }

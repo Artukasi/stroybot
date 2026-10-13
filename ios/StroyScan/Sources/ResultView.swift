@@ -18,30 +18,72 @@ let designStyles: [DesignStyle] = [
     DesignStyle(key: "budget", title: "Бюджетный ремонт"),
 ]
 
+/// Комната из истории: читаем с диска один раз
+struct SavedRoomView: View {
+    @EnvironmentObject var store: ScanStore
+    @EnvironmentObject var hub: ScanHub
+    let id: UUID
+    let onRescan: () -> Void
+    @State private var loaded: RoomResult?
+    @State private var missing = false
+
+    var body: some View {
+        Group {
+            if let loaded {
+                ResultView(savedID: id, result: loaded, canContinue: hub.rooms(for: id) != nil, onRescan: onRescan)
+            } else if missing {
+                Text("Скан не найден. Возможно, его удалили.").foregroundStyle(.secondary).padding()
+            } else {
+                ProgressView()
+            }
+        }
+        .onAppear {
+            guard loaded == nil else { return }
+            loaded = store.result(id)
+            missing = loaded == nil
+        }
+    }
+}
+
 /// Результат скана: план сверху с длинами стен, площади и отправка в бот.
 struct ResultView: View {
     @EnvironmentObject var link: BotLink
+    @EnvironmentObject var store: ScanStore
+    @EnvironmentObject var hub: ScanHub
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Запись в истории «Мои комнаты»
+    let savedID: UUID
     @State var result: RoomResult
-    /// «Доснять / Переснять»: новый скан вместо этого
+    /// Телефон ещё помнит комнату: «Доснять» продолжит этот скан
+    var canContinue = false
+    /// «Доснять / Переснять»
     var onRescan: (() -> Void)? = nil
     @State private var drawn: CGFloat = 0
     @State private var sent = false
+    /// Номер скана в боте (у каждой комнаты свой)
+    @State private var scanId: Int?
+    @State private var loadedLook = false
+    @State private var counted = false
+    @State private var sending = false
     @State private var pickerItem: PhotosPickerItem?
     @State private var designStyle = "scandi"
     @State private var designing = false
     @State private var designURL: URL?
     @State private var designError: String?
-    @State private var credits: Int?
+    @State private var keySettings = false
+    @State private var hasKey = Kie.ready
     /// Ремонт, собранный в 3D (стиль, отделка, мебель)
     @State private var look = RenoStyle.scandi.finishes
     @State private var camera = false
     @State private var share: ShareFile?
+    @State private var exportingDimensions = false
     @State private var note: String?
     private let rooms = ["Комната", "Кухня", "Ванная", "Санузел", "Спальня", "Гостиная", "Детская", "Коридор", "Балкон"]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                AssembleView(result: result)
                 planView
                 qualityCard
 
@@ -51,12 +93,15 @@ struct ResultView: View {
                 .pickerStyle(.menu)
 
                 statsGrid
+                if !result.engineering.isEmpty { engineeringCard }
+                DefectsSection(scanID: savedID, result: $result)
                 if !result.items.isEmpty { furnitureList }
                 photoSection
 
                 if !result.wallLines.isEmpty {
                     NavigationLink {
-                        Renovation3DView(result: result, look: $look, scanId: sent ? link.lastScanId : nil) { fresh in
+                        Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
+                                         tiling: $result.tiling, scanId: sent ? scanId : nil) { fresh in
                             try await ensureScanId(fresh: fresh)
                         }
                     } label: {
@@ -68,7 +113,7 @@ struct ResultView: View {
                 }
 
                 NavigationLink {
-                    FurnitureSizesView { fresh in try await ensureScanId(fresh: fresh) }
+                    FurnitureSizesView(result: result, look: look)
                 } label: {
                     Label("Мебель по размерам", systemImage: "sofa")
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
@@ -76,15 +121,84 @@ struct ResultView: View {
                         .foregroundStyle(Palette.ink)
                 }
 
-                sendButton
-                if sent, let scanId = link.lastScanId { designSection(scanId) }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                    NavigationLink { EstimateView(result: result) } label: {
+                        tool("Смета", "rublesign.circle", "материалы и работы")
+                    }
+                    NavigationLink { ClientDocView(scanID: savedID, result: result, look: look) } label: {
+                        tool("Клиенту", "signature", "PDF и страница с 3D")
+                    }
+                    NavigationLink { AIView(room: result) } label: {
+                        tool("Нейросети", "sparkles", "смета, КП, дизайн по фото")
+                    }
+                    NavigationLink { EstimateCheckView(result: result) } label: {
+                        tool("Проверить смету", "magnifyingglass.circle", "найти завышения")
+                    }
+                    if result.plan.count > 2 {
+                        NavigationLink { TileLayoutView(result: result) } label: {
+                            tool("Раскладка", "square.grid.3x3", "плитка и ламинат")
+                        }
+                        NavigationLink { WarmFloorView(result: result) } label: {
+                            tool("Тёплый пол", "thermometer.sun", "кабель, мат, вода")
+                        }
+                    }
+                    if !result.wallLines.isEmpty {
+                        NavigationLink { engineeringScreen(.tile) } label: {
+                            tool("Отделка", "square.grid.2x2.fill", "плитка, обои, краска, пол")
+                        }
+                        NavigationLink { engineeringScreen(.electric) } label: {
+                            tool("Электрика", "bolt.fill", "вырезы и провода в 3D")
+                        }
+                        NavigationLink { engineeringScreen(.plumbing) } label: {
+                            tool("Сантехника", "drop.fill", "выводы и трубы в 3D")
+                        }
+                        NavigationLink { LightingView(result: result, engineering: $result.engineering) } label: {
+                            tool("Свет", "lightbulb.2.fill", "сколько светильников")
+                        }
+                        NavigationLink { KitchenView(result: result) } label: {
+                            tool("Кухня", "cooktop", "модули по размерам")
+                        }
+                    }
+                    if !result.openings.isEmpty {
+                        NavigationLink { OpeningsView(result: result) } label: {
+                            tool("Окна и двери", "door.left.hand.open", "размеры на заказ")
+                        }
+                    }
+                    if versionCount > 0 {
+                        NavigationLink { CompareView(id: savedID, now: result) } label: {
+                            tool("Было — стало", "clock.arrow.2.circlepath", versionCount == 1 ? "прошлая съёмка" : "съёмок: \(versionCount)")
+                        }
+                    } else {
+                        Button { shareDXF() } label: { tool("Чертёж DXF", "pencil.and.ruler", "для AutoCAD") }
+                    }
+                }
+                .buttonStyle(PressStyle())
+
+                designSection
+                if link.connected || pending || sent { sendButton }
+                Button { sharePDF() } label: {
+                    Label("План в PDF — для клиента или магазина", systemImage: "doc.richtext")
+                }
+                if versionCount > 0 {
+                    Button { shareDXF() } label: {
+                        Label("Чертёж DXF — для AutoCAD и дизайнера", systemImage: "pencil.and.ruler")
+                    }
+                }
                 Button { shareScanFile() } label: {
                     Label("Файл скана для бота", systemImage: "doc.badge.arrow.up")
                 }
-                Text("Пришлите этот файл в чат СтройБота — ремонт и смета посчитаются прямо по размерам скана.")
+                Text("По желанию: пришлите этот файл в чат СтройБота — он тоже посчитает ремонт и смету по скану.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let usdz = result.usdz {
-                    ShareLink(item: usdz) { Label("3D-модель комнаты (USDZ)", systemImage: "cube") }
+                    Button { shareDimensionedModel() } label: {
+                        HStack {
+                            if exportingDimensions { ProgressView() }
+                            Label(exportingDimensions ? "Добавляю размеры…" : "3D-модель с размерами (USDZ)",
+                                  systemImage: "ruler")
+                        }
+                    }
+                    .disabled(exportingDimensions)
+                    ShareLink(item: usdz) { Label("Исходная 3D-модель", systemImage: "cube") }
                 }
             }
             .padding()
@@ -95,6 +209,19 @@ struct ResultView: View {
             guard let item else { return }
             Task { await loadPhoto(item) }
         }
+        .onAppear {
+            scanId = store.botScanId(savedID, server: link.server)
+            sent = scanId != nil
+            if !loadedLook, let saved = store.look(savedID) { look = saved }
+            loadedLook = true
+        }
+        .onChange(of: look) { l in
+            if loadedLook { store.setLook(savedID, l) }
+        }
+        .onChange(of: result.room) { _ in store.update(savedID, result: result) }
+        .onChange(of: result.engineering) { _ in store.update(savedID, result: result) }
+        .onChange(of: result.defects) { _ in store.update(savedID, result: result) }
+        .onChange(of: result.tiling) { _ in store.update(savedID, result: result) }
         .fullScreenCover(isPresented: $camera) {
             PhotoCameraView { data in usePhoto(data) }
         }
@@ -138,7 +265,9 @@ struct ResultView: View {
                             .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
                             .foregroundStyle(Palette.ink)
                     }
-                    Text("Скан начнётся заново: снимите комнату целиком, задержитесь на местах из списка.")
+                    Text(canContinue
+                         ? "Скан продолжится с того же места: доснимите только места из списка — они сами добавятся к комнате."
+                         : "Скан начнётся заново: снимите комнату целиком, задержитесь на местах из списка.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -159,35 +288,100 @@ struct ResultView: View {
             .overlay(PlanLabels(points: result.plan).opacity(drawn >= 1 ? 1 : 0))
             .overlay(PlanWalls(points: result.plan, lines: result.wallLines, weak: result.quality.weakWalls)
                 .opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanEngineering(eng: result.engineering, points: result.plan).opacity(drawn >= 1 ? 1 : 0))
+            .overlay(PlanDefects(defects: result.defects, points: result.plan).opacity(drawn >= 1 ? 1 : 0))
             .aspectRatio(max(0.6, min(1.8, result.length / max(result.width, 0.1))), contentMode: .fit)
             .padding(28)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-            .onAppear { withAnimation(.easeOut(duration: 1.4)) { drawn = 1 } }
+            .onAppear {
+                withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.reveal)) {
+                    drawn = 1
+                }
+            }
+    }
+
+    // MARK: - Электрика и сантехника
+
+    private var engineeringCard: some View {
+        let rows = result.engineering.summary(ceiling: result.height, wallLines: result.wallLines)
+        return VStack(alignment: .leading, spacing: 8) {
+            Label("Электрика и сантехника", systemImage: "bolt.horizontal.circle").font(.headline)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack {
+                    Circle().fill(row.group == .electric ? Color(EngKind.electricColor) : Color(EngKind.coldColor))
+                        .frame(width: 8, height: 8)
+                    Text(row.title)
+                    Spacer()
+                    Text(row.value).bold().monospacedDigit()
+                }
+                .font(.subheadline)
+            }
+            Text("Расставляется кнопками «Электрика» и «Сантехника» ниже. Длины — с запасом 10%.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    /// «Электрика» и «Сантехника»: голая 3D-модель скана, ставим вырезы, ведём провода и трубы
+    private func engineeringScreen(_ mode: EngMode) -> some View {
+        Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
+                         fixedMode: mode, tiling: $result.tiling, scanId: sent ? scanId : nil) { fresh in
+            try await ensureScanId(fresh: fresh)
+        }
     }
 
     // MARK: - Цифры
 
     private var statsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            stat("Пол", fmt(result.floorArea), "м²")
-            stat("Стены без проёмов", fmt(result.wallArea), "м²")
-            stat("Периметр", fmt(result.perimeter), "м")
-            stat("Высота", fmt(result.height), "м")
-            stat("Длина × ширина", "\(fmt(result.length)) × \(fmt(result.width))", "м")
-            stat("Окна и двери", "\(result.windows) и \(result.doors)", "шт")
-            stat("Плинтус", fmt(result.skirting), "м")
-            stat("Откосы окон", fmt(result.slopes), "м")
+            stat("Пол", result.floorArea, "м²", 0)
+            stat("Стены без проёмов", result.wallArea, "м²", 1)
+            stat("Периметр", result.perimeter, "м", 2)
+            stat("Высота", result.height, "м", 3)
+            stat("Длина × ширина", "\(fmt(result.length)) × \(fmt(result.width))", "м", 4)
+            stat("Окна и двери", "\(result.windows) и \(result.doors)", "шт", 5)
+            stat("Плинтус", result.skirting, "м", 6)
+            stat("Откосы окон", result.slopes, "м", 7)
+        }
+        .onAppear {
+            guard !counted else { return }
+            withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: .easeOut(duration: 0.32))) {
+                counted = true
+            }
         }
     }
 
-    private func stat(_ title: String, _ value: String, _ unit: String) -> some View {
+    /// Число набегает от нуля, карточки появляются по очереди
+    private func stat(_ title: String, _ value: Double, _ unit: String, _ i: Int) -> some View {
+        statCard(title, i) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                CountUp(value: counted ? value : 0).font(.title3.bold())
+                Text(unit).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func stat(_ title: String, _ value: String, _ unit: String, _ i: Int) -> some View {
+        statCard(title, i) {
+            Text(value).font(.title3.bold()) + Text(" \(unit)").font(.subheadline).foregroundColor(.secondary)
+        }
+    }
+
+    private func statCard<C: View>(_ title: String, _ i: Int, @ViewBuilder _ value: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title3.bold()) + Text(" \(unit)").font(.subheadline).foregroundColor(.secondary)
+            value()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .opacity(counted ? 1 : 0)
+        .offset(y: counted || reduceMotion ? 0 : 8)
+        .animation(reduceMotion ? .easeOut(duration: 0.12)
+                               : .easeOut(duration: 0.22).delay(0.025 * Double(i)),
+                   value: counted)
     }
 
     private var furnitureList: some View {
@@ -229,7 +423,7 @@ struct ResultView: View {
                 Text("Фото нет. Выберите снимок комнаты, чтобы ИИ показал ремонт.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
-            Button { camera = true } label: {
+            Button { hub.pause(); camera = true } label: {
                 Label("Снять фото камерой", systemImage: "camera")
             }
             PhotosPicker(selection: $pickerItem, matching: .images) {
@@ -252,7 +446,38 @@ struct ResultView: View {
         result.photo = jpeg
         // новое фото нужно заново отправить в бот
         sent = false
+        scanId = nil
         designURL = nil
+        store.update(savedID, result: result, resend: true)
+    }
+
+    private func sharePDF() {
+        if let url = PlanPDF.room(result, photos: { store.defectPhoto(savedID, $0) }) {
+            share = ShareFile(url: url)
+        } else {
+            note = "Не получилось собрать PDF."
+        }
+    }
+
+    private var versionCount: Int { store.versionCount(savedID) }
+
+    private func tool(_ title: String, _ icon: String, _ sub: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: icon).font(.title2).foregroundStyle(Palette.signal)
+            Text(title).font(.headline).foregroundStyle(.white)
+            Text(sub).font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func shareDXF() {
+        if let url = PlanDXF.room(result) {
+            share = ShareFile(url: url)
+        } else {
+            note = "Не получилось собрать чертёж."
+        }
     }
 
     private func shareScanFile() {
@@ -263,6 +488,23 @@ struct ResultView: View {
         }
     }
 
+    private func shareDimensionedModel() {
+        guard !exportingDimensions else { return }
+        exportingDimensions = true
+        let room = result
+        Task {
+            let url = await Task.detached(priority: .userInitiated) {
+                room.dimensionedUSDZ()
+            }.value
+            exportingDimensions = false
+            if let url {
+                share = ShareFile(url: url)
+            } else {
+                note = "Не получилось добавить размеры в 3D-модель. Исходный файл скана сохранён."
+            }
+        }
+    }
+
     /// Ремонт в 3D меняли — его стоит сохранить в боте вместе со сканом
     private var lookChanged: Bool {
         look != (RenoStyle(rawValue: look.style) ?? .scandi).finishes
@@ -270,54 +512,94 @@ struct ResultView: View {
 
     /// Номер скана в боте; если скан ещё не отправлен (или fresh) — отправляет молча
     private func ensureScanId(fresh: Bool) async throws -> Int {
-        if !fresh, sent, let id = link.lastScanId { return id }
+        if !fresh, sent, let id = scanId { return id }
         guard link.connected else { throw LinkError.message("Подключите бота на главном экране.") }
         guard let id = try await link.sendScan(result) else {
             throw LinkError.message("Сервер ответил странно. Попробуйте ещё раз.")
         }
         sent = true
+        scanId = id
+        store.setSent(savedID, botScanId: id, server: link.server)
         if lookChanged { try? await link.saveLook(scanId: id, look: look.json) }
         return id
     }
 
     // MARK: - Отправка
 
+    private var pending: Bool { store.scan(savedID)?.pending ?? false }
+
     private var sendButton: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                Task {
-                    sent = await link.send(result)
-                    if sent, lookChanged, let id = link.lastScanId { try? await link.saveLook(scanId: id, look: look.json) }
-                }
-            } label: {
+            Button { Task { await send() } } label: {
                 Group {
-                    if link.busy { ProgressView() }
-                    else { Label(sent ? "Отправлено в СтройБот" : "Отправить в СтройБот", systemImage: sent ? "checkmark" : "paperplane.fill") }
+                    if sending { ProgressView() }
+                    else if sent { Label("Отправлено в СтройБот", systemImage: "checkmark") }
+                    else if pending { Label("Ждёт связи с ботом", systemImage: "clock.arrow.circlepath") }
+                    else { Label("Отправить в СтройБот", systemImage: "paperplane.fill") }
                 }
                 .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
-                .background(Palette.signal, in: RoundedRectangle(cornerRadius: 16))
+                .background(pending && !sent ? Color.orange.opacity(0.25) : Palette.signal, in: RoundedRectangle(cornerRadius: 16))
                 .foregroundStyle(Palette.ink)
             }
-            .disabled(!link.connected || link.busy)
-            if !link.connected {
-                Text("Сначала подключите бота на главном экране.").font(.footnote).foregroundStyle(.secondary)
+            .disabled(sending)
+            if pending && !sent {
+                Text("Скан в очереди: уйдёт в бот сам, как только появится связь. Нажмите, чтобы попробовать сейчас.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else if !link.connected {
+                Text("Бот не подключён — скан встанет в очередь и уйдёт, когда подключите.").font(.footnote).foregroundStyle(.secondary)
             }
+        }
+        .onChange(of: store.scan(savedID)?.botScanId) { id in
+            // ушёл из очереди, пока экран открыт
+            if let id, !sent, store.scan(savedID)?.botServer == link.server { scanId = id; sent = true }
+        }
+    }
+
+    /// Отправить; нет связи — в очередь, уйдёт сам
+    private func send() async {
+        guard link.connected else {
+            store.setPending(savedID, true)
+            note = "Скан в очереди: уйдёт в бот, когда подключите бота."
+            return
+        }
+        sending = true
+        defer { sending = false }
+        do {
+            guard let id = try await link.sendScan(result) else { throw LinkError.message("Сервер ответил странно. Попробуйте ещё раз.") }
+            scanId = id
+            sent = true
+            store.setSent(savedID, botScanId: id, server: link.server)
+            if lookChanged { try? await link.saveLook(scanId: id, look: look.json) }
+            note = "Скан отправлен в бот."
+        } catch LinkError.offline(let why) {
+            store.setPending(savedID, true)
+            note = "\(why)\n\nСкан в очереди: уйдёт в бот сам, как только бот станет доступен."
+        } catch {
+            note = LinkError.describe(error)
         }
     }
 
     // MARK: - ИИ-ремонт на фото
 
-    private func designSection(_ scanId: Int) -> some View {
+    private var designSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Ремонт на фото").font(.headline)
-            Text("ИИ перерисует фото комнаты в выбранном стиле. Тратит кредиты в боте.")
+            Text(result.photo == nil
+                 ? "ИИ нарисует комнату с этими размерами в выбранном стиле."
+                 : "ИИ перерисует фото комнаты в выбранном стиле.")
                 .font(.subheadline).foregroundStyle(.secondary)
+            if !hasKey {
+                Button { keySettings = true } label: {
+                    Label("Сначала вставьте ключ kie.ai", systemImage: "key.fill")
+                }
+                .font(.subheadline.bold())
+            }
             Picker("Стиль", selection: $designStyle) {
                 ForEach(designStyles) { Text($0.title).tag($0.key) }
             }
             .pickerStyle(.menu)
             Button {
-                Task { await runDesign(scanId) }
+                if hasKey { Task { await runDesign() } } else { keySettings = true }
             } label: {
                 HStack {
                     if designing { ProgressView() }
@@ -327,10 +609,7 @@ struct ResultView: View {
                 .background(Palette.signal, in: RoundedRectangle(cornerRadius: 14))
                 .foregroundStyle(Palette.ink)
             }
-            .disabled(designing || result.photo == nil)
-            if result.photo == nil {
-                Text("Нужно фото комнаты").font(.footnote).foregroundStyle(.secondary)
-            }
+            .disabled(designing)
             if let designError {
                 Text(designError).font(.footnote).foregroundStyle(.red)
             }
@@ -339,6 +618,7 @@ struct ResultView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .sheet(isPresented: $keySettings, onDismiss: { hasKey = Kie.ready }) { KieSettingsView() }
     }
 
     private func designResult(_ url: URL) -> some View {
@@ -353,24 +633,20 @@ struct ResultView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            HStack {
-                ShareLink(item: url) { Label("Поделиться", systemImage: "square.and.arrow.up") }
-                Spacer()
-                if let credits { Text("Кредитов: \(credits)").font(.footnote).foregroundStyle(.secondary) }
+            NavigationLink { AIImageResult(url: url) } label: {
+                Label("Открыть, сохранить или поделиться", systemImage: "square.and.arrow.down")
             }
         }
     }
 
-    private func runDesign(_ scanId: Int) async {
+    private func runDesign() async {
         designing = true
         designError = nil
         defer { designing = false }
         do {
-            let answer = try await link.design(scanId: scanId, style: designStyle, look: lookChanged ? look.json : nil)
-            designURL = answer.image
-            credits = answer.credits
+            designURL = try await RoomAI.design(result, style: designStyle, look: look)
         } catch {
-            designError = (error as? LinkError)?.text ?? "Не получилось: \(error.localizedDescription)"
+            designError = KieError.describe(error)
         }
     }
 }

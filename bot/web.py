@@ -50,10 +50,29 @@ def validate_init_data(init_data: str, bot_token: str, max_age: int = MAX_AGE,
     return user
 
 
+# Эти функции Mini App доступны и приложению на iPhone: оно входит по ключу из /scanner (Bearer), а не по initData
+APP_PATHS = ("/api/profile", "/api/invoice", "/api/ai/text", "/api/ai/check", "/api/ai/design", "/api/ai/voice",
+             "/api/ai/measure", "/api/report", "/api/send")
+
+
+async def app_user(request: web.Request) -> dict | None:
+    """Пользователь приложения по ключу; только для APP_PATHS."""
+    if request.path not in APP_PATHS:
+        return None
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user_id = await db.user_by_scan_token(token) if token else None
+    if not user_id:
+        return None
+    row = await db.get_user(user_id) or {}
+    return {"id": user_id, "username": row.get("username"), "first_name": "", "app": True}
+
+
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
     if request.path.startswith("/api/"):
         user = validate_init_data(request.headers.get("X-Telegram-Init-Data", ""), config.bot_token)
+        if not user:
+            user = await app_user(request)
         if not user:
             return web.json_response({"error": "unauthorized"}, status=401)
         request[USER] = user

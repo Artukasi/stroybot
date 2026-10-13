@@ -86,7 +86,7 @@ struct FlatView: View {
         FlatPlanView(rooms: rooms.map { $0.1 }, outlines: outlines, progress: shown ? 1 : 0)
             .frame(height: 300)
             .padding(16)
-            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 22))
+            .background(Palette.black, in: RoundedRectangle(cornerRadius: 22))
     }
 
     private var totals: some View {

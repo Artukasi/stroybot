@@ -185,7 +185,7 @@ struct EstimateView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
-                .background(Palette.ink, in: RoundedRectangle(cornerRadius: 20))
+                .background(Palette.black, in: RoundedRectangle(cornerRadius: 20))
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             } footer: {
@@ -242,7 +242,7 @@ struct EstimateView: View {
                 Estimate.setOn(row, !isOn)
             } label: {
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.title3).foregroundStyle(isOn ? Palette.draft : Color.secondary)
+                    .font(.title3).foregroundStyle(isOn ? Palette.signal : Color.secondary)
             }
             .buttonStyle(.plain)
             Button {

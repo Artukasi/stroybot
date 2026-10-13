@@ -4,6 +4,7 @@ import simd
 /// Прогресс стройки: прошлая съёмка комнаты против нынешней — планы наложены, фото «было — стало», что изменилось в цифрах
 struct CompareView: View {
     @EnvironmentObject var store: ScanStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: UUID
     let now: RoomResult
     @State private var versions: [ScanStore.Version] = []
@@ -40,7 +41,9 @@ struct CompareView: View {
         .onAppear {
             versions = store.versions(id)
             if pick.isEmpty { pick = versions.last?.id ?? "" }
-            withAnimation(.easeOut(duration: 1.1).delay(0.15)) { shown = true }
+            withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: .easeOut(duration: 0.38))) {
+                shown = true
+            }
         }
     }
 
@@ -171,7 +174,9 @@ struct CompareView: View {
                 .padding(.vertical, 7)
                 .opacity(shown ? 1 : 0)
                 .offset(y: shown ? 0 : 8)
-                .animation(.easeOut(duration: 0.4).delay(0.05 * Double(i)), value: shown)
+                .animation(reduceMotion ? .easeOut(duration: 0.12)
+                                       : .easeOut(duration: 0.22).delay(0.02 * Double(i)),
+                           value: shown)
                 Divider()
             }
             Text("Пол и стены меньше на пару процентов — обычно это новая отделка (штукатурка, плитка) или разброс лидара ±1–2 см.")

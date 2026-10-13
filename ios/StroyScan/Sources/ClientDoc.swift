@@ -119,7 +119,7 @@ struct SignaturePad: View {
             }
             Canvas { ctx, _ in
                 for s in strokes + [current] where s.count > 1 {
-                    ctx.stroke(Self.path(s), with: .color(Palette.ink), style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
+                    ctx.stroke(Self.path(s), with: .color(.black), style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
                 }
             }
         }
@@ -158,7 +158,7 @@ struct SignaturePad: View {
         return UIGraphicsImageRenderer(size: size, format: format).image { c in
             let g = c.cgContext
             g.translateBy(x: pad - minX, y: pad - minY)
-            g.setStrokeColor(UIColor(Palette.ink).cgColor)
+            g.setStrokeColor(UIColor.black.cgColor)
             g.setLineWidth(2.6)
             g.setLineCap(.round)
             g.setLineJoin(.round)

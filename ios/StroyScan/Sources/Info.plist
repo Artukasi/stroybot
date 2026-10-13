@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера и лидар нужны, чтобы измерить комнату.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Чтобы надиктовать заметку к стене.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Чтобы сохранить картинку ремонта в «Фото».</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Чтобы превратить голосовую заметку в текст.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -13,8 +21,6 @@
 			</array>
 		</dict>
 	</array>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Чтобы превратить голосовую заметку в текст.</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arkit</string>

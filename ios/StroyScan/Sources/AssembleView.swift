@@ -2,16 +2,16 @@ import SceneKit
 import SwiftUI
 import simd
 
-/// Экран итога: комната «собирается» из скана — стены вырастают одна за другой, проёмы загораются,
-/// мебель падает на место, камера медленно облетает комнату. Нажатие — собрать ещё раз.
+/// Экран итога: модель один раз собирается из скана. Её можно осмотреть жестом и пересобрать нажатием.
 struct AssembleView: View {
     let result: RoomResult
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var run = 0
     @State private var area: Double = 0
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            AssembleScene(result: result, run: run)
+            AssembleScene(result: result, run: run, reduceMotion: reduceMotion)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Комната собрана по скану").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -30,17 +30,22 @@ struct AssembleView: View {
                 .allowsHitTesting(false)
         }
         .frame(height: 240)
-        .background(Palette.ink)
+        .background(Palette.black)
         .clipShape(RoundedRectangle(cornerRadius: 22))
         .contentShape(Rectangle())
         .onTapGesture { replay() }
         .onAppear { count() }
         .accessibilityLabel("3D-модель комнаты, пол \(fmt(result.floorArea)) квадратных метров")
+        .accessibilityHint("Проведите пальцем, чтобы повернуть модель. Коснитесь, чтобы собрать её ещё раз.")
     }
 
     private func count() {
-        area = 0
-        withAnimation(.easeOut(duration: 1.6).delay(0.4)) { area = result.floorArea }
+        withTransaction(Transaction(animation: nil)) { area = 0 }
+        DispatchQueue.main.async {
+            withAnimation(reduceMotion ? .easeOut(duration: 0.12) : .easeOut(duration: 0.48)) {
+                area = result.floorArea
+            }
+        }
     }
 
     private func replay() {
@@ -70,32 +75,36 @@ struct CountUp: View, Animatable {
 struct AssembleScene: UIViewRepresentable {
     let result: RoomResult
     let run: Int
+    let reduceMotion: Bool
 
     final class Coordinator {
         var run = -1
+        var reduceMotion: Bool?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
-        view.backgroundColor = UIColor(Palette.ink)
+        view.backgroundColor = UIColor(Palette.black)
         view.antialiasingMode = .multisampling4X
-        view.isUserInteractionEnabled = false
+        view.isUserInteractionEnabled = true
+        view.allowsCameraControl = true
         view.rendersContinuously = false
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
-        guard context.coordinator.run != run else { return }
+        guard context.coordinator.run != run || context.coordinator.reduceMotion != reduceMotion else { return }
         context.coordinator.run = run
-        let scene = AssembleScene.build(result)
+        context.coordinator.reduceMotion = reduceMotion
+        let scene = AssembleScene.build(result, reduceMotion: reduceMotion)
         view.scene = scene
         view.pointOfView = scene.rootNode.childNode(withName: "cam", recursively: true)
         view.isPlaying = true
     }
 
-    static func build(_ r: RoomResult) -> SCNScene {
+    static func build(_ r: RoomResult, reduceMotion: Bool) -> SCNScene {
         let scene = SCNScene()
         let root = scene.rootNode
         let lines = r.wallLines
@@ -122,15 +131,15 @@ struct AssembleScene: UIViewRepresentable {
             shape.firstMaterial = mat(UIColor(Palette.draft).withAlphaComponent(0.55), emission: UIColor(Palette.draft).withAlphaComponent(0.25))
             let floor = SCNNode(geometry: shape)
             floor.eulerAngles.x = -.pi / 2
-            floor.opacity = 0
-            floor.runAction(.fadeIn(duration: 0.5))
+            floor.opacity = reduceMotion ? 1 : 0
+            if !reduceMotion { floor.runAction(.fadeIn(duration: 0.3)) }
             root.addChildNode(floor)
         }
 
         // стены вырастают по очереди
         let wallMat = mat(UIColor(white: 0.93, alpha: 1))
         let edgeMat = mat(UIColor(Palette.signal), emission: UIColor(Palette.signal))
-        let step = min(0.18, 1.6 / Double(max(lines.count, 1)))
+        let step = min(0.07, 0.56 / Double(max(lines.count, 1)))
         for (i, l) in lines.enumerated() {
             let dx = l.z - l.x, dy = l.w - l.y
             let len = Float(hypot(dx, dy))
@@ -146,11 +155,13 @@ struct AssembleScene: UIViewRepresentable {
             edge.position.y = h
             wall.addChildNode(body)
             wall.addChildNode(edge)
-            wall.scale = SCNVector3(1, 0.001, 1)
-            wall.runAction(.sequence([.wait(duration: 0.3 + Double(i) * step), grow(0.55)]))
+            wall.scale = reduceMotion ? SCNVector3(1, 1, 1) : SCNVector3(1, 0.001, 1)
+            if !reduceMotion {
+                wall.runAction(.sequence([.wait(duration: 0.12 + Double(i) * step), grow(0.36)]))
+            }
             root.addChildNode(wall)
         }
-        let wallsDone = 0.3 + Double(lines.count) * step + 0.5
+        let wallsDone = 0.12 + Double(lines.count) * step + 0.36
 
         // окна и двери загораются
         for (k, o) in r.openings.enumerated() {
@@ -165,27 +176,32 @@ struct AssembleScene: UIViewRepresentable {
             node.geometry?.firstMaterial = mat(color, emission: color.withAlphaComponent(0.6))
             node.position = p3(p.x, p.y, Float((o.bottom ?? 0) + o.height / 2))
             node.eulerAngles.y = Float(atan2(-(b.y - a.y), b.x - a.x))
-            node.opacity = 0
-            node.runAction(.sequence([.wait(duration: wallsDone + Double(k) * 0.08), .fadeIn(duration: 0.35)]))
+            node.opacity = reduceMotion ? 1 : 0
+            if !reduceMotion {
+                node.runAction(.sequence([.wait(duration: wallsDone + Double(k) * 0.04), .fadeIn(duration: 0.2)]))
+            }
             root.addChildNode(node)
         }
 
         // мебель падает на место
-        let furnitureStart = wallsDone + Double(r.openings.count) * 0.08 + 0.2
+        let furnitureStart = wallsDone + Double(r.openings.count) * 0.04 + 0.12
         for (k, it) in r.items.enumerated() {
             let box = SCNBox(width: CGFloat(max(it.width, 0.05)), height: CGFloat(max(it.height, 0.05)),
                              length: CGFloat(max(it.depth, 0.05)), chamferRadius: 0.02)
             box.firstMaterial = mat(UIColor(furnitureColor(it.kind)))
             let node = SCNNode(geometry: box)
             let y = Float(it.bottom + it.height / 2)
-            node.position = p3(it.x, it.y, y + 2.2)
+            node.position = p3(it.x, it.y, y + (reduceMotion ? 0 : 1.6))
             node.eulerAngles.y = Float(-it.angle)
-            node.opacity = 0
-            let drop = SCNAction.move(to: p3(it.x, it.y, y), duration: 0.5)
+            node.opacity = reduceMotion ? 1 : 0
+            let drop = SCNAction.move(to: p3(it.x, it.y, y), duration: 0.32)
             drop.timingMode = .easeIn
-            let bounce = SCNAction.sequence([.moveBy(x: 0, y: 0.06, z: 0, duration: 0.09), .moveBy(x: 0, y: -0.06, z: 0, duration: 0.09)])
-            node.runAction(.sequence([.wait(duration: furnitureStart + Double(k) * 0.1),
-                                      .group([.fadeIn(duration: 0.2), drop]), bounce]))
+            let bounce = SCNAction.sequence([.moveBy(x: 0, y: 0.035, z: 0, duration: 0.07),
+                                             .moveBy(x: 0, y: -0.035, z: 0, duration: 0.07)])
+            if !reduceMotion {
+                node.runAction(.sequence([.wait(duration: furnitureStart + Double(k) * 0.06),
+                                          .group([.fadeIn(duration: 0.16), drop]), bounce]))
+            }
             root.addChildNode(node)
         }
 
@@ -202,7 +218,7 @@ struct AssembleScene: UIViewRepresentable {
         sun.eulerAngles = SCNVector3(-0.9, 0.6, 0)
         root.addChildNode(sun)
 
-        // камера облетает комнату
+        // Камера закреплена на орбите: обзор задаётся жестом пользователя.
         let orbit = SCNNode()
         let cam = SCNNode()
         cam.name = "cam"
@@ -214,9 +230,8 @@ struct AssembleScene: UIViewRepresentable {
         cam.look(at: SCNVector3(0, h * 0.25, 0))
         orbit.addChildNode(cam)
         orbit.eulerAngles.y = 0.6
-        orbit.runAction(.repeatForever(.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 40)))
         root.addChildNode(orbit)
-        scene.background.contents = UIColor(Palette.ink)
+        scene.background.contents = UIColor(Palette.black)
         return scene
     }
 

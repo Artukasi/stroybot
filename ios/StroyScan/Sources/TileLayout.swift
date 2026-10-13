@@ -165,7 +165,7 @@ struct TileLayoutView: View {
                 canvas
                     .frame(height: 300)
                     .padding(14)
-                    .background(Palette.ink, in: RoundedRectangle(cornerRadius: 22))
+                    .background(Palette.black, in: RoundedRectangle(cornerRadius: 22))
 
                 if let l = layout { numbers(l) }
                 settings

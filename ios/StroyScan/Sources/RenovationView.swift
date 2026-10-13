@@ -35,6 +35,53 @@ struct EditorScene: UIViewRepresentable {
     func updateUIView(_ uiView: SCNView, context: Context) {}
 }
 
+/// Небольшой экранный джойстик для прогулки по комнате.
+private struct WalkJoystick: View {
+    let onChange: (Float, Float) -> Void
+    @State private var knob = CGSize.zero
+
+    private let travel: CGFloat = 34
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.black.opacity(0.12))
+                .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white.opacity(0.72))
+                .offset(y: -25)
+                .allowsHitTesting(false)
+            Circle()
+                .fill(Palette.signal)
+                .frame(width: 42, height: 42)
+                .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                .shadow(color: .black.opacity(0.24), radius: 5, y: 2)
+                .offset(knob)
+                .allowsHitTesting(false)
+        }
+        .frame(width: 104, height: 104)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    let distance = hypot(dx, dy)
+                    let scale = distance > travel ? travel / distance : 1
+                    knob = CGSize(width: dx * scale, height: dy * scale)
+                    onChange(Float(knob.width / travel), Float(-knob.height / travel))
+                }
+                .onEnded { _ in
+                    withAnimation(.easeOut(duration: 0.16)) { knob = .zero }
+                    onChange(0, 0)
+                }
+        )
+        .accessibilityLabel("Движение по комнате")
+        .accessibilityHint("Потяните стик вперёд, назад или в сторону")
+    }
+}
+
 // MARK: - Экран «Ремонт в 3D»
 
 /// Ремонт в 3D по скану: крутить, смотреть из комнаты, менять отделку, свет, шторы и мебель.
@@ -109,7 +156,13 @@ struct Renovation3DView: View {
                     modeBar
                     Spacer()
                     if editor.pick == nil && editor.ready && editor.engMode == .off {
-                        if editor.bare { bareBar } else { hintBar }
+                        if editor.inside {
+                            walkBar
+                        } else if editor.bare {
+                            bareBar
+                        } else {
+                            hintBar
+                        }
                     }
                 }
             }
@@ -210,9 +263,9 @@ struct Renovation3DView: View {
 
     private var modeBar: some View {
         HStack(spacing: 8) {
-            Picker("Вид", selection: Binding(get: { editor.inside }, set: { editor.setInside($0) })) {
-                Text("Сверху").tag(false)
-                Text("Из комнаты").tag(true)
+            Picker("Режим просмотра", selection: Binding(get: { editor.inside }, set: { editor.setInside($0) })) {
+                Text("Модель").tag(false)
+                Text("Прогулка").tag(true)
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 240)
@@ -239,6 +292,25 @@ struct Renovation3DView: View {
             .accessibilityLabel("Яркость")
         }
         .padding(10)
+    }
+
+    private var walkBar: some View {
+        HStack(spacing: 12) {
+            WalkJoystick { x, y in editor.setWalkInput(x: x, y: y) }
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Вы внутри комнаты", systemImage: "figure.walk")
+                    .font(.subheadline.bold())
+                Text("Свайпом осматривайтесь. Стик двигает вперёд, назад и в стороны.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
     }
 
     /// Кнопки справа: повернуть, сверху, вся комната, мебель

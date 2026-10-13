@@ -750,6 +750,10 @@ final class RenoEditor: NSObject, ObservableObject {
         let name = result.room.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Ремонт-\(name).usdz")
         try? FileManager.default.removeItem(at: url)
+        let dimensions = result.addDimensionAnnotations(to: scene) { x, z, elevation in
+            SCNVector3(Float(x), Float(elevation), Float(z))
+        }
+        defer { dimensions?.removeFromParentNode() }
         return scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) ? url : nil
     }
 

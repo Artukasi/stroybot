@@ -1,5 +1,6 @@
 import Foundation
 import RoomPlan
+import SceneKit
 import simd
 import UIKit
 
@@ -245,6 +246,108 @@ struct RoomResult {
         guard let cg = context.createCGImage(ci, from: ci.extent) else { return nil }
         let image = UIImage(cgImage: cg, scale: 1, orientation: .right)
         return jpeg(image)
+    }
+}
+
+extension RoomResult {
+    /// Makes a shareable copy of the RoomPlan USDZ with measurement lines and labels baked in.
+    /// The original scan stays intact so users can still share the unannotated source model.
+    func dimensionedUSDZ() -> URL? {
+        guard let source = usdz, worldFrame != nil, walls.count == wallLines.count,
+              let scene = try? SCNScene(url: source, options: nil) else { return nil }
+
+        guard addDimensionAnnotations(to: scene, positionAt: { x, z, elevation in
+            guard let p = self.toWorld(SIMD3(x, z, elevation)) else { return nil }
+            return SCNVector3(Float(p.x), Float(p.y), Float(p.z))
+        }) != nil else { return nil }
+
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Комната-с-размерами-\(UUID().uuidString.prefix(8)).usdz")
+        guard scene.write(to: output, options: nil, delegate: nil, progressHandler: nil),
+              FileManager.default.fileExists(atPath: output.path) else { return nil }
+        return output
+    }
+
+    /// Adds measurement geometry to a room scene using its coordinate mapping.
+    @discardableResult
+    func addDimensionAnnotations(
+        to scene: SCNScene,
+        positionAt point: (Double, Double, Double) -> SCNVector3?
+    ) -> SCNNode? {
+        guard walls.count == wallLines.count else { return nil }
+        let annotations = SCNNode()
+        annotations.name = "Размеры комнаты"
+        let yellow = SCNMaterial()
+        yellow.diffuse.contents = UIColor.systemYellow
+        yellow.emission.contents = UIColor.systemYellow
+        yellow.lightingModel = .constant
+        yellow.isDoubleSided = true
+
+        func addLabel(_ text: String, at position: SCNVector3, yaw: Float = 0, size: CGFloat = 0.055) {
+            let geometry = SCNText(string: text, extrusionDepth: 0.002)
+            geometry.font = UIFont.systemFont(ofSize: size, weight: .semibold)
+            geometry.flatness = 0.2
+            geometry.firstMaterial = yellow
+            let bounds = geometry.boundingBox
+            let node = SCNNode(geometry: geometry)
+            node.pivot = SCNMatrix4MakeTranslation((bounds.min.x + bounds.max.x) / 2,
+                                                   (bounds.min.y + bounds.max.y) / 2, 0)
+            node.position = position
+            node.eulerAngles.y = yaw
+            node.name = "Размер: \(text)"
+            annotations.addChildNode(node)
+        }
+
+        for i in wallLines.indices {
+            let line = wallLines[i]
+            let a = SIMD2(line.x, line.y), b = SIMD2(line.z, line.w)
+            let delta = b - a
+            let length = simd_length(delta)
+            guard length > 0.2, let start = point(a.x, a.y, walls[i].height + 0.035),
+                  let end = point(b.x, b.y, walls[i].height + 0.035) else { continue }
+            let mid = SCNVector3((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2)
+            let dx = end.x - start.x, dz = end.z - start.z
+            let yaw = atan2(-dz, dx)
+            let bar = SCNBox(width: CGFloat(length), height: 0.006, length: 0.006, chamferRadius: 0)
+            bar.firstMaterial = yellow
+            let barNode = SCNNode(geometry: bar)
+            barNode.position = mid
+            barNode.eulerAngles.y = yaw
+            barNode.name = "Размер стены \(i + 1)"
+            annotations.addChildNode(barNode)
+
+            for endpoint in [start, end] {
+                let tick = SCNCylinder(radius: 0.003, height: 0.055)
+                tick.radialSegmentCount = 8
+                tick.firstMaterial = yellow
+                let tickNode = SCNNode(geometry: tick)
+                tickNode.position = endpoint
+                annotations.addChildNode(tickNode)
+            }
+
+            let labelAt = SCNVector3(mid.x, mid.y + 0.075, mid.z)
+            addLabel("\(fmt(walls[i].length)) × \(fmt(walls[i].height)) м", at: labelAt, yaw: yaw)
+        }
+
+        for opening in openings {
+            guard let wall = opening.wall, wallLines.indices.contains(wall),
+                  let offset = opening.offset else { continue }
+            let line = wallLines[wall]
+            let a = SIMD2(line.x, line.y), b = SIMD2(line.z, line.w)
+            let delta = b - a
+            let length = simd_length(delta)
+            guard length > 0.01 else { continue }
+            let center = a + delta / length * min(max(offset, 0), length)
+            let top = (opening.bottom ?? 0) + opening.height + 0.06
+            guard let at = point(center.x, center.y, top) else { continue }
+            let yaw = atan2(Float(-(b.y - a.y)), Float(b.x - a.x))
+            let title = opening.kind == "window" ? "Окно" : opening.kind == "door" ? "Дверь" : "Проём"
+            addLabel("\(title) \(fmt(opening.width)) × \(fmt(opening.height)) м", at: at, yaw: yaw, size: 0.042)
+        }
+
+        guard !annotations.childNodes.isEmpty else { return nil }
+        scene.rootNode.addChildNode(annotations)
+        return annotations
     }
 }
 

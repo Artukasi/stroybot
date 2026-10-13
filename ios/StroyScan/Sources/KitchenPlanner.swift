@@ -169,6 +169,7 @@ enum KitchenPlanner {
 
 struct KitchenView: View {
     let result: RoomResult
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var wall = 0
     @State private var fridgeLeft = true
     @State private var dishwasher = true
@@ -212,7 +213,7 @@ struct KitchenView: View {
             } else if let longest = result.walls.indices.max(by: { result.walls[$0].length < result.walls[$1].length }) {
                 wall = longest
             }
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.1)) { shown = true }
+            withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.state)) { shown = true }
         }
         .onChange(of: wall) { _ in replay() }
         .onChange(of: fridgeLeft) { _ in replay() }
@@ -221,7 +222,11 @@ struct KitchenView: View {
 
     private func replay() {
         shown = false
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) { shown = true }
+        DispatchQueue.main.async {
+            withAnimation(AppMotion.adaptive(reduceMotion: reduceMotion, full: AppMotion.state)) {
+                shown = true
+            }
+        }
     }
 
     private var wallPicker: some View {
@@ -282,9 +287,11 @@ struct KitchenView: View {
                             .minimumScaleFactor(0.5)
                         )
                         .frame(width: max(1, cm(m.width) - 1), height: h(0) - h(top))
-                        .offset(x: cm(m.start), y: shown ? h(top) : floorY)
+                        .offset(x: cm(m.start), y: shown || reduceMotion ? h(top) : floorY)
                         .opacity(shown ? 1 : 0)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(Double(i) * 0.05), value: shown)
+                        .animation(reduceMotion ? .easeOut(duration: 0.12)
+                                                : AppMotion.state.delay(Double(i) * 0.025),
+                                   value: shown)
                     // верхние шкафы — кроме окон, вытяжки и холодильника
                     if !tall && m.kind != .filler && upper(m, p) {
                         RoundedRectangle(cornerRadius: 3)
@@ -293,7 +300,9 @@ struct KitchenView: View {
                             .frame(width: max(1, cm(m.width) - 1), height: h(140) - h(212))
                             .offset(x: cm(m.start), y: h(212))
                             .opacity(shown ? 1 : 0)
-                            .animation(.easeOut(duration: 0.4).delay(0.3 + Double(i) * 0.05), value: shown)
+                            .animation(reduceMotion ? .easeOut(duration: 0.12)
+                                                    : AppMotion.fade.delay(0.08 + Double(i) * 0.025),
+                                       value: shown)
                     }
                     if m.kind == .stove {
                         Path { path in

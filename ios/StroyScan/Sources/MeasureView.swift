@@ -287,7 +287,7 @@ struct MeasureView: View {
         let sizes = ruler.list.reversed().enumerated().map { "\($0.offset + 1). \(Ruler.text($0.element.meters))" }
         withAnimation(.easeOut(duration: 0.08)) { flash = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            withAnimation(.easeIn(duration: 0.35)) { flash = false }
+            withAnimation(.easeOut(duration: 0.18)) { flash = false }
         }
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
         photo = SnapPhoto(image: SnapPhoto.compose(shot, sizes: sizes))
@@ -359,7 +359,7 @@ struct SnapPhoto: Identifiable {
         let size = CGSize(width: w, height: shot.size.height + band)
         return UIGraphicsImageRenderer(size: size).image { _ in
             shot.draw(at: .zero)
-            UIColor(Palette.ink).setFill()
+            UIColor(Palette.black).setFill()
             UIBezierPath(rect: CGRect(x: 0, y: shot.size.height, width: w, height: band)).fill()
             UIColor(Palette.signal).setFill()
             UIBezierPath(rect: CGRect(x: 0, y: shot.size.height, width: w, height: 3)).fill()
@@ -403,7 +403,7 @@ struct SnapPhotoView: View {
                     Button { sharing = true } label: {
                         Label("Отправить", systemImage: "square.and.arrow.up")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
-                            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 14))
+                            .background(Palette.black, in: RoundedRectangle(cornerRadius: 14))
                             .foregroundStyle(.white)
                     }
                 }

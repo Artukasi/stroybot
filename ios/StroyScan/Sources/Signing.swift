@@ -60,7 +60,7 @@ struct SigningBanner: View {
                     HStack(spacing: 10) {
                         Image(systemName: urgent ? "exclamationmark.arrow.circlepath" : "calendar.badge.clock")
                             .font(.title3)
-                            .foregroundStyle(urgent ? Palette.ink : Palette.draft)
+                            .foregroundStyle(urgent ? Palette.ink : Palette.signal)
                             .symbolEffectPulse(urgent)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(title(days)).font(.subheadline.bold())

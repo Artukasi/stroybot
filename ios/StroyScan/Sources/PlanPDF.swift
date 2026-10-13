@@ -8,8 +8,8 @@ enum PlanPDF {
     static let margin: CGFloat = 40
 
     static let ink = UIColor(red: 0.08, green: 0.13, blue: 0.18, alpha: 1)
-    static let signal = UIColor(red: 0.96, green: 0.77, blue: 0.09, alpha: 1)
-    static let draft = UIColor(red: 0.24, green: 0.44, blue: 0.68, alpha: 1)
+    static let signal = UIColor(red: 0.75, green: 0.07, blue: 0.18, alpha: 1)
+    static let draft = UIColor(red: 0.43, green: 0.075, blue: 0.15, alpha: 1)
     static let grey = UIColor(white: 0.45, alpha: 1)
 
     /// Одна комната

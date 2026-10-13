@@ -186,7 +186,7 @@ struct DefectsSection: View {
                     Label("Голосом", systemImage: "mic.fill")
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
                         .background(Palette.draft.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
-                        .foregroundStyle(Palette.draft)
+                        .foregroundStyle(Palette.signal)
                 }
             }
             .disabled(result.defects.count >= Defect.max || result.plan.count < 3)

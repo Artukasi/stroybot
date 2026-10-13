@@ -135,7 +135,7 @@ struct OpeningsView: View {
                 if l.kind == "window" {
                     Text("Низ от пола \(l.bottom) мм").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
-                Text(l.order).font(.subheadline.bold()).foregroundStyle(Palette.draft)
+                Text(l.order).font(.subheadline.bold()).foregroundStyle(Palette.signal)
                 Text(l.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)

@@ -283,7 +283,7 @@ struct BackupCard: View {
             } else {
                 HStack(spacing: 10) {
                     Image(systemName: backup.busy ? "arrow.triangle.2.circlepath" : "externaldrive.badge.checkmark")
-                        .font(.title3).foregroundStyle(Palette.draft)
+                        .font(.title3).foregroundStyle(Palette.signal)
                         .rotationEffect(.degrees(backup.busy ? 360 : 0))
                         .animation(backup.busy ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: backup.busy)
                     VStack(alignment: .leading, spacing: 1) {

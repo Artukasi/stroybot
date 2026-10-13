@@ -134,7 +134,7 @@ struct AIView: View {
             }
         }
         .padding()
-        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 20))
+        .background(Palette.black, in: RoundedRectangle(cornerRadius: 20))
     }
 
     private func card(_ title: String, _ icon: String, _ sub: String) -> some View {
@@ -145,7 +145,7 @@ struct AIView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 18))
+        .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -358,7 +358,7 @@ struct AIDesignView: View {
                             Button { style = s.id } label: {
                                 Text(s.name).font(.subheadline.weight(.semibold))
                                     .padding(.vertical, 8).padding(.horizontal, 14)
-                                    .background(style == s.id ? Palette.ink : Color(.secondarySystemGroupedBackground), in: Capsule())
+                                    .background(style == s.id ? Palette.signal : Color(.secondarySystemGroupedBackground), in: Capsule())
                                     .foregroundStyle(style == s.id ? .white : Palette.ink)
                             }
                         }

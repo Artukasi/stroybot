@@ -400,6 +400,9 @@ final class RenoEditor: NSObject, ObservableObject {
     private var viewpointIndex = 0
     private var yaw: Float = 0
     private var pitch: Float = -0.12
+    /// Направление виртуального стика: x — вбок, y — вперёд/назад.
+    private var walkInput = SIMD2<Float>(0, 0)
+    private var previousWalkTick = CACurrentMediaTime()
     private var lookStart: (Float, Float) = (0, 0)
     private var fovStart: CGFloat = 75
     private var selectionNode: SCNNode?
@@ -474,6 +477,7 @@ final class RenoEditor: NSObject, ObservableObject {
         }
         if timer == nil {
             timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                self?.advanceWalk()
                 self?.updateCutaway()
             }
         }
@@ -663,6 +667,8 @@ final class RenoEditor: NSObject, ObservableObject {
 
     func setInside(_ on: Bool) {
         inside = on
+        walkInput = .zero
+        previousWalkTick = CACurrentMediaTime()
         if on {
             view.allowsCameraControl = false
             view.pointOfView = roomCamera
@@ -681,6 +687,43 @@ final class RenoEditor: NSObject, ObservableObject {
             chainGestures()
         }
         applyVisibility()
+    }
+
+    /// Стик задаёт скорость прогулки; пустой стик останавливает камеру.
+    func setWalkInput(x: Float, y: Float) {
+        let input = SIMD2(x, y)
+        let length = simd_length(input)
+        walkInput = length > 1 ? input / length : input
+    }
+
+    /// Плавно двигает камеру на уровне глаз и не выпускает её за контур комнаты.
+    private func advanceWalk() {
+        let now = CACurrentMediaTime()
+        let deltaTime = Float(min(now - previousWalkTick, 0.1))
+        previousWalkTick = now
+        guard inside, deltaTime > 0, simd_length_squared(walkInput) > 0.002 else { return }
+
+        let cameraPosition = roomCamera.simdPosition
+        let current = SIMD2(cameraPosition.x, cameraPosition.z)
+        let forward = SIMD2(-sin(yaw), -cos(yaw))
+        let right = SIMD2(cos(yaw), -sin(yaw))
+        let step = (right * walkInput.x + forward * walkInput.y) * (1.1 * deltaTime)
+        let destination = current + step
+
+        if room.inside(destination) {
+            roomCamera.simdPosition.x = destination.x
+            roomCamera.simdPosition.z = destination.y
+            return
+        }
+
+        // У стены скользим вдоль неё, чтобы прогулка не замирала от диагонального движения.
+        let slideX = SIMD2(destination.x, current.y)
+        let slideZ = SIMD2(current.x, destination.y)
+        if room.inside(slideX) {
+            roomCamera.simdPosition.x = slideX.x
+        } else if room.inside(slideZ) {
+            roomCamera.simdPosition.z = slideZ.y
+        }
     }
 
     func setFurnitureHidden(_ on: Bool) {

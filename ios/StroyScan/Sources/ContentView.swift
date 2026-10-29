@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var request: ScanRequest?
     @State private var showPair = false
     @State private var measuring = false
+    @State private var wallScanning = false
     @State private var showTips = false
     @State private var flatness = false
     @State private var brand = false
@@ -80,6 +81,7 @@ struct ContentView: View {
             .onDisappear { hub.scanClosed() }
         }
         .fullScreenCover(isPresented: $measuring) { MeasureView() }
+        .fullScreenCover(isPresented: $wallScanning) { LiveWallScanView() }
         .fullScreenCover(isPresented: $flatness) { FlatnessView() }
         .sheet(isPresented: $brand) { BrandView() }
         .sheet(isPresented: $showPair) { PairView() }
@@ -243,6 +245,27 @@ struct ContentView: View {
                             in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(PressStyle())
+            if RoomCaptureSession.isSupported {
+                Button {
+                    hub.pause()
+                    wallScanning = true
+                } label: {
+                    HStack {
+                        Image(systemName: "rectangle.dashed.badge.record").font(.title2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Сканировать одну стену").font(.headline)
+                            Text("LiDAR → размеры → расчёт ГКЛ сразу")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .foregroundStyle(Palette.ink)
+                    .padding(14)
+                    .background(Palette.signal, in: RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(PressStyle())
+            }
             if RoomCaptureSession.isSupported {
             HStack(spacing: 10) {
                 tile("Квартира целиком", "square.split.2x2", "комнаты подряд, общий план") {

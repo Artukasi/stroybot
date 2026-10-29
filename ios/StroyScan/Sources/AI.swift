@@ -191,6 +191,7 @@ struct AIAnswer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(AIText.attributed(html)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            PetrovichAnswerLinks(answer: AIText.plain(html))
             HStack(spacing: 18) {
                 Button {
                     UIPasteboard.general.string = AIText.plain(html)

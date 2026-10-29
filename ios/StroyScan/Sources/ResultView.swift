@@ -98,6 +98,15 @@ struct ResultView: View {
                 if !result.items.isEmpty { furnitureList }
                 photoSection
 
+                NavigationLink {
+                    ForemanGuideView(initialFloorArea: result.floorArea, initialWallArea: result.wallArea)
+                } label: {
+                    Label("План работ и материалы по LiDAR-замеру", systemImage: "list.bullet.clipboard.fill")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(Palette.ink)
+                }
+
                 if !result.wallLines.isEmpty {
                     NavigationLink {
                         DraftRouteView(room: result, engineering: $result.engineering)

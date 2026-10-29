@@ -5,6 +5,7 @@ import SwiftUI
 struct LiveWallScanView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var scanner = ScanController()
+    @StateObject private var aiState = AIState()
     @State private var selectedID: String?
     @State private var spacing = 0.6
     @State private var layers = 1
@@ -34,6 +35,33 @@ struct LiveWallScanView: View {
                  "Отсканируйте углы, подтвердите рулеткой ключевые размеры.",
                  "Монтаж каркаса и креплений — по конкретной системе производителя."]
         return rows.joined(separator: "\n")
+    }
+
+    private var aiBrief: String {
+        guard let wall = selectedWall, let summary = selection else {
+            return "Помоги спланировать облицовку стены гипсокартоном: задай вопросы по основанию, помещению и нагрузкам."
+        }
+        return """
+        Я начинающий строитель. Помоги спланировать облицовку ОДНОЙ стены гипсокартоном.
+        Данные LiDAR/RoomPlan, предварительные и не подтверждены рулеткой:
+        длина \(GKLTakeoff.format(wall.length)) м, высота \(GKLTakeoff.format(wall.height)) м,
+        площадь прямоугольника \(GKLTakeoff.format(summary.area)) м².
+        Шаг стоек в ЭСКИЗЕ: \(Int((spacing * 100).rounded())) см.
+        Листов ГКЛ: \(summary.sheets) шт., слоёв: \(layers).
+        Общая геометрическая длина профилей: \(GKLTakeoff.format(summary.profileMeters)) пог. м.
+        Предварительный список материалов:
+        \(summary.items.map { "• \($0.title): \($0.quantity)" }.joined(separator: "\n"))
+
+        Проёмы не вычитались! Окна, двери, трубы, качество основания и опасные зоны пока неизвестны.
+        Объясни простым языком:
+        1. Что мне надо дополнительно измерить и спросить заказчика.
+        2. Какие профили подходят для облицовки и как выбирать систему по производителю;
+           не выдумывай прочность, шаг креплений, анкеры и необходимость подвесов.
+        3. Как уточнить количество листов, раскрой, перемычки, армирование, грунт, шпаклёвку и финиш.
+        4. Пошаговый план с инструментами, проверками качества, этапами закупки и ошибками новичка.
+        5. Какие решения обязан подтвердить специалист перед монтажом.
+        Отдельно назови допущения и НЕ выдавай оценку скана за точный монтажный проект.
+        """
     }
 
     var body: some View {
@@ -164,6 +192,25 @@ struct LiveWallScanView: View {
                             }
                             .padding(14)
                             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                            NavigationLink {
+                                AITextView(kind: .foreman, state: aiState,
+                                           prefill: aiBrief,
+                                           placeholder: "Добавь материал стен, нагрузки, влажность и требования к звукоизоляции")
+                            } label: {
+                                Label("ИИ: разобрать стену и монтаж", systemImage: "sparkles")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Palette.signal)
+                            if !aiState.ready {
+                                Text("Для ИИ нужен интернет и ключ kie.ai. Офлайн-расчёт выше продолжает работать без него.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                NavigationLink {
+                                    AIView()
+                                } label: {
+                                    Label("Подключить нейросеть", systemImage: "gearshape")
+                                }
+                            }
                             ShareLink(item: report) {
                                 Label("Отправить список материалов", systemImage: "square.and.arrow.up")
                                     .frame(maxWidth: .infinity)

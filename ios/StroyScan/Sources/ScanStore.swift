@@ -199,6 +199,7 @@ final class ScanStore: ObservableObject {
         }
         flats.removeAll { $0.rooms.isEmpty }
         try? FileManager.default.removeItem(at: folder(id))
+        try? FileManager.default.removeItem(at: projectURL(id))
         persist()
     }
 
@@ -232,7 +233,11 @@ final class ScanStore: ObservableObject {
     func deleteFlat(_ id: UUID) {
         guard let f = flat(id) else { return }
         try? FileManager.default.removeItem(at: flatModelURL(id))
-        for r in f.rooms { try? FileManager.default.removeItem(at: folder(r)) }
+        for r in f.rooms {
+            try? FileManager.default.removeItem(at: folder(r))
+            try? FileManager.default.removeItem(at: projectURL(r))
+        }
+        try? FileManager.default.removeItem(at: projectURL(id))
         scans.removeAll { $0.flat == id }
         flats.removeAll { $0.id == id }
         persist()
@@ -348,6 +353,10 @@ final class ScanStore: ObservableObject {
     // MARK: - Файлы
 
     private func folder(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
+    private func projectURL(_ id: UUID) -> URL {
+        root.appendingPathComponent("Projects", isDirectory: true)
+            .appendingPathComponent(id.uuidString + ".json")
+    }
 
     private func write(_ r: RoomResult, to id: UUID) {
         let dir = folder(id)

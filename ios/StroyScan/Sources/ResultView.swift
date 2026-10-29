@@ -100,6 +100,17 @@ struct ResultView: View {
 
                 if !result.wallLines.isEmpty {
                     NavigationLink {
+                        DraftRouteView(room: result, engineering: $result.engineering)
+                    } label: {
+                        Label("Предложить трассу труб / кабеля по 3D", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                            .foregroundStyle(Palette.ink)
+                    }
+                }
+
+                if !result.wallLines.isEmpty {
+                    NavigationLink {
                         Renovation3DView(result: result, look: $look, engineering: $result.engineering, liveScan: canContinue,
                                          tiling: $result.tiling, scanId: sent ? scanId : nil) { fresh in
                             try await ensureScanId(fresh: fresh)

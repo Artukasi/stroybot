@@ -96,6 +96,14 @@ struct ScanOutcome {
     var flat = false
 }
 
+/// Dimensions returned live by RoomPlan as the camera sees walls.
+struct LiveWallMeasurement: Identifiable {
+    var id: String
+    var length: Double
+    var height: Double
+    var lowConfidence: Bool
+}
+
 final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate {
     weak var view: RoomCaptureView?
     let watcher = LiveWatcher()
@@ -120,6 +128,7 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
     /// Что ещё не снято — считается в момент «Готово», для окна «Ещё не всё снято»
     @Published var unfinished: [String] = []
     @Published var counts = ""
+    @Published var wallMeasurements: [LiveWallMeasurement] = []
     @Published var torchOn = false
     /// Переключение на ультраширокую камеру в AR-сканере, если устройство её поддерживает
     @Published var cameraZoom: CGFloat = 1
@@ -387,6 +396,16 @@ final class ScanController: NSObject, ObservableObject, RoomCaptureViewDelegate 
 
     /// RoomPlan присылает скан часто: перерисовываем не чаще ~7 раз в секунду
     private func received(_ room: CapturedRoom) {
+        // Live single-wall takeoff: keep stable surface identifiers across updates.
+        // Do not claim an accuracy level that RoomPlan does not provide.
+        wallMeasurements = Array(room.walls.prefix(80)).compactMap { wall in
+            let length = Double(wall.dimensions.x)
+            let height = Double(wall.dimensions.y)
+            guard length.isFinite && height.isFinite && length > 0.2 && height > 0.4 else { return nil }
+            return LiveWallMeasurement(id: wall.identifier.uuidString,
+                                       length: length, height: height,
+                                       lowConfidence: wall.confidence == .low)
+        }
         latest = room
         guard !drawQueued else { return }
         drawQueued = true

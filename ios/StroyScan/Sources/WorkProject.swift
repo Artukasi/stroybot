@@ -252,23 +252,24 @@ struct WorkProjectView: View {
                         .disabled(newMaterial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     ForEach(model.document.shopping) { entry in
-                        Button {
-                            model.edit { data in
-                                if let i = data.shopping.firstIndex(where: { $0.id == entry.id }) {
-                                    data.shopping[i].bought.toggle()
+                        HStack(alignment: .top, spacing: 12) {
+                            Button {
+                                model.edit { data in
+                                    if let i = data.shopping.firstIndex(where: { $0.id == entry.id }) {
+                                        data.shopping[i].bought.toggle()
+                                    }
                                 }
-                            }
-                        } label: {
-                            HStack {
+                            } label: {
                                 Image(systemName: entry.bought ? "checkmark.circle.fill" : "circle")
                                     .foregroundStyle(entry.bought ? .green : Palette.signal)
-                                VStack(alignment: .leading) {
-                                    Text(entry.title).foregroundStyle(.primary)
-                                    Text(entry.quantity).font(.caption).foregroundStyle(.secondary)
-                                    PetrovichMaterialLink(name: entry.title)
-                                }
-                                Spacer()
                             }
+                            .buttonStyle(.borderless)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(entry.title).foregroundStyle(.primary)
+                                Text(entry.quantity).font(.caption).foregroundStyle(.secondary)
+                                PetrovichMaterialLink(name: entry.title)
+                            }
+                            Spacer()
                         }
                     }
                     .onDelete { offsets in

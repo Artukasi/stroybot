@@ -278,7 +278,7 @@ struct ForemanGuideView: View {
                         .textFieldStyle(.roundedBorder)
                     Button {
                         guard area != nil else { message = "Укажи площадь больше нуля и до 10 000 м²."; return }
-                        let key = "foreman." + selected.rawValue + "." + areaText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let key = "foreman." + selected.rawValue + "." + areaText.trimmingCharacters(in: .whitespacesAndNewlines) + "." + String(task.prefix(80))
                         planKey = key
                         let done = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
                         finished = Set(done)

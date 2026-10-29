@@ -10,7 +10,7 @@ struct StroyScanApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            StroyScanShell()
                 .environmentObject(link)
                 .environmentObject(store)
                 .environmentObject(hub)

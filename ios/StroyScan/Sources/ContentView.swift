@@ -6,6 +6,7 @@ enum Route: Hashable {
     case room(UUID)
     case flat(UUID)
     case ai
+    case foreman
 }
 
 /// Запуск съёмки: что снимаем и какую запись обновить (пересъёмка и досъёмка)
@@ -65,6 +66,8 @@ struct ContentView: View {
                     FlatView(id: id) { path.append(Route.room($0)) }
                 case .ai:
                     AIView()
+                case .foreman:
+                    ForemanGuideView()
                 }
             }
         }
@@ -188,6 +191,21 @@ struct ContentView: View {
                     .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 18)
                     .background(Palette.signal, in: RoundedRectangle(cornerRadius: 18))
                     .foregroundStyle(Palette.ink)
+            }
+            .buttonStyle(PressStyle())
+            Button { path.append(Route.foreman) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "hammer.fill").font(.title2).foregroundStyle(Palette.signal)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Помощник прораба").font(.headline).foregroundStyle(.white)
+                        Text("Скажи задачу — получи этапы, материалы и чек-лист").font(.caption)
+                            .foregroundStyle(.white.opacity(0.65)).lineLimit(2)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(14)
+                .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(PressStyle())
             Button { path.append(Route.ai) } label: {

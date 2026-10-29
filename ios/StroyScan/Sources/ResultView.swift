@@ -109,6 +109,17 @@ struct ResultView: View {
 
                 if !result.wallLines.isEmpty {
                     NavigationLink {
+                        GKLFrameView(result: result)
+                    } label: {
+                        Label("Каркас ГКЛ в 3D · стены и потолок", systemImage: "square.grid.3x3.topleft.filled")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                            .foregroundStyle(Palette.ink)
+                    }
+                }
+
+                if !result.wallLines.isEmpty {
+                    NavigationLink {
                         DraftRouteView(room: result, engineering: $result.engineering)
                     } label: {
                         Label("Предложить трассу труб / кабеля по 3D", systemImage: "point.topleft.down.curvedto.point.bottomright.up")

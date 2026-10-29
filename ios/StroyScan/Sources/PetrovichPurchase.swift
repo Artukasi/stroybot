@@ -248,6 +248,7 @@ struct PetrovichPurchaseView: View {
                                 Text("\(count(item)) \(item.package) · \(PurchasePlanner.format(item.amount)) \(item.unit)")
                                     .font(.subheadline).foregroundStyle(.primary)
                                 Text(item.note).font(.caption).foregroundStyle(.secondary)
+                                PetrovichMaterialLink(name: item.name, package: item.package)
                                 HStack(spacing: 12) {
                                     Button {
                                         counts[item.id] = max(0, count(item) - 1)
@@ -302,7 +303,7 @@ struct PetrovichPurchaseView: View {
                 Link(destination: URL(string: "https://moscow.petrovich.ru/kalkulyator-remonta/raschet-stoimosti/")!) {
                     Label("Калькулятор Петровича (пример: Москва)", systemImage: "calculator")
                 }
-                Text("Пока нет подтверждённого публичного интерфейса для заполнения сторонней корзины Петровича. Приложение не добавляет позиции и не оформляет заказ от твоего имени. Артикулы, наличие, цены и доставка проверяются на сайте.")
+                Text("Нажми «В Петровиче» у материала, выбери конкретный товар и добавь его в корзину. «Название» копирует запрос для поиска внутри магазина. СтройСкан не заполняет чужую корзину автоматически. Проверяй упаковку, цену и наличие.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -50,7 +50,9 @@ struct ApartmentProjectView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Комнаты и работы") {
-                ForEach(rooms, id: \.0.id) { scan, room in
+                ForEach(rooms.indices, id: \.self) { index in
+                    let scan = rooms[index].0
+                    let room = rooms[index].1
                     NavigationLink {
                         WorkProjectView(id: scan.id, result: room)
                     } label: {

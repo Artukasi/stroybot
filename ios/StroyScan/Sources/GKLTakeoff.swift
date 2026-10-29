@@ -117,6 +117,55 @@ enum GKLTakeoff {
                        profileCount: totalStock, sheets: sheets, items: items)
     }
 
+    /// On-camera wall estimate before a whole-room scan exists. Gross rectangle:
+    /// door and window openings are NOT deducted here.
+    static func liveWall(length: Double, height: Double, step: Double, layers: Int, stock: Double = 3.0) -> Summary {
+        let l = max(0, min(30, length))
+        let h = max(0, min(6, height))
+        let safeStep = max(0.3, min(0.9, step))
+        guard l > 0 && h > 0 else {
+            return Summary(area: 0, profileMeters: 0, profileCount: 0, sheets: 0, items: [])
+        }
+        let studs = Int(ceil(l / safeStep)) + 1
+        let studsMeters = Double(studs) * h
+        let guidesMeters = l * 2
+        let total = studsMeters + guidesMeters
+        let guidePieces = Int(ceil(guidesMeters * 1.15 / stock))
+        let studPieces = Int(ceil(studsMeters * 1.15 / stock))
+        let layers = max(1, min(3, layers))
+        let sheetingArea = l * h * Double(layers)
+        let sheetPieces = Int(ceil(sheetingArea * 1.12 / 3))
+        let fasteners = Int(ceil(sheetingArea * 25 * 1.1 / 100)) * 100
+        let compound = Int(ceil(sheetingArea * 0.25 * 1.10))
+        let tape = Int(ceil(sheetingArea * 1.3 * 1.1))
+        let items: [Item] = [
+            Item(title: "Профиль направляющий",
+                 quantity: "\(guidePieces) шт. по \(format(stock)) м",
+                 explanation: "Верх и низ стены: \(format(guidesMeters)) пог. м, условный запас 15%."),
+            Item(title: "Профиль стоечный",
+                 quantity: "\(studs) осей · ≈ \(studPieces) заготовок по \(format(stock)) м",
+                 explanation: "Всего \(format(studsMeters)) пог. м по прямоугольной схеме, условный запас 15%."),
+            Item(title: "ГКЛ 1200×2500 мм",
+                 quantity: "\(sheetPieces) шт.",
+                 explanation: "\(layers) сл. × \(format(l*h)) м²; запас 12%. Реальный раскрой может требовать больше листов."),
+            Item(title: "Саморезы для листов",
+                 quantity: "≈ \(fasteners) шт.",
+                 explanation: "Предварительный расход; длину и шаг выбрать по монтажной системе."),
+            Item(title: "Шпаклёвка для швов",
+                 quantity: "≈ \(compound) кг",
+                 explanation: "Ориентир 0,25 кг/м² обшивки, уточнять по производителю."),
+            Item(title: "Армирующая лента",
+                 quantity: "≈ \(tape) м",
+                 explanation: "Грубая оценка по площади; зависит от схемы стыков."),
+            Item(title: "Крепление к основанию",
+                 quantity: "По проекту",
+                 explanation: "Тип и число анкеров, подвесов и соединителей определяются основанием, нагрузками и выбранной системой ГКЛ.")
+        ]
+        return Summary(area: l*h, profileMeters: total,
+                       profileCount: guidePieces + studPieces,
+                       sheets: sheetPieces, items: items)
+    }
+
     static func format(_ number: Double) -> String {
         String(format: "%.1f", number).replacingOccurrences(of: ".", with: ",")
     }

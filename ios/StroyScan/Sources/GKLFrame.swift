@@ -376,6 +376,7 @@ struct GKLFrameView: View {
                             Text(item.title).font(.subheadline.bold())
                             Text(item.quantity).font(.subheadline).foregroundStyle(Palette.signal)
                             Text(item.explanation).font(.caption).foregroundStyle(.secondary)
+                            PetrovichMaterialLink(name: item.title)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)

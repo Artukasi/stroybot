@@ -39,7 +39,7 @@ enum Estimate {
         if wet {
             m("tile_wall", "Плитка на стены (+10%)", walls * 1.1, "м²", 1500, true)
             m("tile_floor", "Плитка на пол (+10%)", floor * 1.1, "м²", 1500, true)
-            m("tile_glue", "Клей для плитки, 25 кг", up((walls + floor) * 5 / 25), "меш.", 600, true)
+            m("tile_glue", "Клей для плитки, 25 кг", up(ConstructionCalculator.tileGlueKg(walls + floor) / 25), "меш.", 600, true)
             m("grout", "Затирка", (walls + floor) * 1.1 * 0.5, "кг", 350, true)
             m("hydro", "Гидроизоляция (пол и стены на 20 см)", (floor + perimeter * 0.2) * 1.5, "кг", 400, true)
             w("tile_wall", "Укладка плитки на стены", walls, "м²", 1800)
@@ -49,9 +49,9 @@ enum Estimate {
             let strips = max(0, r.walls.reduce(0) { $0 + up($1.length / 1.06) }
                 - r.openings.filter { $0.kind != "window" }.reduce(0) { $0 + ($1.width / 1.06).rounded(.down) })
             let perRoll = max(1, (10.05 / (height + 0.1)).rounded(.down))
-            m("plaster", "Штукатурка (слой 10 мм), 30 кг", up(walls * 9 / 30), "меш.", 550, true)
-            m("putty", "Шпаклёвка финишная, 20 кг", up(walls * 1.2 / 20), "меш.", 750, true)
-            m("paint", "Краска для стен, 2 слоя, банка 9 л", up(walls * 0.24 / 9), "банк.", 4500, true)
+            m("plaster", "Штукатурка (слой 10 мм), 30 кг", up(ConstructionCalculator.plasterKg(walls) / 30), "меш.", 550, true)
+            m("putty", "Шпаклёвка финишная, 20 кг", up(ConstructionCalculator.puttyKg(walls) / 20), "меш.", 750, true)
+            m("paint", "Краска для стен, 2 слоя, банка 9 л", up(ConstructionCalculator.paintLiters(walls) / 9), "банк.", 4500, true)
             m("wallpaper", "Или обои 1,06×10,05 м", up(strips / perRoll), "рул.", 2500, false)
             m("laminate", "Ламинат, упаковка 2,13 м²", up(floor * 1.07 / 2.13), "уп.", 1800, true)
             m("underlay", "Подложка", up(floor * 1.05), "м²", 120, true)
@@ -62,7 +62,7 @@ enum Estimate {
             w("laminate", "Укладка ламината с подложкой", floor, "м²", 450)
             w("skirting", "Монтаж плинтуса", r.skirting, "м", 300)
         }
-        m("ceiling_paint", "Краска для потолка", floor * 0.24, "л", 500, true)
+        m("ceiling_paint", "Краска для потолка", ConstructionCalculator.paintLiters(floor, reserve: 0), "л", 500, true)
         w("ceiling", "Покраска потолка", floor, "м²", 400)
         if r.slopes > 0 { w("slopes", "Откосы окон", r.slopes, "м", 1200) }
 

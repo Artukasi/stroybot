@@ -29,6 +29,8 @@ struct ContentView: View {
     @State private var showPair = false
     @State private var measuring = false
     @State private var wallScanning = false
+    @State private var showExtraTools = false
+    @State private var showSupport = false
     @State private var showTips = false
     @State private var flatness = false
     @State private var brand = false
@@ -50,10 +52,18 @@ struct ContentView: View {
                     }
                     actions
                     queueCard
-                    BackupCard()
-                    connection
-                    history
-                    tips
+                    DisclosureGroup("История, объекты и настройки", isExpanded: $showSupport) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            history
+                            BackupCard()
+                            connection
+                            tips
+                        }
+                        .padding(.top, 12)
+                    }
+                    .padding(14)
+                    .background(Color(.secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 18))
                 }
                 .padding()
             }
@@ -232,6 +242,8 @@ struct ContentView: View {
                 .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(PressStyle())
+            DisclosureGroup("Дополнительные инструменты", isExpanded: $showExtraTools) {
+                VStack(spacing: 10) {
             Button { path.append(Route.foreman) } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "hammer.fill").font(.title2).foregroundStyle(Palette.signal)
@@ -304,6 +316,12 @@ struct ContentView: View {
                     brand = true
                 }
             }
+                }
+                .padding(.top, 8)
+            }
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 18))
         }
     }
 

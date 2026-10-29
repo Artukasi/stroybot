@@ -99,6 +99,15 @@ struct ResultView: View {
                 photoSection
 
                 NavigationLink {
+                    WorkProjectView(id: savedID, result: result)
+                } label: {
+                    Label("Проект ремонта: работы и закупки", systemImage: "building.2.crop.circle")
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
+                        .background(Palette.signal, in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(Palette.ink)
+                }
+
+                NavigationLink {
                     ForemanGuideView(initialFloorArea: result.floorArea, initialWallArea: result.wallArea)
                 } label: {
                     Label("План работ и материалы по LiDAR-замеру", systemImage: "list.bullet.clipboard.fill")

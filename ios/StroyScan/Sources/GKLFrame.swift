@@ -42,7 +42,18 @@ enum GKLFrame {
                 let q = wall.point(distance) + wall.normal * inward
                 return SIMD3(q.x, height, q.y)
             }
-            add(p(0, 0), p(wall.length, 0), "Нижняя направляющая — эскиз")
+            // Doorway openings at floor level interrupt the bottom guide.
+            var guideStart: Float = 0
+            for opening in openings where opening.bottom < 0.10 {
+                let left = max(guideStart, max(0, opening.left))
+                if left - guideStart > 0.05 {
+                    add(p(guideStart, 0), p(left, 0), "Нижняя направляющая — эскиз")
+                }
+                guideStart = max(guideStart, min(wall.length, opening.right))
+            }
+            if wall.length - guideStart > 0.05 {
+                add(p(guideStart, 0), p(wall.length, 0), "Нижняя направляющая — эскиз")
+            }
             add(p(0, h), p(wall.length, h), "Верхняя направляющая — эскиз")
             let n = Int(ceil(wall.length / step))
             for i in 0...min(n, 500) {

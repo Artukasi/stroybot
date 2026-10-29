@@ -7,6 +7,7 @@ enum Route: Hashable {
     case flat(UUID)
     case ai
     case foreman
+    case projects
 }
 
 /// Запуск съёмки: что снимаем и какую запись обновить (пересъёмка и досъёмка)
@@ -67,6 +68,8 @@ struct ContentView: View {
                     AIView()
                 case .foreman:
                     ForemanGuideView()
+                case .projects:
+                    WorkProjectsHubView()
                 }
             }
         }
@@ -194,6 +197,21 @@ struct ContentView: View {
             }
             .buttonStyle(PressStyle())
             }
+            Button { path.append(Route.projects) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "building.2.crop.circle.fill").font(.title2).foregroundStyle(Palette.signal)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Проекты ремонта").font(.headline).foregroundStyle(.white)
+                        Text("Сканы → работы → смета → закупки → отчёт").font(.caption)
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(14)
+                .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
+            }
+            .buttonStyle(PressStyle())
             Button { path.append(Route.foreman) } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "hammer.fill").font(.title2).foregroundStyle(Palette.signal)

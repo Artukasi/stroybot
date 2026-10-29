@@ -64,8 +64,12 @@ struct ObjectsHubView: View {
                 }
                 if store.flats.isEmpty && store.scans.isEmpty {
                     Section {
-                        ContentUnavailableView("Сканов пока нет", systemImage: "viewfinder",
-                            description: Text("Открой вкладку «Сканер», чтобы снять первую комнату."))
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Сканов пока нет", systemImage: "viewfinder").font(.headline)
+                            Text("Открой вкладку «Сканер», чтобы снять первую комнату.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
                     }
                 }
                 if !store.flats.isEmpty {

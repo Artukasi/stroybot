@@ -58,6 +58,12 @@ struct AIView: View {
                             card("Дизайн по фото", "paintbrush.pointed.fill", "ремонт на вашем фото")
                         }
                         NavigationLink {
+                            AITextView(kind: .foreman, state: state,
+                                       placeholder: "Например: потолок ГКЛ 50 м², два слоя, нужен список материалов и все этапы с проверкой качества")
+                        } label: {
+                            card("План работ ИИ", "hammer.fill", "пошаговый наставник для новичка")
+                        }
+                        NavigationLink {
                             AITextView(kind: .consult, state: state,
                                        placeholder: "Спросите что угодно про ремонт: чем выровнять стены, какой клей для плитки, сколько сохнет стяжка…")
                         } label: {
@@ -202,9 +208,23 @@ struct AIAnswer: View {
 /// Текстовые инструменты: консультант, смета, КП
 struct AITextView: View {
     enum Kind {
-        case consult, estimate, kp
-        var title: String { self == .consult ? "Консультант" : self == .estimate ? "Смета" : "Коммерческое предложение" }
-        var system: String { self == .consult ? AIPrompts.consult : self == .estimate ? AIPrompts.estimate : AIPrompts.kp }
+        case consult, estimate, kp, foreman
+        var title: String {
+            switch self {
+            case .consult: return "Консультант"
+            case .estimate: return "Смета"
+            case .kp: return "Коммерческое предложение"
+            case .foreman: return "План работ ИИ"
+            }
+        }
+        var system: String {
+            switch self {
+            case .consult: return AIPrompts.consult
+            case .estimate: return AIPrompts.estimate
+            case .kp: return AIPrompts.kp
+            case .foreman: return AIPrompts.foreman
+            }
+        }
     }
 
     let kind: Kind

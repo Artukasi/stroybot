@@ -44,8 +44,10 @@ private struct HubRow: View {
 
 struct ObjectsHubView: View {
     @State private var roomPath: [UUID] = []
+    @State private var rescanRequest: ScanRequest?
     @EnvironmentObject private var store: ScanStore
     @EnvironmentObject private var hub: ScanHub
+    @EnvironmentObject private var link: BotLink
     var body: some View {
         NavigationStack(path: $roomPath) {
             List {
@@ -89,7 +91,10 @@ struct ObjectsHubView: View {
                     Section("Комнаты") {
                         ForEach(store.scans) { scan in
                             NavigationLink {
-                                SavedRoomView(id: scan.id) {}
+                                SavedRoomView(id: scan.id) {
+                                    hub.pause()
+                                    rescanRequest = ScanWorkflow.rescanRequest(scan.id, hub: hub)
+                                }
                             } label: {
                                 HubRow(title: scan.room,
                                        detail: String(format: "%.1f м² · %@", scan.floorArea, scan.place ?? "Без объекта"),
@@ -101,8 +106,18 @@ struct ObjectsHubView: View {
             }
             .navigationTitle("Мои объекты")
             .navigationDestination(for: UUID.self) { id in
-                SavedRoomView(id: id) {}
+                SavedRoomView(id: id) {
+                    hub.pause()
+                    rescanRequest = ScanWorkflow.rescanRequest(id, hub: hub)
+                }
             }
+        }
+        .fullScreenCover(item: $rescanRequest) { req in
+            ScanScreen(mode: req.mode, arSession: hub.session()) { outcome in
+                _ = ScanWorkflow.save(outcome, request: req, store: store, hub: hub, link: link)
+                rescanRequest = nil
+            }
+            .onDisappear { hub.scanClosed() }
         }
     }
 }
@@ -111,6 +126,7 @@ struct ScanToolsHubView: View {
     @State private var roomPath: [UUID] = []
     @EnvironmentObject private var store: ScanStore
     @EnvironmentObject private var hub: ScanHub
+    @EnvironmentObject private var link: BotLink
     @State private var request: ScanRequest?
     @State private var wallScan = false
     @State private var measure = false
@@ -170,7 +186,10 @@ struct ScanToolsHubView: View {
                 if let lastScanID {
                     Section("Последний результат") {
                         NavigationLink {
-                            SavedRoomView(id: lastScanID) {}
+                            SavedRoomView(id: lastScanID) {
+                                hub.pause()
+                                request = ScanWorkflow.rescanRequest(lastScanID, hub: hub)
+                            }
                         } label: {
                             HubRow(title: "Открыть отсканированную комнату",
                                    detail: "3D, работы, смета, закупка", symbol: "cube")
@@ -187,26 +206,18 @@ struct ScanToolsHubView: View {
             }
             .navigationTitle("Сканер")
             .navigationDestination(for: UUID.self) { id in
-                SavedRoomView(id: id) {}
+                SavedRoomView(id: id) {
+                    hub.pause()
+                    request = ScanWorkflow.rescanRequest(id, hub: hub)
+                }
             }
         }
         .fullScreenCover(item: $request) { req in
             ScanScreen(mode: req.mode, arSession: hub.session()) { outcome in
                 if outcome.flat {
-                    let data = outcome.rooms.enumerated().map { index, room in
-                        (room, outcome.outlines.flatMap { $0.indices.contains(index) ? $0[index] : nil })
-                    }
-                    let flat = store.addFlat(name: "Квартира", rooms: data)
-                    lastFlatID = flat.id
-                    for (index, id) in flat.rooms.enumerated() where index < outcome.captured.count {
-                        hub.keep(outcome.captured[index], for: id)
-                    }
-                } else if let room = outcome.rooms.first {
-                    let saved = store.add(room)
-                    lastScanID = saved.id
-                    if let captured = outcome.captured.first {
-                        hub.keep(captured, for: saved.id)
-                    }
+                    lastFlatID = ScanWorkflow.saveFlat(outcome, store: store, hub: hub)
+                } else {
+                    lastScanID = ScanWorkflow.save(outcome, request: req, store: store, hub: hub, link: link)
                 }
                 request = nil
             }

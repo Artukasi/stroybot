@@ -395,6 +395,18 @@ final class ScanStore: ObservableObject {
             flats.append(f)
             addedFlats += 1
         }
+        // Restore per-room renovation projects as well. Existing newer local data wins.
+        let savedProjects = dir.appendingPathComponent("Projects", isDirectory: true)
+        let localProjects = root.appendingPathComponent("Projects", isDirectory: true)
+        if let entries = try? fm.contentsOfDirectory(at: savedProjects, includingPropertiesForKeys: nil) {
+            try? fm.createDirectory(at: localProjects, withIntermediateDirectories: true)
+            for src in entries where src.pathExtension.lowercased() == "json" {
+                let target = localProjects.appendingPathComponent(src.lastPathComponent)
+                if !fm.fileExists(atPath: target.path) {
+                    try? fm.copyItem(at: src, to: target)
+                }
+            }
+        }
         persist()
         TileFiles.importFrom(dir)
         return (rooms, addedFlats)

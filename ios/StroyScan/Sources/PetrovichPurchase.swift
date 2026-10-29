@@ -111,6 +111,9 @@ enum PurchasePlanner {
 
 struct PetrovichPurchaseView: View {
     let room: RoomResult?
+    var onAddToProject: (([PurchasePlanner.Material]) -> Void)? = nil
+    @State private var counts: [String: Int] = [:]
+    @State private var imported = false
     @State private var wallText: String
     @State private var floorText: String
     @State private var selected: Set<PurchasePlanner.Trade>
@@ -136,6 +139,14 @@ struct PetrovichPurchaseView: View {
                                   puttyThickness: puttyThickness, screedThickness: screedThickness)
     }
     private var active: [PurchasePlanner.Material] { items.filter { !excluded.contains($0.id) } }
+    private func count(_ item: PurchasePlanner.Material) -> Int { counts[item.id] ?? item.packages }
+    private var revised: [PurchasePlanner.Material] {
+        active.map { item in
+            PurchasePlanner.Material(id: item.id, trade: item.trade, name: item.name,
+                                     amount: item.amount, unit: item.unit,
+                                     package: item.package, packages: count(item), note: item.note)
+        }
+    }
     private var report: String {
         (["СТРОЙСКАН · ЗАКУПКА ДЛЯ ПЕТРОВИЧА",
           "Объект: \(room?.room ?? "Ручной расчёт")",
@@ -143,7 +154,7 @@ struct PetrovichPurchaseView: View {
           "Виды работ: \(selected.map(\.rawValue).sorted().joined(separator: ", "))",
           "Это ориентировочный список, не корзина магазина.",
           "",
-          "МАТЕРИАЛЫ:"] + active.map { "• \($0.orderText). \($0.note)" } +
+          "МАТЕРИАЛЫ:"] + revised.map { "• \($0.orderText). \($0.note)" } +
          ["", "ПЕРЕД ОПЛАТОЙ: проверь упаковки, реальные артикулы, запас, совместимость, наличие и доставку в Петровиче."])
         .joined(separator: "\n")
     }
@@ -208,13 +219,36 @@ struct PetrovichPurchaseView: View {
                                 .foregroundStyle(excluded.contains(item.id) ? .secondary : Palette.signal)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.name).font(.subheadline.bold()).foregroundStyle(.primary)
-                                Text("\(item.packages) \(item.package) · \(PurchasePlanner.format(item.amount)) \(item.unit)")
+                                Text("\(count(item)) \(item.package) · \(PurchasePlanner.format(item.amount)) \(item.unit)")
                                     .font(.subheadline).foregroundStyle(.primary)
                                 Text(item.note).font(.caption).foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    Button {
+                                        counts[item.id] = max(0, count(item) - 1)
+                                    } label: { Image(systemName: "minus.circle") }
+                                    .buttonStyle(.borderless)
+                                    Text("\(count(item)) уп.").monospacedDigit()
+                                    Button {
+                                        counts[item.id] = min(100000, count(item) + 1)
+                                    } label: { Image(systemName: "plus.circle") }
+                                    .buttonStyle(.borderless)
+                                    Text("Уточни размер упаковки").font(.caption2)
+                                }
+                                .foregroundStyle(.secondary)
                             }
                         }
                     }
                     .buttonStyle(.plain)
+                }
+            }
+            if let onAddToProject {
+                Section("Проект ремонта") {
+                    Button {
+                        onAddToProject(revised)
+                        imported = true
+                    } label: {
+                        Label("Добавить выбранные материалы в проект", systemImage: "tray.and.arrow.down")
+                    }
                 }
             }
             Section("Передать список в Петрович") {
@@ -239,6 +273,9 @@ struct PetrovichPurchaseView: View {
         }
         .navigationTitle("Закупка · Петрович")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Сохранено в проект", isPresented: $imported) {
+            Button("Хорошо", role: .cancel) {}
+        }
         .alert("Список скопирован", isPresented: $copied) {
             Button("Хорошо", role: .cancel) {}
         }

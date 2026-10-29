@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101827"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><title>СтройСкан — комнаты</title>
+<style>
+:root{color-scheme:dark;--bg:#09111e;--card:#152238;--edge:#2c3f56;--txt:#ecf3ff;--muted:#97a9c3;--accent:#f35d47}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;background:var(--bg);color:var(--txt);padding:env(safe-area-inset-top) 16px calc(30px + env(safe-area-inset-bottom));max-width:700px;margin:auto}
+header{padding:25px 0 10px}.eyebrow{color:var(--accent);font-size:12px;font-weight:800;letter-spacing:2px}.brand{font-weight:800;font-size:32px;letter-spacing:-1px;margin:8px 0}.sub{color:var(--muted);margin:0;line-height:1.5;font-size:14px}
+.panel{background:var(--card);border:1px solid var(--edge);padding:18px;border-radius:19px;margin:16px 0}.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.kpi{background:#0e1b2e;border-radius:14px;padding:14px}.kpi b{display:block;font-size:24px;margin:6px 0}.kpi span,.hint{color:var(--muted);font-size:12px}h2{font-size:18px;margin:3px 0 15px}
+label{display:block;color:var(--muted);font-size:13px;margin:12px 0 6px}input{background:#0e1b2e;border:1px solid var(--edge);border-radius:11px;padding:13px;color:var(--txt);width:100%;font-size:16px}input:focus{outline:2px solid var(--accent)}
+.fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.fields label{font-size:12px}
+button{border:0;background:var(--accent);color:#fff;border-radius:12px;padding:13px 16px;font-weight:750;font-size:15px;cursor:pointer}button.secondary{background:#273b56}button.ghost{background:transparent;color:#ff9484;border:1px solid #71483f}button:disabled{opacity:.5}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}.actions button{flex:1}
+.room{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--edge);padding:15px 0}.room small{display:block;color:var(--muted);margin-top:5px}.room b{font-size:15px}.room button{padding:9px 12px;font-size:12px}
+.planwrap{border:1px solid var(--edge);border-radius:13px;overflow:hidden;background-color:#0f1a2b;background-image:linear-gradient(#26374b 1px,transparent 1px),linear-gradient(90deg,#26374b 1px,transparent 1px);background-size:20px 20px}.plan{width:100%;height:280px;display:block}
+.empty{text-align:center;color:var(--muted);font-size:14px;padding:22px}.notice{color:var(--muted);font-size:12px;line-height:1.5;margin:20px 0}#toast{position:fixed;bottom:23px;left:20px;right:20px;background:#314761;padding:12px;border-radius:11px;text-align:center;display:none}
+@media print{body{background:white;color:black;max-width:100%;padding:10px}.panel{background:white;color:black;border:1px solid #bbb}.kpi,.planwrap{background:white;color:black} .controls,header .sub,.notice,.room button{display:none!important} .room small,.kpi span{color:#555} }
+</style></head>
+<body><header><div class="eyebrow">STROYSCAN / WEB</div><div class="brand">СтройСкан<span style="color:#f35d47">.</span></div><p class="sub">Карточки комнат и быстрый обмер без установки IPA. Данные хранятся только в браузере этого устройства.</p></header>
+<section class="panel"><div class="kpis"><div class="kpi"><span>КОМНАТЫ</span><b id="count">0</b></div><div class="kpi"><span>ОБЩАЯ ПЛОЩАДЬ</span><b id="area">0 м²</b></div></div></section>
+<section class="panel controls"><h2>Добавить комнату</h2><form id="form"><label for="name">Название</label><input id="name" maxlength="50" placeholder="Например, гостиная" required><div class="fields"><div><label for="w">Длина, м</label><input id="w" type="number" inputmode="decimal" min=".1" max="1000" step=".01" placeholder="5.2" required></div><div><label for="d">Ширина, м</label><input id="d" type="number" inputmode="decimal" min=".1" max="1000" step=".01" placeholder="3.8" required></div><div><label for="h">Высота, м</label><input id="h" type="number" inputmode="decimal" min=".1" max="100" step=".01" placeholder="2.7" required></div></div><div class="actions"><button type="submit">+ Сохранить комнату</button></div></form></section>
+<section class="panel"><h2>Мои комнаты</h2><div id="rooms" aria-live="polite"></div></section>
+<section class="panel"><h2>План выбранной комнаты</h2><div class="planwrap"><svg class="plan" id="plan" viewBox="0 0 360 280" role="img" aria-label="Схематичный прямоугольный план комнаты"></svg></div><div id="planCaption" class="hint" style="margin-top:12px">Добавьте комнату, чтобы увидеть схему.</div><div class="actions controls"><button class="secondary" id="print" type="button">Сохранить в PDF</button><button class="secondary" id="export" type="button">Экспорт JSON</button></div></section>
+<section class="panel controls"><h2>Перенос проекта</h2><p class="hint">Для резервной копии экспортируйте JSON и сохраните его в «Файлы». При очистке Safari локальные данные могут исчезнуть.</p><label for="import">Импорт сохранённого проекта (.json)</label><input id="import" type="file" accept="application/json,.json"><div class="actions"><button id="clear" type="button" class="ghost">Удалить все комнаты</button></div></section>
+<p class="notice">Это веб-версия для ручных замеров. Она не использует LiDAR, ARKit или RoomPlan и не импортирует автоматически 3D-сканы из нативного IPA. Площадь рассчитывается для прямоугольных комнат; для помещений сложной формы требуются отдельные расчёты.</p><div id="toast" role="status"></div>
+<script>
+(()=>{"use strict";
+const KEY="stroyscan-web-rooms-v1",$=id=>document.getElementById(id);
+let rooms=[];let active=null;
+try{const saved=JSON.parse(localStorage.getItem(KEY)||"[]");if(Array.isArray(saved)){rooms=saved.filter(r=>r&&typeof r.name==="string"&&[r.w,r.d,r.h].every(v=>Number.isFinite(v)&&v>0));}}catch{}
+if(rooms.length)active=rooms[0].id;
+const num=n=>Number(n).toLocaleString("ru-RU",{maximumFractionDigits:2});
+function toast(s){$("toast").textContent=s;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",2500)}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(rooms))}catch{toast("Не удалось сохранить в браузере")}render()}
+function render(){
+$("count").textContent=rooms.length;$("area").textContent=num(rooms.reduce((s,r)=>s+r.w*r.d,0))+" м²";
+$("rooms").replaceChildren();
+if(!rooms.length){const e=document.createElement("p");e.className="empty";e.textContent="Комнат пока нет";$("rooms").append(e)}
+for(const r of rooms){const line=document.createElement("div");line.className="room";const info=document.createElement("div");const b=document.createElement("b");b.textContent=(r.id===active?"● ":"")+r.name;const small=document.createElement("small");small.textContent=num(r.w)+" × "+num(r.d)+" × "+num(r.h)+" м · "+num(r.w*r.d)+" м²";info.append(b,small);const controls=document.createElement("div");controls.className="actions";const show=document.createElement("button");show.className="secondary";show.textContent="План";show.onclick=()=>{active=r.id;render()};const del=document.createElement("button");del.className="ghost";del.textContent="×";del.setAttribute("aria-label","Удалить "+r.name);del.onclick=()=>{if(confirm("Удалить комнату «"+r.name+"»?")){rooms=rooms.filter(x=>x.id!==r.id);if(active===r.id)active=rooms[0]?.id??null;persist()}};controls.append(show,del);line.append(info,controls);$("rooms").append(line)}
+draw();
+}
+function draw(){const svg=$("plan");svg.replaceChildren();const r=rooms.find(x=>x.id===active);if(!r){$("planCaption").textContent="Добавьте комнату, чтобы увидеть схему.";return}
+const ns="http://www.w3.org/2000/svg";const make=(tag,attr,text)=>{const el=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attr))el.setAttribute(k,v);if(text!==undefined)el.textContent=text;svg.append(el);return el};
+const scale=Math.min(268/r.w,174/r.d),W=r.w*scale,H=r.d*scale,x=(360-W)/2,y=(255-H)/2;
+make("rect",{x,y,width:W,height:H,fill:"#233d58",stroke:"#f35d47","stroke-width":3,rx:2});
+make("text",{x:180,y:y-13,fill:"#c5d8ef","text-anchor":"middle","font-size":14},num(r.w)+" м");
+make("text",{x:x+W+14,y:y+H/2,fill:"#c5d8ef","font-size":13},num(r.d)+" м");
+make("text",{x:180,y:y+H/2,fill:"#fff","text-anchor":"middle","font-size":17,"font-weight":700},num(r.w*r.d)+" м²");
+$("planCaption").textContent=r.name+" · высота "+num(r.h)+" м · схематично, не LiDAR.";
+}
+$("form").onsubmit=e=>{e.preventDefault();const name=$("name").value.trim(),w=+$("w").value,d=+$("d").value,h=+$("h").value;if(!name||![w,d,h].every(v=>Number.isFinite(v)&&v>=.1&&v<=1000)){toast("Проверьте размеры");return}const r={id:Date.now()+"-"+Math.random().toString(36).slice(2),name,w,d,h};rooms.push(r);active=r.id;persist();$("form").reset();toast("Комната сохранена")};
+$("print").onclick=()=>window.print();
+$("export").onclick=()=>{const blob=new Blob([JSON.stringify({format:"stroyscan-web-v1",rooms},null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="stroyscan-backup.json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),3000)};
+$("import").onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{if(f.size>2e6)throw Error("Файл слишком большой");const x=JSON.parse(await f.text());if(x.format!=="stroyscan-web-v1"||!Array.isArray(x.rooms))throw Error("Неверный формат");const next=x.rooms.filter(r=>r&&typeof r.name==="string"&&[r.w,r.d,r.h].every(v=>Number.isFinite(v)&&v>0&&v<=1000)).slice(0,1000);if(!confirm("Заменить текущие комнаты на "+next.length+" из резервной копии?"))return;rooms=next;active=rooms[0]?.id??null;persist();toast("Проект импортирован")}catch(err){toast("Не удалось импортировать файл")}};
+$("clear").onclick=()=>{if(confirm("Удалить все комнаты? Это нельзя отменить без резервной копии.")){rooms=[];active=null;persist()}};
+render();
+})();
+</script></body></html>

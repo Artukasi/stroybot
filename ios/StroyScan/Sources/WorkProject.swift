@@ -361,6 +361,19 @@ struct WorkProjectsHubView: View {
                 Text("Выбери отсканированную комнату. Её размеры попадут в рабочий проект; задачи и закупки будут храниться отдельно.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
+            Section("Квартиры") {
+                ForEach(store.flats) { flat in
+                    NavigationLink {
+                        ApartmentProjectView(flatID: flat.id, name: flat.name)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(flat.name).font(.headline)
+                            Text("\(flat.rooms.count) комнат · общий рабочий проект")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
             Section("Комнаты") {
                 if store.scans.isEmpty {
                     Text("Пока нет сканов. На главном экране нажми «Сканировать комнату».")

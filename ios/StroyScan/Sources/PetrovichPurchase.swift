@@ -124,8 +124,9 @@ struct PetrovichPurchaseView: View {
     @State private var excluded: Set<String> = []
     @State private var copied = false
 
-    init(room: RoomResult? = nil) {
+    init(room: RoomResult? = nil, onAddToProject: (([PurchasePlanner.Material]) -> Void)? = nil) {
         self.room = room
+        self.onAddToProject = onAddToProject
         _wallText = State(initialValue: room.map { PurchasePlanner.format($0.wallArea) } ?? "40")
         _floorText = State(initialValue: room.map { PurchasePlanner.format($0.floorArea) } ?? "20")
         _selected = State(initialValue: [.putty, .paint])

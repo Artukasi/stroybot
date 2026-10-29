@@ -8,6 +8,7 @@ enum Route: Hashable {
     case ai
     case foreman
     case projects
+    case purchase
 }
 
 /// Запуск съёмки: что снимаем и какую запись обновить (пересъёмка и досъёмка)
@@ -71,6 +72,8 @@ struct ContentView: View {
                     ForemanGuideView()
                 case .projects:
                     WorkProjectsHubView()
+                case .purchase:
+                    PetrovichPurchaseView()
                 }
             }
         }
@@ -206,6 +209,21 @@ struct ContentView: View {
                         Text("Проекты ремонта").font(.headline).foregroundStyle(.white)
                         Text("Сканы → работы → смета → закупки → отчёт").font(.caption)
                             .foregroundStyle(.white.opacity(0.65))
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(14)
+                .background(Palette.black, in: RoundedRectangle(cornerRadius: 18))
+            }
+            .buttonStyle(PressStyle())
+            Button { path.append(Route.purchase) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "cart.fill").font(.title2).foregroundStyle(Palette.signal)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Закупка в Петровиче").font(.headline).foregroundStyle(.white)
+                        Text("ГКЛ, плитка, шпаклёвка, стяжка и другие материалы")
+                            .font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(2)
                     }
                     Spacer()
                     Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.5))

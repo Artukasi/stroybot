@@ -172,26 +172,79 @@ enum Kie {
         return out
     }
 
-    /// Текстовая модель; ответ бывает в формате choices (OpenAI) или candidates (Gemini)
-    static func chat(system: String, text: String, image: Data? = nil, maxTokens: Int = 2000) async throws -> String {
+    /// The provider may return an OpenAI response, Gemini response, or a nested data payload.
+    /// Return a meaningful error when the model completed without user-visible text.
+    static func extractChatText(_ response: [String: Any]) throws -> String {
+        let body = (response["data"] as? [String: Any]) ?? response
+        if let choices = body["choices"] as? [[String: Any]], let choice = choices.first {
+            if let message = choice["message"] as? [String: Any] {
+                let raw = message["content"]
+                if let string = raw as? String,
+                   !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return string.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if let parts = raw as? [[String: Any]] {
+                    let joined = parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
+                    if !joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return joined.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
+                if let refusal = message["refusal"] as? String, !refusal.isEmpty {
+                    throw KieError.task("Модель отказала в ответе: " + String(refusal.prefix(150)))
+                }
+            }
+            let reason = choice["finish_reason"] as? String ?? "неизвестна"
+            let usage = body["usage"] as? [String: Any]
+            let tokens = (usage?["completion_tokens"] as? NSNumber)?.intValue ?? 0
+            let thinking = (usage?["completion_tokens_details"] as? [String: Any])?
+                ["reasoning_tokens"] as? NSNumber
+            if reason == "length" {
+                throw KieError.task("Модель исчерпала лимит ответа (\(tokens) токенов). Укороти задачу или повтори.")
+            }
+            if reason == "content_filter" {
+                throw KieError.task("Ответ ограничен фильтром содержимого.")
+            }
+            if let thinking, thinking.intValue > 0 {
+                throw KieError.task("Модель потратила \(thinking.intValue) токенов на размышление, но не выдала текста. Повтори с более коротким запросом.")
+            }
+            throw KieError.task("Сервер вернул пустой ответ (причина завершения: \(reason)). Попробуй ещё раз.")
+        }
+        if let candidates = body["candidates"] as? [[String: Any]],
+           let candidate = candidates.first {
+            if let parts = (candidate["content"] as? [String: Any])?["parts"] as? [[String: Any]] {
+                let joined = parts.filter { ($0["thought"] as? Bool) != true }
+                    .compactMap { $0["text"] as? String }.joined(separator: "\n")
+                if !joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return joined.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            let reason = candidate["finishReason"] as? String ?? "неизвестна"
+            throw KieError.task("Gemini не вернул текст (причина: \(reason)).")
+        }
+        // No body or unexpected schema: avoid printing payloads, which can contain user content.
+        throw KieError.task("Ответ сервера имеет неизвестный формат (нет choices/candidates).")
+    }
+
+    static func chat(system: String, text: String, image: Data? = nil,
+                     maxTokens: Int = 4096) async throws -> String {
         var content: [[String: Any]] = [["type": "text", "text": text]]
         if let image {
             content.append(["type": "image_url", "image_url": ["url": try await uploadImage(image)]])
         }
-        let payload: [String: Any] = ["model": textModel, "stream": false, "max_tokens": maxTokens,
-                                      "messages": [["role": "system", "content": system], ["role": "user", "content": content]]]
-        let b = try await send(try request(api + textPath, json: payload, timeout: 180))
-        var out = ""
-        if let c = (b["choices"] as? [[String: Any]])?.first, let m = c["message"] as? [String: Any] {
-            if let s = m["content"] as? String { out = s }
-            if let parts = m["content"] as? [[String: Any]] { out = parts.compactMap { $0["text"] as? String }.joined() }
-        } else if let c = (b["candidates"] as? [[String: Any]])?.first,
-                  let parts = (c["content"] as? [String: Any])?["parts"] as? [[String: Any]] {
-            out = parts.filter { ($0["thought"] as? Bool) != true }.compactMap { $0["text"] as? String }.joined()
-        }
-        out = out.trimmingCharacters(in: .whitespacesAndNewlines)
-        if out.isEmpty { throw KieError.empty }
-        return out
+        let payload: [String: Any] = [
+            "model": textModel,
+            "stream": false,
+            // Requests with large renovation plans must reserve budget for the final text.
+            "max_tokens": max(512, maxTokens),
+            "reasoning_effort": "low",
+            "include_thoughts": false,
+            "messages": [
+                ["role": "system", "content": system],
+                ["role": "user", "content": content]
+            ]
+        ]
+        let body = try await send(try request(api + textPath, json: payload, timeout: 180))
+        return try extractChatText(body)
     }
 }
 

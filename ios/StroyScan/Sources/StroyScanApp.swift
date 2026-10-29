@@ -31,11 +31,11 @@ struct StroyScanApp: App {
 }
 
 enum Palette {
-    static let signal = Color(red: 0.89, green: 0.12, blue: 0.25)   // #E31F40 — алый акцент
+    static let signal = Color(red: 0.67, green: 0.39, blue: 0.075) // тёмный янтарь, читаемый белый текст
     static let ink = Color.primary                                 // адаптивный текст и контур
     static let black = Color(red: 0.035, green: 0.035, blue: 0.045) // #09090B — тёмные поверхности
-    static let draft = Color(red: 0.43, green: 0.075, blue: 0.15)  // #6E1326 — глубокий бордо
-    static let paper = Color(red: 0.045, green: 0.043, blue: 0.05) // #0B0B0D — фон приложения
+    static let draft = Color(red: 0.14, green: 0.20, blue: 0.25) // графитовая синева
+    static let paper = Color(red: 0.045, green: 0.060, blue: 0.075) // графитовый фон
 }
 
 enum AppMotion {

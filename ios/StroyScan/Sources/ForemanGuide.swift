@@ -195,7 +195,6 @@ struct ForemanGuideView: View {
     @State private var areaText = "20"
     @State private var generated = false
     @State private var finished: Set<Int> = []
-    @State private var savedPlans: [String] = []
     @State private var message: String?
 
     private var area: Double? {
@@ -235,14 +234,29 @@ struct ForemanGuideView: View {
                     Text("Что нужно сделать?").font(.headline)
                     TextEditor(text: $task)
                         .frame(height: 95)
+                        .onChange(of: task) { value in
+                            generated = false
+                            if let detected = ForemanGuide.Job.detect(value) { selected = detected }
+                        }
                         .padding(6)
                         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                         .accessibilityLabel("Описание строительной работы")
+                    Text("Примеры задач").font(.caption.bold()).foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            example("ГКЛ", text: "Потолок из ГКЛ, два слоя под покраску", job: .ceiling)
+                            example("Электрика", text: "Провести электрику, розетки и освещение", job: .electric)
+                            example("Санузел", text: "Ремонт санузла под ключ с сантехникой, плиткой и электрикой", job: .bathroom)
+                            example("Шпаклёвка", text: "Шпаклёвка стен под покраску", job: .putty)
+                            example("Плитка", text: "Укладка плитки в ванной", job: .tile)
+                        }
+                    }
                     Picker("Вид работы", selection: $selected) {
                         ForEach(ForemanGuide.Job.allCases) { job in
                             Text(job.rawValue).tag(job)
                         }
                     }.pickerStyle(.menu)
+                    .onChange(of: selected) { _ in generated = false }
                     if let floor = initialFloorArea, let walls = initialWallArea {
                         HStack {
                             Button("Пол / потолок · \(ForemanGuide.rounded(floor)) м²") {
@@ -262,7 +276,6 @@ struct ForemanGuideView: View {
                         .keyboardType(.decimalPad)
                         .textFieldStyle(.roundedBorder)
                     Button {
-                        if let detected = ForemanGuide.Job.detect(task) { selected = detected }
                         guard area != nil else { message = "Укажи площадь больше нуля и до 10 000 м²."; return }
                         finished = []
                         generated = true
@@ -272,7 +285,7 @@ struct ForemanGuideView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Palette.signal)
-                    Text("Сейчас доступны 5 типовых работ. Для сложных задач приложение не придумывает технологию — нужен проект или специалист.")
+                    Text("15 видов работ офлайн. Если приложение выбрало не тот вид работы, измени его вручную. Сложные задачи можно разобрать в «Нейросети → План работ ИИ».")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding()
@@ -342,6 +355,16 @@ struct ForemanGuideView: View {
         } message: {
             Text(message ?? "")
         }
+    }
+
+    private func example(_ title: String, text: String, job: ForemanGuide.Job) -> some View {
+        Button(title) {
+            task = text
+            selected = job
+            generated = false
+        }
+        .buttonStyle(.bordered)
+        .font(.caption)
     }
 
     private func section(_ heading: String, icon: String, items: [String]) -> some View {

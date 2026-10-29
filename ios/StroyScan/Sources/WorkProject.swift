@@ -193,6 +193,11 @@ struct WorkProjectView: View {
                 }
                 if stage == .estimate {
                     NavigationLink {
+                        PetrovichPurchaseView(room: result)
+                    } label: {
+                        Label("Сформировать закупку для Петровича", systemImage: "cart.fill")
+                    }
+                    NavigationLink {
                         EstimateView(result: result)
                     } label: { Label("Открыть полную смету", systemImage: "rublesign.circle") }
                     NavigationLink {

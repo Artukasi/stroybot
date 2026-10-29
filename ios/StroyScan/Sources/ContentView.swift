@@ -44,9 +44,8 @@ struct ContentView: View {
                             Text("Сканер работает на iPhone 12 Pro и новее (модели Pro) и iPad Pro. Без лидара работают «Нейросети», замер и уровень.")
                                 .foregroundStyle(.secondary)
                         }
-                    } else {
-                        actions
                     }
+                    actions
                     queueCard
                     BackupCard()
                     connection
@@ -186,6 +185,7 @@ struct ContentView: View {
 
     private var actions: some View {
         VStack(spacing: 10) {
+            if RoomCaptureSession.isSupported {
             Button { request = ScanRequest(mode: .room) } label: {
                 Label("Сканировать комнату", systemImage: "viewfinder")
                     .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 18)
@@ -193,6 +193,7 @@ struct ContentView: View {
                     .foregroundStyle(Palette.ink)
             }
             .buttonStyle(PressStyle())
+            }
             Button { path.append(Route.foreman) } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "hammer.fill").font(.title2).foregroundStyle(Palette.signal)
@@ -224,6 +225,7 @@ struct ContentView: View {
                             in: RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(PressStyle())
+            if RoomCaptureSession.isSupported {
             HStack(spacing: 10) {
                 tile("Квартира целиком", "square.split.2x2", "комнаты подряд, общий план") {
                     request = ScanRequest(mode: .flat)
@@ -232,6 +234,7 @@ struct ContentView: View {
                     hub.pause()
                     measuring = true
                 }
+            }
             }
             HStack(spacing: 10) {
                 tile("Ровность", "square.grid.3x3.middle.filled", "горбы и ямы пола и стен") {

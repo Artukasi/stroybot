@@ -98,8 +98,8 @@ struct DraftRouteView: View {
                 } else {
                     Picker("Откуда", selection: $startID) {
                         Text("Выберите").tag(nil as UUID?)
-                        ForEach(Array(candidates.enumerated()), id: \.element.id) { i, p in
-                            Text(title(p, at: i)).tag(p.id as UUID?)
+                        ForEach(candidates.indices, id: \.self) { i in
+                            Text(title(candidates[i], at: i)).tag(candidates[i].id as UUID?)
                         }
                     }
                     Picker("Куда", selection: $endID) {

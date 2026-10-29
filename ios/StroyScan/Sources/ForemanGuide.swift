@@ -188,6 +188,8 @@ enum ForemanGuide {
 
 /// Простая рабочая версия: офлайн-шаблоны, расчёт, отметки шагов и передача плана клиенту.
 struct ForemanGuideView: View {
+    var initialFloorArea: Double? = nil
+    var initialWallArea: Double? = nil
     @State private var task = ""
     @State private var selected: ForemanGuide.Job = .ceiling
     @State private var areaText = "20"
@@ -241,6 +243,20 @@ struct ForemanGuideView: View {
                             Text(job.rawValue).tag(job)
                         }
                     }.pickerStyle(.menu)
+                    if let floor = initialFloorArea, let walls = initialWallArea {
+                        HStack {
+                            Button("Пол / потолок · \(ForemanGuide.rounded(floor)) м²") {
+                                areaText = ForemanGuide.rounded(floor)
+                                generated = false
+                            }
+                            Button("Стены · \(ForemanGuide.rounded(walls)) м²") {
+                                areaText = ForemanGuide.rounded(walls)
+                                generated = false
+                            }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
                     Text("Площадь работ, м²").font(.subheadline)
                     TextField("Например, 50", text: $areaText)
                         .keyboardType(.decimalPad)
@@ -311,7 +327,12 @@ struct ForemanGuideView: View {
             }
             .padding()
         }
-        .navigationTitle("Помощник прораба")
+.onAppear {
+            if let floor = initialFloorArea, !generated {
+                areaText = ForemanGuide.rounded(floor)
+            }
+        }
+                .navigationTitle("Помощник прораба")
         .navigationBarTitleDisplayMode(.inline)
         .alert("СтройСкан", isPresented: Binding(
             get: { message != nil },

@@ -43,10 +43,11 @@ private struct HubRow: View {
 }
 
 struct ObjectsHubView: View {
+    @State private var roomPath: [UUID] = []
     @EnvironmentObject private var store: ScanStore
     @EnvironmentObject private var hub: ScanHub
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $roomPath) {
             List {
                 Section {
                     NavigationLink {
@@ -76,7 +77,7 @@ struct ObjectsHubView: View {
                     Section("Квартиры") {
                         ForEach(store.flats) { flat in
                             NavigationLink {
-                                FlatView(id: flat.id) { _ in }
+                                FlatView(id: flat.id) { roomPath.append($0) }
                             } label: {
                                 HubRow(title: flat.name, detail: "\(flat.rooms.count) комнат",
                                        symbol: "building.2")
@@ -99,11 +100,15 @@ struct ObjectsHubView: View {
                 }
             }
             .navigationTitle("Мои объекты")
+            .navigationDestination(for: UUID.self) { id in
+                SavedRoomView(id: id) {}
+            }
         }
     }
 }
 
 struct ScanToolsHubView: View {
+    @State private var roomPath: [UUID] = []
     @EnvironmentObject private var store: ScanStore
     @EnvironmentObject private var hub: ScanHub
     @State private var request: ScanRequest?
@@ -114,7 +119,7 @@ struct ScanToolsHubView: View {
     @State private var lastFlatID: UUID?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $roomPath) {
             List {
                 Section {
                     if RoomCaptureSession.isSupported {
@@ -175,12 +180,15 @@ struct ScanToolsHubView: View {
                 if let lastFlatID {
                     Section("Последняя квартира") {
                         NavigationLink {
-                            FlatView(id: lastFlatID) { _ in }
+                            FlatView(id: lastFlatID) { roomPath.append($0) }
                         } label: { HubRow(title: "Открыть квартиру", detail: "Комнаты и общий план", symbol: "square.stack") }
                     }
                 }
             }
             .navigationTitle("Сканер")
+            .navigationDestination(for: UUID.self) { id in
+                SavedRoomView(id: id) {}
+            }
         }
         .fullScreenCover(item: $request) { req in
             ScanScreen(mode: req.mode, arSession: hub.session()) { outcome in

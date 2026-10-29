@@ -8,6 +8,7 @@ enum GKLFrame {
     enum Mode: String, CaseIterable, Identifiable {
         case wall = "Стена / облицовка"
         case ceiling = "Потолок"
+        case partition = "Новая перегородка"
         var id: String { rawValue }
     }
     struct Beam {
@@ -23,7 +24,7 @@ enum GKLFrame {
         var stock3m: Int { Int(ceil(meters * 1.12 / 3)) }
     }
     static func room(_ r: RoomResult) -> Room3D { Room3D(r) }
-    static func generate(_ r: RoomResult, mode: Mode, wallIndex: Int, spacing: Float, drop: Float) -> Layout {
+    static func generate(_ r: RoomResult, mode: Mode, selectedWalls: Set<Int>, spacing: Float, drop: Float, partitionAngle: Float = 0, partitionLength: Float = 2) -> Layout {
         let room = Room3D(r)
         let step = max(0.3, min(spacing, 0.9))
         let h = room.height
@@ -33,7 +34,7 @@ enum GKLFrame {
             beams.append(Beam(a: a, b: b, label: label))
         }
         if mode == .wall {
-            guard room.walls.indices.contains(wallIndex) else { return Layout(beams: [], height: h) }
+            for wallIndex in room.walls.indices where selectedWalls.contains(wallIndex) {
             let wall = room.walls[wallIndex]
             let openings = room.openings[wallIndex]
             let inward: Float = 0.075
@@ -62,6 +63,28 @@ enum GKLFrame {
                 add(p(rr, 0), p(rr, h), "Край проёма: схема усиления")
                 add(p(l, op.top), p(rr, op.top), "Перемычка сверху")
                 if op.bottom > 0.05 { add(p(l, op.bottom), p(rr, op.bottom), "Перемычка снизу") }
+            }
+            }
+        } else if mode == .partition {
+            let angle = partitionAngle * .pi / 180
+            let dir = SIMD2<Float>(cos(angle), sin(angle))
+            let c = room.centroid
+            let extent = max(0.5, min(partitionLength, 12))
+            let a = c - dir * (extent / 2)
+            let b = c + dir * (extent / 2)
+            let inside = (0...20).allSatisfy { i in room.inside(a + (b - a) * (Float(i) / 20)) }
+            if inside {
+                func p(_ distance: Float, _ height: Float) -> SIMD3<Float> {
+                    let q = a + dir * distance
+                    return SIMD3(q.x, height, q.y)
+                }
+                add(p(0, 0), p(extent, 0), "Нижняя направляющая")
+                add(p(0, h), p(extent, h), "Верхняя направляющая")
+                let n = Int(ceil(extent / step))
+                for i in 0...min(n, 200) {
+                    let x = min(Float(i) * step, extent)
+                    add(p(x, 0), p(x, h), "Стойка")
+                }
             }
         } else {
             let y = max(1.9, h - max(0.08, min(drop, h - 1.85)))
@@ -175,14 +198,17 @@ enum GKLFrame {
 struct GKLFrameView: View {
     let result: RoomResult
     @State private var mode: GKLFrame.Mode = .wall
-    @State private var wall = 0
+    @State private var selectedWalls: Set<Int> = [0]
+    @State private var partitionAngle = 0.0
+    @State private var partitionLength = 2.0
     @State private var spacing = 0.6
     @State private var drop = 0.15
 
     private var geo: Room3D { Room3D(result) }
     private var layout: GKLFrame.Layout {
-        GKLFrame.generate(result, mode: mode, wallIndex: wall,
-                          spacing: Float(spacing), drop: Float(drop))
+        GKLFrame.generate(result, mode: mode, selectedWalls: selectedWalls,
+                          spacing: Float(spacing), drop: Float(drop),
+                          partitionAngle: Float(partitionAngle), partitionLength: Float(partitionLength))
     }
     private var report: String {
         let mat = layout
@@ -190,6 +216,8 @@ struct GKLFrameView: View {
         СтройСкан — ЭСКИЗ КАРКАСА ГКЛ
         Помещение: \(result.room)
         Режим: \(mode.rawValue)
+        Выбранные стены: \(selectedWalls.sorted().map { String($0 + 1) }.joined(separator: ", "))
+        Направление перегородки: \(Int(partitionAngle))° · длина: \(String(format: "%.1f", partitionLength)) м
         Шаг предварительной раскладки: \(Int((spacing * 100).rounded())) см
         Профили на 3D-схеме: \(mat.beams.count) отрезков
         Общая геометрическая длина: \(String(format: "%.1f", mat.meters)) м
@@ -206,18 +234,53 @@ struct GKLFrameView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Схема каркаса по LiDAR")
                     .font(.title2.bold())
-                Text("Оранжевым показаны предполагаемые профили. Поворачивай 3D-модель пальцем и приближай двумя пальцами.")
+                Text("Выбери стены либо новую перегородку. Оранжевые профили появятся на 3D-модели; её можно вращать и приближать.")
                     .font(.subheadline).foregroundStyle(.secondary)
                 Picker("Конструкция", selection: $mode) {
                     ForEach(GKLFrame.Mode.allCases) { value in Text(value.rawValue).tag(value) }
                 }.pickerStyle(.segmented)
                 if mode == .wall {
-                    Picker("Существующая стена", selection: $wall) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Где поставить ГКЛ?").font(.headline)
+                            Spacer()
+                            Button("Все") { selectedWalls = Set(geo.walls.indices) }
+                            Button("Сброс") { selectedWalls = [] }
+                        }
+                        Text("Отметь одну или несколько стен. Модель обновится сразу.")
+                            .font(.caption).foregroundStyle(.secondary)
                         ForEach(geo.walls.indices, id: \.self) { index in
-                            Text("Стена \(index + 1) · \(String(format: "%.2f", geo.walls[index].length)) м")
-                                .tag(index)
+                            Toggle(isOn: Binding(
+                                get: { selectedWalls.contains(index) },
+                                set: { value in
+                                    if value { selectedWalls.insert(index) }
+                                    else { selectedWalls.remove(index) }
+                                }
+                            )) {
+                                Text("Стена \(index + 1) · \(String(format: "%.2f", geo.walls[index].length)) м")
+                            }
+                            .tint(Palette.signal)
                         }
                     }
+                    .padding()
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                }
+                if mode == .partition {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Новая ненесущая перегородка").font(.headline)
+                        Text("Эскиз строится от центра комнаты. Укажи направление и длину. Двери и согласования учитываются отдельно.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack { Text("Поворот"); Spacer(); Text("\(Int(partitionAngle))°") }
+                        Slider(value: $partitionAngle, in: 0...175, step: 5)
+                        HStack { Text("Длина"); Spacer(); Text(String(format: "%.1f м", partitionLength)) }
+                        Slider(value: $partitionLength, in: 0.5...8.0, step: 0.1)
+                        if layout.beams.isEmpty {
+                            Label("Перегородка за пределами комнаты. Уменьши длину или измени направление.", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange).font(.caption)
+                        }
+                    }
+                    .padding()
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 }
                 HStack {
                     Text("Шаг профилей")
@@ -241,7 +304,7 @@ struct GKLFrameView: View {
                     .frame(height: 365)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 17))
-                    .id("\(mode.rawValue)-\(wall)-\(spacing)-\(drop)")
+                    .id("\(mode.rawValue)-\(selectedWalls.sorted())-\(spacing)-\(drop)-\(partitionAngle)-\(partitionLength)")
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Предварительная ведомость", systemImage: "list.bullet.rectangle")
                         .font(.headline)

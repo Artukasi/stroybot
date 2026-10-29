@@ -196,8 +196,8 @@ enum Kie {
             let reason = choice["finish_reason"] as? String ?? "неизвестна"
             let usage = body["usage"] as? [String: Any]
             let tokens = (usage?["completion_tokens"] as? NSNumber)?.intValue ?? 0
-            let thinking = (usage?["completion_tokens_details"] as? [String: Any])?
-                ["reasoning_tokens"] as? NSNumber
+            let details = usage?["completion_tokens_details"] as? [String: Any]
+            let thinking = details?["reasoning_tokens"] as? NSNumber
             if reason == "length" {
                 throw KieError.task("Модель исчерпала лимит ответа (\(tokens) токенов). Укороти задачу или повтори.")
             }

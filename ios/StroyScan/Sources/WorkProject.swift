@@ -193,7 +193,20 @@ struct WorkProjectView: View {
                 }
                 if stage == .estimate {
                     NavigationLink {
-                        PetrovichPurchaseView(room: result)
+                        PetrovichPurchaseView(room: result) { chosen in
+                            model.edit { data in
+                                for item in chosen {
+                                    let key = "petrovich:" + item.id
+                                    let qty = "\(item.packages) \(item.package)"
+                                    if let index = data.shopping.firstIndex(where: { $0.notes == key }) {
+                                        data.shopping[index].quantity = qty
+                                    } else {
+                                        data.shopping.append(.init(title: item.name, quantity: qty,
+                                                                   notes: key))
+                                    }
+                                }
+                            }
+                        }
                     } label: {
                         Label("Сформировать закупку для Петровича", systemImage: "cart.fill")
                     }

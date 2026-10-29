@@ -176,6 +176,17 @@ struct PetrovichPurchaseView: View {
                     TextField("20", text: $floorText).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
             }
+            if let room, selected.contains(.drywall), !room.wallLines.isEmpty {
+                Section("Профили ГКЛ по LiDAR") {
+                    NavigationLink {
+                        GKLFrameView(result: room)
+                    } label: {
+                        Label("Посчитать профили по выбранным стенам в 3D", systemImage: "square.grid.3x3")
+                    }
+                    Text("Нужны стены, проёмы и схема каркаса. По одним м² закупать профили нельзя.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Какие работы?") {
                 ForEach(PurchasePlanner.Trade.allCases) { trade in
                     Toggle(trade.rawValue, isOn: Binding(
@@ -193,14 +204,14 @@ struct PetrovichPurchaseView: View {
                     }
                 }
                 if selected.contains(.putty) {
-                    LabeledContent("Шпаклёвка: \(PurchasePlanner.format(puttyThickness)) мм") {}
+                    Text("Шпаклёвка: \(PurchasePlanner.format(puttyThickness)) мм")
                     Slider(value: $puttyThickness, in: 0.5...5, step: 0.5)
                 }
                 if selected.contains(.screed) {
-                    LabeledContent("Стяжка: \(Int(screedThickness)) мм") {}
+                    Text("Стяжка: \(Int(screedThickness)) мм")
                     Slider(value: $screedThickness, in: 10...150, step: 5)
                 }
-                LabeledContent("Запас покрытия: \(Int(reservePercent))%") {}
+                Text("Запас покрытия: \(Int(reservePercent))%")
                 Slider(value: $reservePercent, in: 5...25, step: 5)
                 Text("По площади нельзя определить стоечные профили, крепления, электрокабель, трубы и фитинги. Для них используй 3D-каркас / инженерные схемы и уточни проект.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -265,8 +276,8 @@ struct PetrovichPurchaseView: View {
                 Link(destination: URL(string: "https://petrovich.ru/")!) {
                     Label("Открыть Петрович и подобрать артикулы", systemImage: "cart")
                 }
-                Link(destination: URL(string: "https://petrovich.ru/kalkulyator-remonta/raschet-stoimosti/")!) {
-                    Label("Калькулятор ремонта Петровича", systemImage: "calculator")
+                Link(destination: URL(string: "https://moscow.petrovich.ru/kalkulyator-remonta/raschet-stoimosti/")!) {
+                    Label("Калькулятор Петровича (пример: Москва)", systemImage: "calculator")
                 }
                 Text("Пока нет подтверждённого публичного интерфейса для заполнения сторонней корзины Петровича. Приложение не добавляет позиции и не оформляет заказ от твоего имени. Артикулы, наличие, цены и доставка проверяются на сайте.")
                     .font(.caption).foregroundStyle(.secondary)

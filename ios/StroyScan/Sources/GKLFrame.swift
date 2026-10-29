@@ -24,7 +24,7 @@ enum GKLFrame {
         var stock3m: Int { Int(ceil(meters * 1.12 / 3)) }
     }
     static func room(_ r: RoomResult) -> Room3D { Room3D(r) }
-    static func generate(_ r: RoomResult, mode: Mode, selectedWalls: Set<Int>, spacing: Float, drop: Float, partitionAngle: Float = 0, partitionLength: Float = 2) -> Layout {
+    static func generate(_ r: RoomResult, mode: Mode, selectedWalls: Set<Int>, spacing: Float, drop: Float, partitionAngle: Float = 0, partitionLength: Float = 2, offsetX: Float = 0, offsetY: Float = 0) -> Layout {
         let room = Room3D(r)
         let step = max(0.3, min(spacing, 0.9))
         let h = room.height
@@ -68,7 +68,7 @@ enum GKLFrame {
         } else if mode == .partition {
             let angle = partitionAngle * .pi / 180
             let dir = SIMD2<Float>(cos(angle), sin(angle))
-            let c = room.centroid
+            let c = room.centroid + SIMD2<Float>(offsetX, offsetY)
             let extent = max(0.5, min(partitionLength, 12))
             let a = c - dir * (extent / 2)
             let b = c + dir * (extent / 2)
@@ -201,6 +201,8 @@ struct GKLFrameView: View {
     @State private var selectedWalls: Set<Int> = [0]
     @State private var partitionAngle = 0.0
     @State private var partitionLength = 2.0
+    @State private var offsetX = 0.0
+    @State private var offsetY = 0.0
     @State private var spacing = 0.6
     @State private var drop = 0.15
 
@@ -208,7 +210,8 @@ struct GKLFrameView: View {
     private var layout: GKLFrame.Layout {
         GKLFrame.generate(result, mode: mode, selectedWalls: selectedWalls,
                           spacing: Float(spacing), drop: Float(drop),
-                          partitionAngle: Float(partitionAngle), partitionLength: Float(partitionLength))
+                          partitionAngle: Float(partitionAngle), partitionLength: Float(partitionLength),
+                          offsetX: Float(offsetX), offsetY: Float(offsetY))
     }
     private var report: String {
         let mat = layout
@@ -217,6 +220,7 @@ struct GKLFrameView: View {
         Помещение: \(result.room)
         Режим: \(mode.rawValue)
         Выбранные стены: \(selectedWalls.sorted().map { String($0 + 1) }.joined(separator: ", "))
+        Смещение от центра: X \(String(format: "%.1f", offsetX)) м, Y \(String(format: "%.1f", offsetY)) м
         Направление перегородки: \(Int(partitionAngle))° · длина: \(String(format: "%.1f", partitionLength)) м
         Шаг предварительной раскладки: \(Int((spacing * 100).rounded())) см
         Профили на 3D-схеме: \(mat.beams.count) отрезков
@@ -274,6 +278,12 @@ struct GKLFrameView: View {
                         Slider(value: $partitionAngle, in: 0...175, step: 5)
                         HStack { Text("Длина"); Spacer(); Text(String(format: "%.1f м", partitionLength)) }
                         Slider(value: $partitionLength, in: 0.5...8.0, step: 0.1)
+                        Text("Расположение перегородки").font(.subheadline.bold())
+                        HStack { Text("Сдвиг вправо / влево"); Spacer(); Text(String(format: "%.1f м", offsetX)) }
+                        Slider(value: $offsetX, in: -4...4, step: 0.1)
+                        HStack { Text("Сдвиг вперёд / назад"); Spacer(); Text(String(format: "%.1f м", offsetY)) }
+                        Slider(value: $offsetY, in: -4...4, step: 0.1)
+                        Button("Вернуть перегородку в центр") { offsetX = 0; offsetY = 0; partitionAngle = 0 }
                         if layout.beams.isEmpty {
                             Label("Перегородка за пределами комнаты. Уменьши длину или измени направление.", systemImage: "exclamationmark.triangle")
                                 .foregroundStyle(.orange).font(.caption)
@@ -304,7 +314,7 @@ struct GKLFrameView: View {
                     .frame(height: 365)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 17))
-                    .id("\(mode.rawValue)-\(selectedWalls.sorted())-\(spacing)-\(drop)-\(partitionAngle)-\(partitionLength)")
+                    .id("\(mode.rawValue)-\(selectedWalls.sorted())-\(spacing)-\(drop)-\(partitionAngle)-\(partitionLength)-\(offsetX)-\(offsetY)")
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Предварительная ведомость", systemImage: "list.bullet.rectangle")
                         .font(.headline)

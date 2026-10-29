@@ -72,24 +72,24 @@ enum PurchasePlanner {
                 ]
             case .putty:
                 items += [
-                    item(trade, "mix", "Шпаклёвка финишная", a * max(0.5, min(5, puttyThickness)) * 1.2 * 1.1,
+                    item(trade, "mix", "Шпаклёвка финишная", ConstructionCalculator.puttyKg(a, mm: max(0.5, min(5, puttyThickness))),
                          "кг", 20, "меш. 20 кг", "Принят расход 1,2 кг/м² на каждый 1 мм +10%; по производителю"),
-                    item(trade, "primer", "Грунтовка для стен", a * 0.12 * 1.1,
+                    item(trade, "primer", "Грунтовка для стен", ConstructionCalculator.primerLiters(a) * 1.1,
                          "л", 10, "кан. 10 л", "Пример 0,12 л/м² на один слой, проверить совместимость")
                 ]
             case .paint:
                 items += [
-                    item(trade, "paint", "Краска интерьерная (2 слоя)", a * 0.24 * 1.10,
+                    item(trade, "paint", "Краска интерьерная (2 слоя)", ConstructionCalculator.paintLiters(a),
                          "л", 9, "вед. 9 л", "Расход 0,12 л/м² на слой условный; цвет и укрывистость влияют"),
-                    item(trade, "primer", "Грунтовка под покраску", a * 0.12,
+                    item(trade, "primer", "Грунтовка под покраску", ConstructionCalculator.primerLiters(a),
                          "л", 10, "кан. 10 л", "Может не требоваться для прочного загрунтованного основания")
                 ]
             case .wallTile, .floorTile:
                 let area = trade == .wallTile ? a : f
                 items += [
-                    item(trade, "tile", "Плитка / керамогранит", area * reserve,
+                    item(trade, "tile", "Плитка / керамогранит", ConstructionCalculator.tileArea(area, reserve: reserve - 1),
                          "м²", 1, "уп. ~1 м²", "Размер упаковки условный! Замените количеством м² из карточки выбранной плитки"),
-                    item(trade, "glue", "Клей для плитки", area * 5 * 1.1,
+                    item(trade, "glue", "Клей для плитки", ConstructionCalculator.tileGlueKg(area),
                          "кг", 25, "меш. 25 кг", "5 кг/м² пример: фактический расход зависит от гребёнки, формата и основания"),
                     item(trade, "grout", "Затирка швов", area * 0.5 * 1.1,
                          "кг", 2, "уп. 2 кг", "Очень грубо; нужен размер плитки, толщина и ширина шва")
@@ -105,11 +105,11 @@ enum PurchasePlanner {
                          "м", 10, "рул. 10 м", "Периметр условно квадратного помещения; при сложной геометрии нужен реальный периметр")
                 ]
             case .vinyl:
-                items.append(item(trade, "vinyl", "Кварц-винил", f * reserve,
+                items.append(item(trade, "vinyl", "Кварц-винил", ConstructionCalculator.tileArea(f, reserve: reserve - 1),
                                   "м²", 2, "уп. ~2 м²", "Количество м² в упаковке условно, замени по фактическому товару; клеевой/замковый отличаются"))
             case .plaster:
                 items += [
-                    item(trade, "mix", "Штукатурная смесь (10 мм)", a * 10 * 0.9 * 1.1,
+                    item(trade, "mix", "Штукатурная смесь (10 мм)", ConstructionCalculator.plasterKg(a),
                          "кг", 30, "меш. 30 кг", "0,9 кг/м² на 1 мм — условно; проверь допустимую толщину и расход"),
                     item(trade, "primer", "Грунт для основания", a * 0.12,
                          "л", 10, "кан. 10 л", "Тип грунта зависит от основания")

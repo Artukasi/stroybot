@@ -196,6 +196,7 @@ struct ForemanGuideView: View {
     @State private var generated = false
     @State private var finished: Set<Int> = []
     @State private var message: String?
+    @State private var planKey = ""
 
     private var area: Double? {
         guard let value = Double(areaText.replacingOccurrences(of: ",", with: ".")),
@@ -277,7 +278,10 @@ struct ForemanGuideView: View {
                         .textFieldStyle(.roundedBorder)
                     Button {
                         guard area != nil else { message = "Укажи площадь больше нуля и до 10 000 м²."; return }
-                        finished = []
+                        let key = "foreman." + selected.rawValue + "." + areaText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        planKey = key
+                        let done = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
+                        finished = Set(done)
                         generated = true
                     } label: {
                         Label("Составить план работ", systemImage: "list.bullet.clipboard")
@@ -285,6 +289,12 @@ struct ForemanGuideView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Palette.signal)
+                    NavigationLink {
+                        AIView()
+                    } label: {
+                        Label("Сложная задача? Открыть нейросети", systemImage: "sparkles")
+                    }
+                    .font(.subheadline)
                     Text("15 видов работ офлайн. Если приложение выбрало не тот вид работы, измени его вручную. Сложные задачи можно разобрать в «Нейросети → План работ ИИ».")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -314,6 +324,7 @@ struct ForemanGuideView: View {
                             Button {
                                 if finished.contains(index) { finished.remove(index) }
                                 else { finished.insert(index) }
+                                UserDefaults.standard.set(finished.sorted(), forKey: planKey)
                             } label: {
                                 HStack(alignment: .top, spacing: 10) {
                                     Image(systemName: finished.contains(index) ? "checkmark.circle.fill" : "circle")
@@ -330,6 +341,11 @@ struct ForemanGuideView: View {
                             Label("Отправить план и закупку", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                         }.buttonStyle(.borderedProminent).tint(Palette.signal)
+                        Button("Сбросить отметки этапов", role: .destructive) {
+                            finished = []
+                            UserDefaults.standard.removeObject(forKey: planKey)
+                        }
+                        .font(.subheadline)
                         Button("Скопировать текст плана") {
                             UIPasteboard.general.string = report
                             message = "План скопирован"

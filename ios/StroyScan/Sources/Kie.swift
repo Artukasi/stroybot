@@ -36,7 +36,7 @@ enum KieError: Error {
         case .noKey: return "Нужен ключ kie.ai: «Нейросети» → шестерёнка."
         case .money: return "На kie.ai закончились кредиты. Пополните баланс на kie.ai."
         case .http(401, _): return "Ключ kie.ai не подошёл. Проверьте его в настройках нейросетей."
-        case .http(let c, _): return "Нейросеть ответила ошибкой (\(c)). Попробуйте ещё раз."
+        case .http(let c, let details): return "Ошибка kie.ai (\(c)): \(details.isEmpty ? "проверь модель, баланс и подключение" : String(details.prefix(180)))"
         case .task(let why): return "Нейросеть не справилась: \(why). Попробуйте ещё раз."
         case .timeout: return "Нейросеть долго думает. Попробуйте ещё раз."
         case .empty: return "Нейросеть ответила пусто. Попробуйте ещё раз."
@@ -58,8 +58,18 @@ enum Kie {
     static let upload = "https://kieai.redpandaai.co"
 
     /// Модели можно поменять в настройках, если kie.ai переименует
-    static var textPath: String { UserDefaults.standard.string(forKey: "kie.textPath") ?? "/gemini-3-5-flash-openai/v1/chat/completions" }
-    static var textModel: String { UserDefaults.standard.string(forKey: "kie.textModel") ?? "gemini-3-5-flash" }
+    // Gemini 3.5 Flash was discontinued; migrate the shipped default while respecting custom models.
+    static let defaultTextPath = "/gemini-3-8-flash-openai/v1/chat/completions"
+    static let defaultTextModel = "gemini-3-8-flash"
+    static var textPath: String {
+        let saved = UserDefaults.standard.string(forKey: "kie.textPath")
+        return saved == nil || saved == "/gemini-3-5-flash-openai/v1/chat/completions"
+            ? defaultTextPath : saved!
+    }
+    static var textModel: String {
+        let saved = UserDefaults.standard.string(forKey: "kie.textModel")
+        return saved == nil || saved == "gemini-3-5-flash" ? defaultTextModel : saved!
+    }
     static let editModel = "google/nano-banana-edit"
     static let t2iModel = "google/nano-banana"
 
@@ -85,7 +95,14 @@ enum Kie {
         if status == 402 || code == 402 { throw KieError.money }
         if status == 401 || code == 401 { throw KieError.http(401, "") }
         if !(200...299).contains(status) {
-            throw KieError.http(status, String(data: data.prefix(300), encoding: .utf8) ?? "")
+            let detail = (body["msg"] as? String) ?? (body["message"] as? String) ?? ""
+            throw KieError.http(status, detail.isEmpty
+                ? (String(data: data.prefix(300), encoding: .utf8) ?? "") : detail)
+        }
+        // Kie.ai can return HTTP 200 with a failed business code.
+        if body["code"] != nil && code != 200 && code != 0 {
+            let detail = (body["msg"] as? String) ?? (body["message"] as? String) ?? ""
+            throw KieError.http(code, detail)
         }
         return body
     }
@@ -220,9 +237,9 @@ struct KieSettingsView: View {
                 Section {
                     TextField("Модель", text: $textModel).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Адрес", text: $textPath).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button("Как у бота по умолчанию") {
-                        textModel = "gemini-3-5-flash"
-                        textPath = "/gemini-3-5-flash-openai/v1/chat/completions"
+                    Button("Восстановить актуальную модель") {
+                        textModel = Kie.defaultTextModel
+                        textPath = Kie.defaultTextPath
                     }
                 } header: {
                     Text("Текстовая модель (обычно трогать не нужно)")

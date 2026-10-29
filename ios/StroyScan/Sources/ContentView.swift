@@ -42,6 +42,31 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HeroCard()
+                    if let current = store.scans
+                        .filter({ store.currentPlace == nil || $0.place == store.currentPlace })
+                        .sorted(by: { $0.updated > $1.updated }).first {
+                        NavigationLink(value: Route.room(current.id)) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Label("Продолжить работу", systemImage: "hammer.fill")
+                                        .font(.headline)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                }
+                                Text(current.room).font(.title3.bold())
+                                Text(String(format: "Пол %.1f м² · стены %.1f м²", current.floorArea, current.wallArea))
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                Text("Открыть комнату, 3D, проект ремонта и закупки")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(16)
+                            .background(Color(.secondarySystemGroupedBackground),
+                                        in: RoundedRectangle(cornerRadius: 18))
+                            .foregroundStyle(.primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     SigningBanner()
                     if !RoomCaptureSession.isSupported {
                         card {

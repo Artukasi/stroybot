@@ -141,6 +141,17 @@ struct WorkProjectView: View {
                 }
             } header: { Text("Объект") }
 
+            Section("Информация для заказчика") {
+                TextField("Название объекта", text: Binding(
+                    get: { model.document.title },
+                    set: { new in model.edit { $0.title = String(new.prefix(120)) } }
+                ))
+                TextField("Клиент / контакт", text: Binding(
+                    get: { model.document.client },
+                    set: { new in model.edit { $0.client = String(new.prefix(120)) } }
+                ))
+            }
+
             Section("Этапы проекта") {
                 ForEach(WorkProject.Phase.allCases) { phase in
                     Button {

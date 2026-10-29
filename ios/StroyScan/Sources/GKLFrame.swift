@@ -205,6 +205,8 @@ struct GKLFrameView: View {
     @State private var offsetY = 0.0
     @State private var spacing = 0.6
     @State private var drop = 0.15
+    @State private var sheetLayers = 1
+    @State private var partitionSides = 2
 
     private var geo: Room3D { Room3D(result) }
     private var layout: GKLFrame.Layout {
@@ -212,6 +214,11 @@ struct GKLFrameView: View {
                           spacing: Float(spacing), drop: Float(drop),
                           partitionAngle: Float(partitionAngle), partitionLength: Float(partitionLength),
                           offsetX: Float(offsetX), offsetY: Float(offsetY))
+    }
+    private var takeoff: GKLTakeoff.Summary {
+        GKLTakeoff.plan(room: result, mode: mode, selectedWalls: selectedWalls,
+                        partitionLength: partitionLength, layout: layout,
+                        layers: sheetLayers, sides: partitionSides)
     }
     private var report: String {
         let mat = layout
@@ -223,11 +230,15 @@ struct GKLFrameView: View {
         Смещение от центра: X \(String(format: "%.1f", offsetX)) м, Y \(String(format: "%.1f", offsetY)) м
         Направление перегородки: \(Int(partitionAngle))° · длина: \(String(format: "%.1f", partitionLength)) м
         Шаг предварительной раскладки: \(Int((spacing * 100).rounded())) см
+        Площадь обшивки: \(GKLTakeoff.format(takeoff.area)) м²
+        Листы: \(takeoff.sheets) шт., слоёв: \(sheetLayers)
         Профили на 3D-схеме: \(mat.beams.count) отрезков
         Общая геометрическая длина: \(String(format: "%.1f", mat.meters)) м
         Ориентир заготовок 3 м с запасом 12%: \(mat.stock3m) шт.
         Листы ГКЛ, подвесы, соединители, крепёж, усиления, фактический раскрой,
         нагрузка, геометрия конструкций и нормативный шаг рассчитываются отдельно.
+        МАТЕРИАЛЫ:
+        \(takeoff.items.map { "• \($0.title): \($0.quantity)" }.joined(separator: "\n"))
         Это НЕ монтажный проект. Шаг, крепления, допустимые нагрузки, проёмы и
         огнестойкость проверяются по конкретной сертифицированной системе.
         """
@@ -309,6 +320,24 @@ struct GKLFrameView: View {
                     }
                     Slider(value: $drop, in: 0.1...0.4, step: 0.05)
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Обшивка ГКЛ").font(.headline)
+                    Picker("Слоёв гипсокартона", selection: $sheetLayers) {
+                        Text("1 слой").tag(1)
+                        Text("2 слоя").tag(2)
+                        Text("3 слоя").tag(3)
+                    }.pickerStyle(.segmented)
+                    if mode == .partition {
+                        Picker("Стороны обшивки", selection: $partitionSides) {
+                            Text("1 сторона").tag(1)
+                            Text("2 стороны").tag(2)
+                        }.pickerStyle(.segmented)
+                    }
+                    Text("Листы считаются ориентировочно; раскрой и схема крепления требуют проверки.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding()
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 SceneView(scene: GKLFrame.scene(result, layout: layout),
                           options: [.allowsCameraControl, .autoenablesDefaultLighting])
                     .frame(height: 365)
@@ -323,6 +352,23 @@ struct GKLFrameView: View {
                     LabeledContent("Заготовки по 3 м (+12%)", value: "\(layout.stock3m) шт.")
                     Text("Количество профилей ориентировочное. Это не раскрой и не закупочная ведомость конкретной системы.")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding()
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                VStack(alignment: .leading, spacing: 9) {
+                    Label("Материалы по LiDAR-замеру", systemImage: "shippingbox.fill").font(.headline)
+                    LabeledContent("Чистая площадь", value: "\(GKLTakeoff.format(takeoff.area)) м²")
+                    LabeledContent("Листы ГКЛ 1200×2500", value: "\(takeoff.sheets) шт.")
+                    LabeledContent("Профили 3 м (предварительно)", value: "\(takeoff.profileCount) шт.")
+                    ForEach(takeoff.items) { item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.title).font(.subheadline.bold())
+                            Text(item.quantity).font(.subheadline).foregroundStyle(Palette.signal)
+                            Text(item.explanation).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                    }
                 }
                 .padding()
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))

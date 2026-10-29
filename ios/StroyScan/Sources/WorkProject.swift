@@ -226,6 +226,7 @@ struct WorkProjectView: View {
                             Text(row.title).font(.subheadline)
                             Spacer()
                             Text("\(Estimate.qty(row.qty, row.unit)) \(row.unit)").font(.caption)
+                            PetrovichMaterialLink(name: row.title)
                         }
                     }
                     Button("Перенести материалы в закупки") {
@@ -264,6 +265,7 @@ struct WorkProjectView: View {
                                 VStack(alignment: .leading) {
                                     Text(entry.title).foregroundStyle(.primary)
                                     Text(entry.quantity).font(.caption).foregroundStyle(.secondary)
+                                    PetrovichMaterialLink(name: entry.title)
                                 }
                                 Spacer()
                             }

@@ -203,6 +203,7 @@ struct KieSettingsView: View {
     @State private var textModel = Kie.textModel
     @State private var textPath = Kie.textPath
     @State private var checking = false
+    @State private var testing = false
     @State private var status: String?
 
     var body: some View {
@@ -230,6 +231,32 @@ struct KieSettingsView: View {
                     Text("Ключ kie.ai")
                 } footer: {
                     Text("Тот же ключ, что у бота (KIE_API_KEY). Взять или пополнить баланс: kie.ai → API Key. Ключ хранится только в связке ключей iPhone, в копии и файлы не попадает.")
+                }
+                Section {
+                    Button {
+                        Task {
+                            testing = true
+                            defer { testing = false }
+                            do {
+                                let response = try await Kie.chat(
+                                    system: "Проверка соединения. Ответь одним словом: Работает.",
+                                    text: "Проверка ИИ",
+                                    maxTokens: 80
+                                )
+                                status = "✅ ИИ отвечает: " + String(response.prefix(160))
+                            } catch {
+                                status = "❌ " + KieError.describe(error)
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            if testing { ProgressView() }
+                            Label("Проверить ответ ИИ", systemImage: "checkmark.shield")
+                        }
+                    }
+                    .disabled(!has || testing || checking)
+                    Text("Пробный запрос тратит небольшое количество кредитов kie.ai.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     Link(destination: URL(string: "https://kie.ai/api-key")!) { Label("Открыть kie.ai", systemImage: "safari") }

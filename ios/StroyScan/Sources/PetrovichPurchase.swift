@@ -111,6 +111,7 @@ enum PurchasePlanner {
 
 struct PetrovichPurchaseView: View {
     let room: RoomResult?
+    @StateObject private var ai = AIState()
     var onAddToProject: (([PurchasePlanner.Material]) -> Void)? = nil
     @State private var counts: [String: Int] = [:]
     @State private var imported = false
@@ -262,6 +263,17 @@ struct PetrovichPurchaseView: View {
                         Label("Добавить выбранные материалы в проект", systemImage: "tray.and.arrow.down")
                     }
                 }
+            }
+            Section("ИИ-проверка закупки") {
+                NavigationLink {
+                    AITextView(kind: .foreman, state: ai,
+                               prefill: "Я начинающий строитель. Проверь предварительную закупку, не выдумывай цены и артикулы Петровича. Уточни, какие материалы, инструменты и подготовительные работы пропущены, совместимость, количество и что нельзя рассчитать без данных. Отдельно перечисли вопросы, от которых зависит заказ. Список:\n" + report,
+                               placeholder: "Уточни основание, материалы, марку смеси, формат плитки и особые условия")
+                } label: {
+                    Label("ИИ: проверить, чего не хватает", systemImage: "sparkles")
+                }
+                Text("ИИ работает только с интернетом и ключом kie.ai; не видит актуальные цены, остатки и корзину Петровича.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Передать список в Петрович") {
                 Button {

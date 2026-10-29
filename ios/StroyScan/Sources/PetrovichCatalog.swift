@@ -89,7 +89,8 @@ struct PetrovichAnswerLinks: View {
                     .font(.headline)
                 Text("Открой нужный раздел, выбери товар по назначению и упаковке и добавь его в корзину магазина.")
                     .font(.caption).foregroundStyle(.secondary)
-                ForEach(matches, id: \.url) { match in
+                ForEach(matches.indices, id: \.self) { index in
+                    let match = matches[index]
                     Link(destination: match.url) {
                         HStack {
                             Text(match.name)

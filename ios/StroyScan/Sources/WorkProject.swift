@@ -89,6 +89,9 @@ final class WorkProjectStore: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(document).write(to: url, options: .atomic)
+            // Trigger existing backup scheduler even if no room scan was edited.
+            let defaults = UserDefaults.standard
+            defaults.set(defaults.integer(forKey: "store.changes") + 1, forKey: "store.changes")
             problem = nil
         } catch {
             problem = "Не удалось сохранить проект: \(error.localizedDescription)"

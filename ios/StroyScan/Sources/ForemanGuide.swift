@@ -9,6 +9,16 @@ enum ForemanGuide {
         case paint = "Покраска стен"
         case putty = "Шпаклёвка"
         case vinyl = "Кварц-винил"
+        case plumbing = "Сантехника и водоснабжение"
+        case sewer = "Канализация"
+        case electric = "Электромонтаж"
+        case heating = "Отопление и радиаторы"
+        case partition = "Перегородка из ГКЛ"
+        case floor = "Стяжка пола"
+        case waterproof = "Гидроизоляция"
+        case demolition = "Демонтаж"
+        case ventilation = "Вентиляция"
+        case bathroom = "Ремонт санузла комплексно"
         var id: String { rawValue }
         var unit: String { "м²" }
         var icon: String {
@@ -18,11 +28,30 @@ enum ForemanGuide {
             case .paint: return "paintbrush"
             case .putty: return "rectangle.on.rectangle"
             case .vinyl: return "square.grid.4x3.fill"
+            case .plumbing, .sewer: return "drop"
+            case .electric: return "bolt.fill"
+            case .heating: return "thermometer"
+            case .partition: return "rectangle.split.2x1"
+            case .floor: return "square.stack"
+            case .waterproof: return "drop.triangle"
+            case .demolition: return "hammer"
+            case .ventilation: return "wind"
+            case .bathroom: return "bathtub"
             }
         }
         static func detect(_ text: String) -> Job? {
             let value = text.lowercased()
+            if ["перегород", "фальшстен", "короб из гкл"].contains(where: value.contains) { return .partition }
             if ["потол", "гкл", "гипсокартон"].contains(where: value.contains) { return .ceiling }
+            if ["санузел под ключ", "ванную под ключ", "ремонт ванной", "ремонт санузла"].contains(where: value.contains) { return .bathroom }
+            if ["канализ", "слив", "фанов", "трап"].contains(where: value.contains) { return .sewer }
+            if ["водопровод", "сантех", "труб", "смесител", "унитаз", "раковин"].contains(where: value.contains) { return .plumbing }
+            if ["электр", "розет", "выключател", "провод", "кабел", "щиток"].contains(where: value.contains) { return .electric }
+            if ["отоплен", "радиатор", "батаре"].contains(where: value.contains) { return .heating }
+            if ["вентиляц", "вытяжк", "воздуховод"].contains(where: value.contains) { return .ventilation }
+            if ["гидроизоляц", "гидроизол"].contains(where: value.contains) { return .waterproof }
+            if ["демонтаж", "разобрат", "снести"].contains(where: value.contains) { return .demolition }
+            if ["стяжк", "наливной пол", "выравнивание пола"].contains(where: value.contains) { return .floor }
             if ["плитк", "керамогранит", "кафель"].contains(where: value.contains) { return .tile }
             if ["кварц", "винил", "ламинат"].contains(where: value.contains) { return .vinyl }
             if ["шпак", "шпатл", "выравниван"].contains(where: value.contains) { return .putty }
@@ -54,6 +83,8 @@ enum ForemanGuide {
     static func make(_ job: Job, area: Double, description: String) -> Plan {
         let a = max(0.1, min(area, 10000))
         switch job {
+        case .plumbing, .sewer, .electric, .heating, .partition, .floor, .waterproof, .demolition, .ventilation, .bathroom:
+            return AdvancedForeman.make(job, area: a, description: description)
         case .ceiling:
             return Plan(
                 title: "Подвесной потолок из гипсокартона",

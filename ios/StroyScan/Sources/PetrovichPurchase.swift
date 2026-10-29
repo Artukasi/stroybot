@@ -223,13 +223,15 @@ struct PetrovichPurchaseView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(items) { item in
-                    Button {
-                        if excluded.contains(item.id) { excluded.remove(item.id) }
-                        else { excluded.insert(item.id) }
-                    } label: {
-                        HStack(alignment: .top, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Button {
+                            if excluded.contains(item.id) { excluded.remove(item.id) }
+                            else { excluded.insert(item.id) }
+                        } label: {
                             Image(systemName: excluded.contains(item.id) ? "circle" : "checkmark.circle.fill")
                                 .foregroundStyle(excluded.contains(item.id) ? .secondary : Palette.signal)
+                        }
+                        .buttonStyle(.borderless)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.name).font(.subheadline.bold()).foregroundStyle(.primary)
                                 Text("\(count(item)) \(item.package) · \(PurchasePlanner.format(item.amount)) \(item.unit)")
@@ -249,9 +251,7 @@ struct PetrovichPurchaseView: View {
                                 }
                                 .foregroundStyle(.secondary)
                             }
-                        }
                     }
-                    .buttonStyle(.plain)
                 }
             }
             if let onAddToProject {

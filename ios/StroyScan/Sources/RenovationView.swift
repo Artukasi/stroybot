@@ -35,13 +35,71 @@ struct EditorScene: UIViewRepresentable {
     func updateUIView(_ uiView: SCNView, context: Context) {}
 }
 
+/// Небольшой экранный джойстик для прогулки по комнате.
+private struct WalkJoystick: View {
+    let onChange: (Float, Float) -> Void
+    @State private var knob = CGSize.zero
+
+    private let travel: CGFloat = 34
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.black.opacity(0.12))
+                .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white.opacity(0.72))
+                .offset(y: -25)
+                .allowsHitTesting(false)
+            Circle()
+                .fill(Palette.signal)
+                .frame(width: 42, height: 42)
+                .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                .shadow(color: .black.opacity(0.24), radius: 5, y: 2)
+                .offset(knob)
+                .allowsHitTesting(false)
+        }
+        .frame(width: 104, height: 104)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    let distance = hypot(dx, dy)
+                    let scale = distance > travel ? travel / distance : 1
+                    knob = CGSize(width: dx * scale, height: dy * scale)
+                    onChange(Float(knob.width / travel), Float(-knob.height / travel))
+                }
+                .onEnded { _ in
+                    withAnimation(.easeOut(duration: 0.16)) { knob = .zero }
+                    onChange(0, 0)
+                }
+        )
+        .accessibilityLabel("Движение по комнате")
+        .accessibilityHint("Потяните стик вперёд, назад или в сторону")
+    }
+}
+
 // MARK: - Экран «Ремонт в 3D»
 
 /// Ремонт в 3D по скану: крутить, смотреть из комнаты, менять отделку, свет, шторы и мебель.
 struct Renovation3DView: View {
     @EnvironmentObject var link: BotLink
+    @EnvironmentObject var hub: ScanHub
+    @EnvironmentObject var tiles: TileLibrary
     @StateObject private var editor: RenoEditor
     @Binding var look: Look
+    /// Электрика и сантехника комнаты
+    @Binding var engineering: Engineering
+    /// Телефон ещё в координатах скана: трубу со скана камерой можно поставить сразу на место
+    var liveScan = false
+    /// Отдельный экран «Электрика» или «Сантехника»: голая комната, только этот режим
+    var fixedMode: EngMode? = nil
+    /// Плитка комнаты (если экран может её сохранить)
+    var tiling: Binding<Tiling>? = nil
+    @State private var scanningPipe = false
     /// Отправить скан в бот (true — заново) и вернуть его номер
     let ensureScanId: (Bool) async throws -> Int
     @State private var scanId: Int?
@@ -51,17 +109,37 @@ struct Renovation3DView: View {
     @State private var alert: String?
     @State private var shot: RenderShot?
     @State private var share: ShareFile?
+    @State private var addingPiece = false
+    @State private var keySettings = false
 
-    init(result: RoomResult, look: Binding<Look>, scanId: Int?, ensureScanId: @escaping (Bool) async throws -> Int) {
-        _editor = StateObject(wrappedValue: RenoEditor(result: result, look: look.wrappedValue))
+    init(result: RoomResult, look: Binding<Look>, engineering: Binding<Engineering>, liveScan: Bool = false,
+         fixedMode: EngMode? = nil, tiling: Binding<Tiling>? = nil, scanId: Int?,
+         ensureScanId: @escaping (Bool) async throws -> Int) {
+        var r = result
+        r.engineering = engineering.wrappedValue
+        if let tiling { r.tiling = tiling.wrappedValue }
+        _editor = StateObject(wrappedValue: RenoEditor(result: r, look: look.wrappedValue))
         _look = look
+        _engineering = engineering
+        self.liveScan = liveScan
+        self.fixedMode = fixedMode
+        self.tiling = tiling
         _scanId = State(initialValue: scanId)
         self.ensureScanId = ensureScanId
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            styleChips
+            if fixedMode == nil {
+                Picker("Комната", selection: Binding(get: { editor.bare }, set: { editor.setBare($0) })) {
+                    Text("С ремонтом").tag(false)
+                    Text("Как есть").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 8)
+                if !editor.bare { styleChips }
+            }
             ZStack {
                 EditorScene(editor: editor)
                 if !editor.ready {
@@ -69,18 +147,42 @@ struct Renovation3DView: View {
                         .padding()
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
+                if editor.ready && !editor.inside {
+                    viewButtons
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                        .padding(.trailing, 10)
+                }
                 VStack(spacing: 0) {
                     modeBar
                     Spacer()
-                    if editor.pick == nil && editor.ready { hintBar }
+                    if editor.pick == nil && editor.ready && editor.engMode == .off {
+                        if editor.inside {
+                            walkBar
+                        } else if editor.bare {
+                            bareBar
+                        } else {
+                            hintBar
+                        }
+                    }
                 }
             }
-            if let pick = editor.pick {
-                EditPanel(editor: editor, pick: pick, alert: $alert)
+            if editor.engMode == .tile {
+                TilePanel(editor: editor)
+                realButton
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .background(Color(.secondarySystemGroupedBackground))
+            } else if editor.engMode != .off {
+                EngPanel(editor: editor) { scanningPipe = true }
+            } else if !editor.bare {
+                if let pick = editor.pick {
+                    EditPanel(editor: editor, pick: pick, alert: $alert)
+                }
+                bottomBar
             }
-            bottomBar
         }
-        .navigationTitle("Ремонт в 3D")
+        .navigationTitle(fixedMode == .electric ? "Электрика" : fixedMode == .plumbing ? "Сантехника"
+                         : fixedMode == .tile ? "Отделка" : "Ремонт в 3D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -95,15 +197,44 @@ struct Renovation3DView: View {
                 .accessibilityLabel("Поделиться")
             }
         }
-        .onAppear { editor.start() }
+        .onAppear {
+            if let fixedMode {
+                editor.setBare(true)
+                // мебель не мешает видеть стены; вернуть — кнопкой справа. Для плитки мебель видна: так понятнее дизайн
+                if fixedMode != .tile && !editor.furnitureHidden { editor.setFurnitureHidden(true) }
+                // на плитке — как человек оставил в прошлый раз
+                if fixedMode == .tile && UserDefaults.standard.bool(forKey: "tile.hideFurniture") { editor.setFurnitureHidden(true) }
+                if editor.engMode != fixedMode { editor.setEngMode(fixedMode) }
+            }
+            editor.setTileItems(tiles.tiles)
+            editor.start()
+        }
+        .onReceive(tiles.$tiles) { editor.setTileItems($0) }
+        .onReceive(editor.$tiling.dropFirst()) { t in tiling?.wrappedValue = t }
         .onDisappear { editor.stop() }
         .task { await syncLook() }
         .onReceive(editor.$look.dropFirst()) { new in
             look = new
             scheduleSave(new)
         }
+        .onReceive(editor.$eng.dropFirst()) { engineering = $0 }
+        .fullScreenCover(isPresented: $scanningPipe) {
+            PipeScanView(result: editor.result, arSession: liveScan ? hub.session() : nil) { pipe, anchored in
+                editor.addScannedPipe(pipe, anchored: anchored)
+            }
+        }
         .sheet(item: $share) { ActivitySheet(items: [$0.url]) }
         .fullScreenCover(item: $shot) { RenderResultView(shot: $0) }
+        .sheet(isPresented: $keySettings) { KieSettingsView() }
+        .sheet(isPresented: $addingPiece) {
+            CustomPieceAddView { piece, image in
+                switch editor.addCustom(piece, image: image) {
+                case .tooMany: alert = "Своих вещей можно поставить не больше \(CustomPiece.max)."
+                case .noRoom: alert = "Эта вещь не помещается в комнату: \(piece.sizeText)."
+                case .added: break
+                }
+            }
+        }
         .alert(alert ?? "", isPresented: Binding(get: { alert != nil }, set: { if !$0 { alert = nil } })) {
             Button("Понятно", role: .cancel) {}
         }
@@ -132,9 +263,9 @@ struct Renovation3DView: View {
 
     private var modeBar: some View {
         HStack(spacing: 8) {
-            Picker("Вид", selection: Binding(get: { editor.inside }, set: { editor.setInside($0) })) {
-                Text("Сверху").tag(false)
-                Text("Из комнаты").tag(true)
+            Picker("Режим просмотра", selection: Binding(get: { editor.inside }, set: { editor.setInside($0) })) {
+                Text("Модель").tag(false)
+                Text("Прогулка").tag(true)
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 240)
@@ -148,8 +279,77 @@ struct Renovation3DView: View {
                 .buttonStyle(.plain)
             }
             Spacer(minLength: 0)
+            Menu {
+                Button { editor.setBrightness(editor.brightness - 0.35) } label: { Label("Темнее", systemImage: "sun.min") }
+                Button { editor.setBrightness(0) } label: { Label("Как было", systemImage: "circle.lefthalf.filled") }
+                Button { editor.setBrightness(editor.brightness + 0.35) } label: { Label("Светлее", systemImage: "sun.max") }
+            } label: {
+                Image(systemName: "sun.max")
+                    .font(.footnote.bold())
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("Яркость")
         }
         .padding(10)
+    }
+
+    private var walkBar: some View {
+        HStack(spacing: 12) {
+            WalkJoystick { x, y in editor.setWalkInput(x: x, y: y) }
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Вы внутри комнаты", systemImage: "figure.walk")
+                    .font(.subheadline.bold())
+                Text("Свайпом осматривайтесь. Стик двигает вперёд, назад и в стороны.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    /// Кнопки справа: повернуть, сверху, вся комната, мебель
+    private var viewButtons: some View {
+        VStack(spacing: 10) {
+            roundButton("rotate.left", "Повернуть влево") { editor.turnOrbit(-1) }
+            roundButton("rotate.right", "Повернуть вправо") { editor.turnOrbit(1) }
+            roundButton(editor.topView ? "cube" : "square.dashed", editor.topView ? "Вид сбоку" : "Вид сверху",
+                        on: editor.topView) { editor.setTopView(!editor.topView) }
+            roundButton("arrow.up.left.and.arrow.down.right", "Вся комната") { editor.resetView() }
+            if editor.bare || editor.engMode != .off {
+                roundButton(editor.furnitureHidden ? "sofa" : "sofa.fill",
+                            editor.furnitureHidden ? "Показать мебель" : "Убрать мебель",
+                            on: editor.furnitureHidden) { editor.setFurnitureHidden(!editor.furnitureHidden) }
+            }
+        }
+    }
+
+    private func roundButton(_ icon: String, _ label: String, on: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(on ? AnyShapeStyle(Palette.signal) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
+                .foregroundStyle(Palette.ink)
+                .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// Комната «как есть»: что это и куда идти за электрикой
+    private var bareBar: some View {
+        Text("Комната как после скана: голые стены, мебель — коробками (убрать — кнопкой с диваном справа). Розетки и провода — кнопкой «Электрика» под планом, трубы — «Сантехника».")
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(10)
     }
 
     private var hintBar: some View {
@@ -183,6 +383,20 @@ struct Renovation3DView: View {
         .buttonStyle(.plain)
     }
 
+    /// «Как в жизни» на экране плитки: ИИ дорисует комнату с этой плиткой до фото
+    private var realButton: some View {
+        Button { Task { await makeReal() } } label: {
+            HStack(spacing: 8) {
+                if rendering { ProgressView() } else { Image(systemName: "camera.filters") }
+                Text(rendering ? "Рисую, до 3 минут…" : "Нейросеть: как будет в жизни").bold()
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 12)
+            .background(Palette.black, in: RoundedRectangle(cornerRadius: 14))
+            .foregroundStyle(.white)
+        }
+        .disabled(rendering || !editor.ready || editor.tiling.isEmpty)
+    }
+
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
@@ -199,7 +413,7 @@ struct Renovation3DView: View {
                 .disabled(rendering || !editor.ready)
             }
             if editor.pick == nil {
-                Text("«Как в жизни» — ИИ превратит вид из комнаты в фото. Тратит кредиты в боте.")
+                Text("«Как в жизни» — ИИ превратит вид из комнаты в фото. Нужен ключ kie.ai (Нейросети → ⚙️).")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -223,6 +437,9 @@ struct Renovation3DView: View {
                         }
                     }
                 }
+            }
+            Button { addingPiece = true } label: {
+                Label("Своя по ссылке или фото", systemImage: "link")
             }
             if editor.hasHidden {
                 Button { editor.restoreHidden() } label: {
@@ -265,12 +482,14 @@ struct Renovation3DView: View {
 
     /// Снимок 3D из комнаты → бот дорисовывает его до фото
     private func makeReal() async {
-        guard link.connected else {
-            alert = "Подключите бота на главном экране — фото рисует СтройБот."
+        guard Kie.ready || link.connected else {
+            keySettings = true
             return
         }
         rendering = true
         defer { rendering = false }
+        editor.setEngMode(.off)
+        editor.setBare(false)
         editor.select(nil)
         if !editor.inside {
             editor.setInside(true)
@@ -280,11 +499,25 @@ struct Renovation3DView: View {
             try? await Task.sleep(nanoseconds: 400_000_000)
         }
         let before = editor.snapshot()
+        // экран плитки: возвращаемся к голой комнате с плиткой
+        if let fixedMode {
+            editor.setBare(true)
+            editor.setEngMode(fixedMode)
+        }
         guard let jpeg = RoomResult.jpeg(before) else {
             alert = "Не получилось снять 3D. Попробуйте ещё раз."
             return
         }
         let current = editor.look
+        if Kie.ready {
+            do {
+                let url = try await RoomAI.render(editor.result, snapshot: jpeg, look: current)
+                shot = RenderShot(url: url, before: before, credits: nil)
+            } catch {
+                alert = KieError.describe(error)
+            }
+            return
+        }
         do {
             let answer: (image: URL, credits: Int?)
             do {
@@ -325,9 +558,12 @@ struct Renovation3DView: View {
 
 struct EditPanel: View {
     @ObservedObject var editor: RenoEditor
+    @EnvironmentObject var hub: ScanHub
     let pick: RenoEditor.Pick
     /// Сообщение на экране ремонта (вещь не помещается и т.п.)
     @Binding var alert: String?
+    /// Поставить вещь в настоящую комнату через камеру
+    @State private var arPiece: ARPiece?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -344,6 +580,18 @@ struct EditPanel: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground))
+        .fullScreenCover(item: $arPiece) { ARFurnitureView(piece: $0) }
+    }
+
+    /// Кнопка «В комнате через камеру»
+    private func arButton(title: String, kind: String, variant: String, color: String, w: Double, d: Double, h: Double) -> some View {
+        Button {
+            hub.pause()
+            arPiece = ARPiece(title: title, kind: kind, variant: variant, color: color, width: w, depth: d, height: h,
+                              palette: editor.look.palette)
+        } label: {
+            Label("Поставить в комнате через камеру", systemImage: "arkit").font(.subheadline.bold())
+        }
     }
 
     private var title: String {
@@ -356,6 +604,8 @@ struct EditPanel: View {
         case .object(let i): return editor.result.items.indices.contains(i) ? editor.result.items[i].title : "Мебель"
         case .added(let j):
             return editor.look.added.indices.contains(j) ? RoomResult.itemTitle(editor.look.added[j].kind) : "Мебель"
+        case .custom(let j):
+            return editor.tiling.pieces.indices.contains(j) ? editor.tiling.pieces[j].name : "Моя мебель"
         }
     }
 
@@ -379,6 +629,8 @@ struct EditPanel: View {
             object(i)
         case .added(let j):
             added(j)
+        case .custom(let j):
+            custom(j)
         }
     }
 
@@ -410,8 +662,12 @@ struct EditPanel: View {
             Swatches(colors: LookOptions.colors(kind: item.kind, variant: variant), selected: editor.color(ofItem: i)) {
                 editor.setObject(i, color: $0)
             }
-            Button(role: .destructive) { editor.hideObject(i) } label: {
-                Label("Убрать", systemImage: "trash").font(.subheadline.bold())
+            HStack(spacing: 16) {
+                arButton(title: item.title, kind: item.kind, variant: variant, color: editor.color(ofItem: i),
+                         w: item.width, d: item.depth, h: item.height)
+                Button(role: .destructive) { editor.hideObject(i) } label: {
+                    Label("Убрать", systemImage: "trash").font(.subheadline.bold())
+                }
             }
         }
     }
@@ -440,6 +696,50 @@ struct EditPanel: View {
                     Label("Убрать", systemImage: "trash").font(.subheadline.bold())
                 }
             }
+            arButton(title: RoomResult.itemTitle(a.kind), kind: a.kind, variant: a.variant, color: a.color,
+                     w: a.width, d: a.depth, h: a.height)
+        }
+    }
+
+    /// Своя вещь из магазина: влезает ли, пройдёт ли в дверь
+    @ViewBuilder private func custom(_ j: Int) -> some View {
+        if editor.tiling.pieces.indices.contains(j) {
+            let p = editor.tiling.pieces[j]
+            Text("\(p.sizeText). Двигайте пальцем по полу.").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                if !editor.customInRoom(j) {
+                    Label("Не влезает в комнату на этом месте", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                } else if let bump = editor.customBump(j) {
+                    Label("Задевает \(bump)", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                } else {
+                    Label("Встаёт свободно", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                }
+                if let door = editor.customPassesDoor(j) {
+                    let cm = Int((door.door * 100).rounded())
+                    if door.ok {
+                        Label("Пройдёт в дверь \(cm) см боком", systemImage: "door.left.hand.open").foregroundStyle(.green)
+                    } else {
+                        Label("В дверь \(cm) см не пройдёт — только в разобранном виде", systemImage: "door.left.hand.closed")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            HStack(spacing: 16) {
+                Button {
+                    if !editor.rotateCustom(j) { alert = "Повёрнутой эта вещь в комнату не помещается." }
+                } label: {
+                    Label("Повернуть", systemImage: "rotate.right").font(.subheadline.bold())
+                }
+                Button(role: .destructive) { editor.removeCustom(j) } label: {
+                    Label("Убрать", systemImage: "trash").font(.subheadline.bold())
+                }
+                if let link = p.link, let url = URL(string: link) {
+                    Link(destination: url) { Label("Магазин", systemImage: "safari").font(.subheadline.bold()) }
+                }
+            }
+            arButton(title: p.name, kind: "storage", variant: "default", color: "#c8c2b8",
+                     w: p.width, d: p.depth, h: p.height)
         }
     }
 

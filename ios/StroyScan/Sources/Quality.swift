@@ -10,7 +10,7 @@ extension RoomResult {
     static let maxIssueLength = 120
 
     /// Разбор готового скана (после «Готово») по выпрямленным стенам без копий
-    static func check(_ captured: CapturedRoom, _ r: RoomResult, _ rect: Rectify.Result) -> Quality {
+    static func check(_ captured: ScanParts, _ r: RoomResult, _ rect: Rectify.Result) -> Quality {
         var q = Quality()
         var found: [(Int, String)] = []     // (важность, текст)
         var penalty = 0
@@ -101,7 +101,7 @@ extension RoomResult {
         }
         q.weakWalls = q.weakWalls.filter { $0 >= 0 && $0 < n }
 
-        if #available(iOS 17.0, *), captured.floors.isEmpty, n >= 3 {
+        if captured.floorMissing, n >= 3 {
             found.append((2, "Пол не найден — медленно проведите камерой по полу всей комнаты."))
             penalty += 10
         }
@@ -194,7 +194,7 @@ extension RoomResult {
     }
 
     /// Чего ещё не видно, кроме мест «доснять»
-    static func liveExtras(_ room: CapturedRoom) -> [String] {
+    static func liveExtras(_ room: ScanParts) -> [String] {
         var out: [String] = []
         if room.doors.isEmpty && room.openings.isEmpty { out.append("Не видно двери — снимите вход в комнату целиком") }
         if room.objects.contains(where: { $0.confidence == .low }) {

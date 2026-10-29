@@ -320,3 +320,57 @@ def test_portfolio_in_mini_app(fresh_db, ai):
             assert (await c.delete(f"/api/portfolio/{item['id']}", headers=h)).status == 200
             assert (await (await c.get("/api/portfolio", headers=h)).json())["items"] == []
     asyncio.run(run())
+
+
+def test_scan_backup(fresh_db):
+    """Резервная копия приложения: только zip, только свой, новая заменяет старую."""
+    object.__setattr__(config, "bot_token", TOKEN)
+
+    async def run():
+        async with TestClient(TestServer(create_app(FakeBot()))) as c:
+            tokens = []
+            for user in (31, 32):
+                h = {"X-Telegram-Init-Data": sign({"id": user})}
+                code = (await (await c.post("/api/scan-code", headers=h)).json())["code"]
+                tokens.append((await (await c.post("/scan/pair", json={"code": code})).json())["token"])
+            a, b = ({"Authorization": f"Bearer {t}"} for t in tokens)
+            assert (await (await c.get("/scan/backup/info", headers=a)).json()) == {"exists": False}
+            assert (await c.get("/scan/backup", headers=a)).status == 404
+            assert (await c.put("/scan/backup", data=b"not a zip", headers=a)).status == 400
+            assert (await c.put("/scan/backup", data=b"PK\x03\x04", headers={"Authorization": "Bearer x"})).status == 401
+            assert (await c.put("/scan/backup", data=b"PK\x03\x04first", headers=a)).status == 200
+            assert (await c.put("/scan/backup", data=b"PK\x03\x04second", headers=a)).status == 200
+            info = await (await c.get("/scan/backup/info", headers=a)).json()
+            assert info["exists"] and info["size"] == 10
+            assert await (await c.get("/scan/backup", headers=a)).read() == b"PK\x03\x04second"
+            assert (await c.get("/scan/backup", headers=b)).status == 404
+    asyncio.run(run())
+
+
+def test_app_uses_ai_by_token(fresh_db, ai):
+    """Приложение на iPhone зовёт платные функции по ключу из /scanner: те же кредиты, только свои функции."""
+    object.__setattr__(config, "bot_token", TOKEN)
+    bot = FakeBot()
+
+    async def run():
+        async with TestClient(TestServer(create_app(bot))) as c:
+            h = {"X-Telegram-Init-Data": sign({"id": 41})}
+            code = (await (await c.post("/api/scan-code", headers=h)).json())["code"]
+            token = (await (await c.post("/scan/pair", json={"code": code})).json())["token"]
+            app = {"Authorization": f"Bearer {token}"}
+            before = (await (await c.get("/api/profile", headers=app)).json())["credits"]
+            r = await c.post("/api/ai/text", json={"kind": "estimate", "text": "ванная 4 м²"}, headers=app)
+            assert r.status == 200 and "<b>Ответ</b>" in (await r.json())["html"]
+            assert (await r.json())["credits"] == before - PRICES["estimate"]
+            r = await c.post("/api/ai/check", data=photo_form(note="шов"), headers=app)
+            assert r.status == 200
+            r = await c.post("/api/invoice", json={"pack": __import__("bot.config", fromlist=["PACKS"]).PACKS[0][0]}, headers=app)
+            assert (await r.json())["link"].startswith("https://t.me/")
+            # объекты и сканы Mini App ключом приложения не открыть, чужой ключ не подходит
+            assert (await c.get("/api/objects/archived", headers=app)).status == 401
+            assert (await c.get("/api/scans", headers=app)).status == 401
+            assert (await c.get("/api/profile", headers={"Authorization": "Bearer nope"})).status == 401
+            # кредиты общие с ботом
+            assert (await (await c.get("/api/profile", headers=h)).json())["credits"] == \
+                (await (await c.get("/api/profile", headers=app)).json())["credits"]
+    asyncio.run(run())

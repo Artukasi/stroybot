@@ -12,8 +12,10 @@ import html
 import json
 import logging
 import math
+import os
 import time
 from collections import defaultdict
+from pathlib import Path
 from urllib.parse import quote
 
 from aiohttp import web
@@ -439,6 +441,49 @@ async def scan_look_put(request: web.Request):
     return await _put_look(request, user_id, data.get("scan_id"), data.get("look"))
 
 
+# ---------- резервная копия приложения ----------
+
+BACKUP_MAX = 25 * 1024 * 1024
+
+
+def _backup_path(user_id: int) -> Path:
+    d = Path(config.db_path).resolve().parent / "backups"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{int(user_id)}.zip"
+
+
+async def scan_backup_put(request: web.Request):
+    """Копия всех сканов приложения (zip). Одна на пользователя, новая заменяет старую."""
+    user_id = await _scan_user(request)
+    data = await request.read()
+    if not data.startswith(b"PK"):
+        return web.json_response({"error": "zip expected"}, status=400)
+    if len(data) > BACKUP_MAX:
+        return web.json_response({"error": "too big"}, status=413)
+    path = _backup_path(user_id)
+    tmp = path.with_suffix(".tmp")
+    await asyncio.to_thread(tmp.write_bytes, data)
+    await asyncio.to_thread(os.replace, tmp, path)
+    return web.json_response({"ok": True, "size": len(data), "saved_at": int(path.stat().st_mtime)})
+
+
+async def scan_backup_info(request: web.Request):
+    user_id = await _scan_user(request)
+    path = _backup_path(user_id)
+    if not path.exists():
+        return web.json_response({"exists": False})
+    st = path.stat()
+    return web.json_response({"exists": True, "size": st.st_size, "saved_at": int(st.st_mtime)})
+
+
+async def scan_backup_get(request: web.Request):
+    user_id = await _scan_user(request)
+    path = _backup_path(user_id)
+    if not path.exists():
+        return web.json_response({"error": "no backup"}, status=404)
+    return web.Response(body=await asyncio.to_thread(path.read_bytes), content_type="application/zip")
+
+
 def add_routes(app: web.Application) -> None:
     r = app.router
     r.add_post("/api/scan-code", api_scan_code)
@@ -459,3 +504,6 @@ def add_routes(app: web.Application) -> None:
     r.add_post("/scan/pair", scan_pair)
     r.add_get("/scan/me", scan_me)
     r.add_post("/scan/rooms", scan_rooms)
+    r.add_put("/scan/backup", scan_backup_put)
+    r.add_get("/scan/backup", scan_backup_get)
+    r.add_get("/scan/backup/info", scan_backup_info)

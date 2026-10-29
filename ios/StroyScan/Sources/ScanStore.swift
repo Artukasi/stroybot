@@ -200,6 +200,7 @@ final class ScanStore: ObservableObject {
         flats.removeAll { $0.rooms.isEmpty }
         try? FileManager.default.removeItem(at: folder(id))
         try? FileManager.default.removeItem(at: projectURL(id))
+        try? FileManager.default.removeItem(at: hiddenWorksURL(id))
         persist()
     }
 
@@ -236,6 +237,7 @@ final class ScanStore: ObservableObject {
         for r in f.rooms {
             try? FileManager.default.removeItem(at: folder(r))
             try? FileManager.default.removeItem(at: projectURL(r))
+            try? FileManager.default.removeItem(at: hiddenWorksURL(r))
         }
         try? FileManager.default.removeItem(at: projectURL(id))
         scans.removeAll { $0.flat == id }
@@ -353,6 +355,10 @@ final class ScanStore: ObservableObject {
     // MARK: - Файлы
 
     private func folder(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
+    private func hiddenWorksURL(_ id: UUID) -> URL {
+        root.appendingPathComponent("HiddenWorks", isDirectory: true)
+            .appendingPathComponent(id.uuidString, isDirectory: true)
+    }
     private func projectURL(_ id: UUID) -> URL {
         root.appendingPathComponent("Projects", isDirectory: true)
             .appendingPathComponent(id.uuidString + ".json")
@@ -413,6 +419,18 @@ final class ScanStore: ObservableObject {
                 let target = localProjects.appendingPathComponent(src.lastPathComponent)
                 if !fm.fileExists(atPath: target.path) {
                     try? fm.copyItem(at: src, to: target)
+                }
+            }
+        }
+        // Restore photo evidence folders for rooms; preserve existing local records.
+        let incomingPhotos = dir.appendingPathComponent("HiddenWorks", isDirectory: true)
+        let localPhotos = root.appendingPathComponent("HiddenWorks", isDirectory: true)
+        if let folders = try? fm.contentsOfDirectory(at: incomingPhotos, includingPropertiesForKeys: nil) {
+            try? fm.createDirectory(at: localPhotos, withIntermediateDirectories: true)
+            for folder in folders where folder.hasDirectoryPath {
+                let destination = localPhotos.appendingPathComponent(folder.lastPathComponent)
+                if !fm.fileExists(atPath: destination.path) {
+                    try? fm.copyItem(at: folder, to: destination)
                 }
             }
         }

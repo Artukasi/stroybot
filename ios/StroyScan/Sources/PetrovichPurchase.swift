@@ -4,7 +4,8 @@ import SwiftUI
 /// Petrovich checkout requires official authenticated website/app; no unsupported cart endpoint.
 enum PurchasePlanner {
     enum Trade: String, CaseIterable, Identifiable {
-        case drywall = "ГКЛ и каркас"
+        case drywall = "ГКЛ и каркас стен"
+        case drywallCeiling = "Потолок из ГКЛ"
         case putty = "Шпаклёвка стен"
         case paint = "Покраска"
         case wallTile = "Плитка на стены"
@@ -59,6 +60,16 @@ enum PurchasePlanner {
                          "м", 50, "рул. 50 м", "Ориентир, зависит от раскладки листов")
                 ]
                 // Profiles intentionally excluded: wall area alone cannot determine geometry and fixings.
+            case .drywallCeiling:
+                let layers = Double(max(1, min(3, drywallLayers)))
+                items += [
+                    item(trade, "sheet", "ГКЛ потолочный 1200×2500 мм (тип по проекту)",
+                         f * layers * 1.12, "м²", 3, "лист.", "Запас 12%; тип листа, толщина и раскрой по выбранной системе"),
+                    item(trade, "joint", "Шпаклёвка для швов потолка", f * layers * 0.25 * 1.1,
+                         "кг", 20, "меш. 20 кг", "Расход ориентировочный"),
+                    item(trade, "tape", "Лента для швов потолка", f * layers * 1.3 * 1.1,
+                         "м", 50, "рул. 50 м", "Количество уточняется по реальным швам")
+                ]
             case .putty:
                 items += [
                     item(trade, "mix", "Шпаклёвка финишная", a * max(0.5, min(5, puttyThickness)) * 1.2 * 1.1,
@@ -177,7 +188,7 @@ struct PetrovichPurchaseView: View {
                     TextField("20", text: $floorText).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
             }
-            if let room, selected.contains(.drywall), !room.wallLines.isEmpty {
+            if let room, (selected.contains(.drywall) || selected.contains(.drywallCeiling)), !room.wallLines.isEmpty {
                 Section("Профили ГКЛ по LiDAR") {
                     NavigationLink {
                         GKLFrameView(result: room)
@@ -199,7 +210,7 @@ struct PetrovichPurchaseView: View {
                 }
             }
             Section("Уточнить расход") {
-                if selected.contains(.drywall) {
+                if selected.contains(.drywall) || selected.contains(.drywallCeiling) {
                     Picker("Слоёв ГКЛ", selection: $drywallLayers) {
                         ForEach(1...3, id: \.self) { count in Text("\(count)").tag(count) }
                     }

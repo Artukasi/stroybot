@@ -9,7 +9,11 @@ enum PetrovichCatalog {
     static func category(for name: String) -> (title: String, url: URL) {
         let n = name.lowercased().replacingOccurrences(of: "ё", with: "е")
         let choice: (String, String)
-        if n.contains("гипсокартон") || n.contains("гкл") || n.contains("гвл") {
+        if n.contains("профил") {
+            choice = ("Профили для ГКЛ", "12082/")
+        } else if n.contains("саморез") {
+            choice = ("Саморезы для ГКЛ", "9968/")
+        } else if n.contains("гипсокартон") || n.contains("гкл") || n.contains("гвл") {
             choice = ("Гипсокартон", "113714477/")
         } else if n.contains("шпаклев") || n.contains("шпатлев") {
             choice = ("Шпаклёвки", "12092/")
@@ -70,7 +74,7 @@ struct PetrovichAnswerLinks: View {
     private var matches: [(name: String, url: URL)] {
         let words = answer.lowercased().replacingOccurrences(of: "ё", with: "е")
         let candidates = [
-            "гипсокартон", "шпаклевка", "грунтовка", "плиточный клей",
+            "гипсокартон", "профиль", "саморез", "шпаклевка", "грунтовка", "плиточный клей",
             "керамогранит", "штукатурка"
         ]
         var seen = Set<String>()

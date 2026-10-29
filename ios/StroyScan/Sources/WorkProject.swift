@@ -308,6 +308,11 @@ struct WorkProjectView: View {
                     }.onDelete { offsets in model.edit { $0.jobs.remove(atOffsets: offsets) } }
                 }
                 if stage == .finish {
+                    NavigationLink {
+                        HiddenWorksView(scanID: scanID)
+                    } label: {
+                        Label("Фото скрытых работ и узлов", systemImage: "camera")
+                    }
                     Text("Отметьте проверку качества, фото скрытых работ и передачу документов перед закрытием объекта.")
                         .font(.subheadline)
                     ShareLink(item: report) { Label("Отправить отчёт клиенту", systemImage: "square.and.arrow.up") }

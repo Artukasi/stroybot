@@ -74,7 +74,7 @@ struct PetrovichAnswerLinks: View {
     private var matches: [(name: String, url: URL)] {
         let words = answer.lowercased().replacingOccurrences(of: "ё", with: "е")
         let candidates = [
-            "гипсокартон", "профиль", "саморез", "шпаклевка", "грунтовка", "плиточный клей",
+            "гипсокартон", "гкл", "профиль", "саморез", "шпаклевка", "шпатлевка", "грунтовка", "плиточный клей",
             "керамогранит", "штукатурка"
         ]
         var seen = Set<String>()

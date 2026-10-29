@@ -69,7 +69,8 @@ struct LiveWallScanView: View {
                     } else {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 7) {
-                                ForEach(Array(scanner.wallMeasurements.enumerated()), id: \.element.id) { index, wall in
+                                ForEach(scanner.wallMeasurements.indices, id: \.self) { index in
+                                    let wall = scanner.wallMeasurements[index]
                                     let active = selectedWall?.id == wall.id
                                     Button {
                                         selectedID = wall.id
